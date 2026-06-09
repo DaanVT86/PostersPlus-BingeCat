@@ -507,6 +507,14 @@ from cache import (
     prune_caches,
     get_cache_stats,
 )
+from bingecat_resolver import (
+    IdentityResolutionError,
+    close_pool as close_bingecat_pool,
+    create_pool as create_bingecat_pool,
+    normalise_tmdb_id,
+    resolve_imdb_for_tmdb,
+    resolve_poster_identity,
+)
 from digital_release import digital_release_poll_loop
 import config as _cfg
 from discovery import (
@@ -541,6 +549,7 @@ from tmdb import composite_logo, logo_centre_y, fetch_logo, image_language_order
 #   pool=5s     — don't block forever waiting for a pool slot
 
 _HTTP_CLIENT: httpx.AsyncClient | None = None
+_BINGECAT_POOL = None
 
 def _make_http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
@@ -1768,13 +1777,23 @@ async def _cache_prune_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _HTTP_CLIENT, _configurator_html, _render_assets_signature
+    global _HTTP_CLIENT, _BINGECAT_POOL, _configurator_html, _render_assets_signature
     global _background_detection_queue, _background_detection_task
     init_db()
     logger.info(f"Cache initialised (composite TTL {_cfg.COMPOSITE_CACHE_TTL}s / "
                 f"{_cfg.COMPOSITE_CACHE_TTL / 86400:.1f}d)")
     _HTTP_CLIENT = _make_http_client()
     logger.info("HTTP client initialised")
+    _BINGECAT_POOL = await create_bingecat_pool(
+        database_url=_cfg.BINGECAT_DATABASE_URL,
+        enabled=_cfg.BINGECAT_ID_RESOLUTION_ENABLED,
+        min_size=_cfg.BINGECAT_DB_POOL_MIN,
+        max_size=_cfg.BINGECAT_DB_POOL_MAX,
+    )
+    if _BINGECAT_POOL is not None:
+        logger.info("BingeCat ID resolution pool initialised")
+    elif _cfg.BINGECAT_DATABASE_URL and _cfg.BINGECAT_ID_RESOLUTION_ENABLED:
+        logger.warning("BingeCat ID resolution configured but unavailable")
     # Warn on quality source misconfiguration
     if _cfg.QUALITY_SOURCE == "scraper" and (bool(_cfg.AIOSTREAMS_URL) or bool(_cfg.AIOSTREAMS_AUTH)):
         logger.warning(
@@ -1846,6 +1865,8 @@ async def lifespan(app: FastAPI):
     _background_detection_queue = None
     _background_detection_keys.clear()
     _shutdown_detect_executor()
+    await close_bingecat_pool(_BINGECAT_POOL)
+    _BINGECAT_POOL = None
     await _HTTP_CLIENT.aclose()
     logger.info("HTTP client closed")
 
@@ -1925,6 +1946,9 @@ async def server_caps(access_key: str = ""):
             bool(_cfg.AIOSTREAMS_URL and _cfg.AIOSTREAMS_AUTH)
             or (_cfg.QUALITY_SOURCE == "scraper" and bool(_cfg.SCRAPER_URL))
         ),
+        "bingecat_id_resolution_enabled": bool(_cfg.BINGECAT_ID_RESOLUTION_ENABLED),
+        "bingecat_db_configured":         bool(_cfg.BINGECAT_DATABASE_URL),
+        "bingecat_db_available":          _BINGECAT_POOL is not None,
     }
 
 
@@ -2234,23 +2258,31 @@ async def resolve_imdb(
     if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
         raise HTTPException(status_code=403, detail="Unauthorized")
 
-    _check_tmdb_id(tmdb_id)
-    _check_type(type)
-
-    effective_key = _resolve_tmdb_key(tmdb_key)
-    if not effective_key:
-        raise HTTPException(status_code=400, detail="No TMDB API key available")
-
-    endpoint = (
-        f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids"
-        if type == "tv"
-        else f"https://api.themoviedb.org/3/movie/{tmdb_id}/external_ids"
-    )
-
     if _HTTP_CLIENT is None:
         raise HTTPException(status_code=503, detail="Service unavailable")
-    resp = await _HTTP_CLIENT.get(endpoint, params={"api_key": effective_key})
-    return Response(content=resp.content, media_type="application/json", status_code=resp.status_code)
+    try:
+        imdb_id = await resolve_imdb_for_tmdb(
+            pool=_BINGECAT_POOL,
+            client=_HTTP_CLIENT,
+            tmdb_key=_resolve_tmdb_key(tmdb_key),
+            tmdb_id=tmdb_id,
+            media_type=type,
+        )
+    except IdentityResolutionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Upstream request timed out")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return JSONResponse({"imdb_id": None}, status_code=404)
+        raise HTTPException(status_code=502, detail=f"Upstream error {exc.response.status_code}")
+
+    payload = {"imdb_id": imdb_id}
+    try:
+        payload["id"] = int(normalise_tmdb_id(tmdb_id) or 0)
+    except IdentityResolutionError:
+        pass
+    return JSONResponse(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -2260,9 +2292,9 @@ async def resolve_imdb(
 @app.get("/poster")
 async def get_poster(
     request: Request,
-    tmdb_id: str,
-    imdb_id: str,
-    type: str = "movie",
+    tmdb_id: str = "",
+    imdb_id: str = "",
+    type: str = "",
     quality: str = "",
     season: int = 1,
     episode: int = 1,
@@ -2303,10 +2335,6 @@ async def get_poster(
     if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
         raise HTTPException(status_code=403, detail="Unauthorized, your access key is not valid for this instance.")
 
-    _check_tmdb_id(tmdb_id)
-    _check_imdb_id(imdb_id)
-    _check_type(type)
-
     # -----------------------------------------------------------------------
     # Single-user mode: check for a cached final poster first.
     # The cache key includes imdb_id and type; quality is intentionally
@@ -2317,6 +2345,46 @@ async def get_poster(
     # -----------------------------------------------------------------------
     effective_tmdb_key    = _resolve_tmdb_key(tmdb_key)
     effective_mdblist_key = _resolve_mdblist_key(mdblist_key)
+
+    if _HTTP_CLIENT is None:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    client = _HTTP_CLIENT
+
+    try:
+        resolved_identity = await resolve_poster_identity(
+            pool=_BINGECAT_POOL,
+            client=client,
+            tmdb_key=effective_tmdb_key,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id,
+            media_type=type,
+        )
+    except IdentityResolutionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Upstream request timed out")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Could not resolve title on TMDB")
+        raise HTTPException(status_code=502, detail=f"Upstream error {exc.response.status_code}")
+
+    tmdb_id = resolved_identity.tmdb_id
+    imdb_id = resolved_identity.imdb_id
+    type = resolved_identity.media_type
+    logger.info(
+        f"Resolved poster identity: imdb={imdb_id} tmdb={tmdb_id} "
+        f"type={type} source={resolved_identity.source}"
+    )
+    canonical_identity_headers = {
+        "X-Postersplus-Imdb-Id": imdb_id,
+        "X-Postersplus-Tmdb-Id": tmdb_id,
+        "X-Postersplus-Type": type,
+        "X-Postersplus-Identity-Source": resolved_identity.source,
+    }
+
+    def _with_identity_headers(response: Response) -> Response:
+        response.headers.update(canonical_identity_headers)
+        return response
 
     if not effective_tmdb_key:
         raise HTTPException(
@@ -2388,14 +2456,16 @@ async def get_poster(
             logger.info(f"Final poster cache hit for {final_cache_key}")
             etag = f'"{final_cache_key}"'
             if request.headers.get("if-none-match") == etag:
-                return Response(status_code=304)
+                _not_modified = Response(status_code=304)
+                _not_modified.headers["ETag"] = etag
+                return _with_identity_headers(_not_modified)
             _hit_resp = Response(content=cached_jpeg, media_type="image/jpeg")
             _hit_resp.headers["ETag"] = etag
             # This path is only reached when composite caching is enabled, so a
             # no-store branch would be dead here — CDN TTL is the only option.
             if _cfg.CDN_CACHE_TTL > 0:
                 _hit_resp.headers["Cache-Control"] = f"public, max-age={_cfg.CDN_CACHE_TTL}"
-            return _hit_resp
+            return _with_identity_headers(_hit_resp)
     else:
         final_cache_key = None
 
@@ -2417,7 +2487,7 @@ async def get_poster(
                 # so no-store can't apply here — CDN TTL only.
                 if _cfg.CDN_CACHE_TTL > 0:
                     _coal_resp.headers["Cache-Control"] = f"public, max-age={_cfg.CDN_CACHE_TTL}"
-                return _coal_resp
+                return _with_identity_headers(_coal_resp)
             except Exception:
                 # The in-flight render failed; fall through and try ourselves.
                 pass
@@ -2611,10 +2681,6 @@ async def get_poster(
 
     effective_movie_weights = rcfg.movie_weights or _cfg.MOVIE_WEIGHTS
     effective_tv_weights    = rcfg.tv_weights    or _cfg.TV_WEIGHTS
-
-    if _HTTP_CLIENT is None:
-        raise HTTPException(status_code=503, detail="Service unavailable")
-    client = _HTTP_CLIENT
 
     global _active_poster_renders
     _active_poster_renders += 1
@@ -3111,6 +3177,7 @@ async def get_poster(
                 "imdb_id":           imdb_id,
                 "tmdb_id":           tmdb_id,
                 "type":              type,
+                "identity_source":    resolved_identity.source,
                 "score":             score if isinstance(score, str) else int(score),
                 "genre":             genre,
                 "release_year":      release_year,
@@ -3234,7 +3301,7 @@ async def get_poster(
             response.headers["Pragma"] = "no-cache"
         elif _cfg.CDN_CACHE_TTL > 0:
             response.headers["Cache-Control"] = f"public, max-age={_cfg.CDN_CACHE_TTL}"
-        return response
+        return _with_identity_headers(response)
 
     except ValueError as exc:
         if _render_fut is not None and not _render_fut.done():

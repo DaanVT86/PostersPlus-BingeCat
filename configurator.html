@@ -2634,7 +2634,7 @@ const SASH_DEFAULT_DISABLED = new Set([]);
 let sashOrder    = SASH_SLOTS.filter(s => !SASH_DEFAULT_DISABLED.has(s.id)).map(s => s.id);
 let sashDisabled = new Set(SASH_DEFAULT_DISABLED);   // IDs explicitly disabled via ✕ button
 let mediaType = 'movie', resolvedImdbId = '', resolvedTmdbId = '';
-let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, quality_configured: false };
+let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, quality_configured: false, bingecat_db_available: false };
 let serverCapsLoaded = false;
 let searchDebounce = null, previewDebounce = null, previewLoading = false, imdbResolvePending = false;
 const SERVER_KEYS_PLACEHOLDER = "Using Bingecat's Keys";
@@ -2854,6 +2854,10 @@ function userTmdbKey() {
 
 function userMdblistKey() {
   return _userApiKey('cfg-mdblist-key');
+}
+
+function hasPreviewIdentity() {
+  return !!resolvedImdbId || (!!resolvedTmdbId && !!mediaType);
 }
 
 function onApiKeyInput() {
@@ -3404,7 +3408,7 @@ async function selectResult(dataset) {
   } else {
     document.getElementById('selected-imdb-id').textContent = 'N/A';
     document.getElementById('meta-imdb').textContent = '—';
-    setLog('preview-log', 'Could not resolve IMDB ID — preview may fail', 'err');
+    setLog('preview-log', 'Could not resolve IMDB ID in browser — preview will ask the server to resolve it.', 'info');
   }
   document.getElementById('meta-tmdb').textContent = tmdbId;
   document.getElementById('meta-type').textContent = type;
@@ -3474,10 +3478,10 @@ function decodePlaceholders(url) {
 function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}) {
   const domain         = (domainOverride || vEl('cfg-domain')).replace(/\/$/, '') || 'https://your-instance.com';
   const logoLanguage   = vEl('cfg-language') || 'en';
-  const imdbId         = usePlaceholders ? '{imdb_id}'  : (resolvedImdbId  || '{imdb_id}');
-  const tmdbId         = usePlaceholders ? '{tmdb_id}'  : (resolvedTmdbId  || '{tmdb_id}');
+  const imdbId         = usePlaceholders ? '{imdb_id}'  : resolvedImdbId;
+  const tmdbId         = usePlaceholders ? '{tmdb_id}'  : resolvedTmdbId;
   const accKey         = vEl('cfg-access-key');
-  const type           = usePlaceholders ? '{type}'     : mediaType;
+  const type           = usePlaceholders ? '{type}'     : (mediaType || '');
   const tmdbApiKey     = userTmdbKey();
   const mdblistApiKey  = userMdblistKey();
 
@@ -3697,8 +3701,8 @@ function setLog(id, msg, cls='') {
 
 async function loadPreview() {
   if (previewLoading) { clearTimeout(previewDebounce); return; }
-  if (imdbResolvePending) return;
-  if (!resolvedImdbId || !resolvedTmdbId) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
+  if (imdbResolvePending && !hasPreviewIdentity()) return;
+  if (!hasPreviewIdentity()) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
   if (!userTmdbKey() && !serverCaps.tmdb_key_set) { setLog('preview-log', 'This instance has no server side TMDB key. You must provide your own or ask the operator to add one.', 'err'); return; }
   previewLoading = true;
   document.getElementById('preview-status').textContent = 'LOADING';

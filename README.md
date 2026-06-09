@@ -131,6 +131,10 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 | `MDBLIST_API_KEY` | - | MDBList API key for ratings and award data |
 | `MDBLIST_API_KEY_2` | - | Optional second MDBList key. Retried in the same request when the primary key is rate-limited |
 | `MDBLIST_CONCURRENCY` | `3` | Maximum concurrent outbound MDBList requests per worker |
+| `BINGECAT_DATABASE_URL` | - | Optional read-only BingeCat PostgreSQL DSN for IMDb/TMDB ID resolution |
+| `BINGECAT_ID_RESOLUTION_ENABLED` | `true` | Enables BingeCat DB identity lookup when `BINGECAT_DATABASE_URL` is set |
+| `BINGECAT_DB_POOL_MIN` | `0` | Minimum BingeCat Postgres pool connections |
+| `BINGECAT_DB_POOL_MAX` | `5` | Maximum BingeCat Postgres pool connections |
 | `ACCESS_KEY` | - | Shared secret for request authentication. Leave blank to allow open access |
 | `WORKERS` | `1` | Uvicorn worker processes. One worker avoids duplicate uncached renders, scans, and API work across processes |
 | `AIOSTREAMS_URL` | - | Base URL of your AIOStreams instance (used when `QUALITY_SOURCE=aiostreams`) |
@@ -212,7 +216,7 @@ Set the following environment variables before running, or edit the `_DEFAULT` c
 | `JELLYFIN_API_KEY` | API key from Jellyfin Dashboard → Advanced → API Keys |
 | `POSTERSPLUS_URL` | Full PostersPlus URL template including your preferred query parameters |
 
-The `POSTERSPLUS_URL` value should be the full URL template you'd normally give AIOMetadata. Copy it straight from the configurator's output box, replacing the `{tmdb_id}`, `{imdb_id}`, and `{type}` placeholders. Both scripts fill these in automatically from library metadata.
+The `POSTERSPLUS_URL` value should be the full URL template you'd normally give AIOMetadata. Copy it straight from the configurator's output box, replacing the `{tmdb_id}`, `{imdb_id}`, and `{type}` placeholders. Both scripts fill in whichever library IDs are available; PostersPlus can resolve the missing side when BingeCat DB or TMDB fallback resolution is configured.
 
 ### Usage
 
@@ -241,6 +245,12 @@ Posters are served at `/poster` with parameters controlling every aspect of rend
 ```
 https://yourdomain.com/poster?tmdb_id={tmdb_id}&imdb_id={imdb_id}&type={type}
 ```
+
+At least one identity path is required: either `imdb_id`, or `tmdb_id` plus
+`type`. If `imdb_id` is present, PostersPlus treats it as authoritative and
+resolves the canonical TMDB ID/type from BingeCat's database first, then TMDB
+`/find` as fallback. TMDB API access is still required for poster art and
+metadata fetching.
 
 Append `&debug=1` to any poster URL to receive a JSON response with all computed metadata (score, genre, sash label, quality tokens, award data, matched cast/directors) instead of rendering the image. Useful for diagnosing unexpected sashes or missing ratings.
 

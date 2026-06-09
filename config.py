@@ -32,10 +32,16 @@ SCRAPER_URL           = os.environ.get("SCRAPER_URL", "").strip()
 SERVER_TMDB_KEY       = os.environ.get("TMDB_API_KEY", "").strip()
 SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
 SERVER_MDBLIST_KEY_2  = os.environ.get("MDBLIST_API_KEY_2", "").strip()
+BINGECAT_DATABASE_URL = os.environ.get("BINGECAT_DATABASE_URL", "").strip()
 
 # Ordered list of all configured server-side MDBList keys (primary first).
 # Used by the key-rotation logic in main.py to fall back when a key is exhausted.
 SERVER_MDBLIST_KEYS: list[str] = [k for k in [SERVER_MDBLIST_KEY, SERVER_MDBLIST_KEY_2] if k]
+BINGECAT_ID_RESOLUTION_ENABLED = os.environ.get(
+    "BINGECAT_ID_RESOLUTION_ENABLED", "true"
+).strip().lower() not in ("0", "false", "no")
+BINGECAT_DB_POOL_MIN = max(0, int(os.environ.get("BINGECAT_DB_POOL_MIN", "0")))
+BINGECAT_DB_POOL_MAX = max(1, int(os.environ.get("BINGECAT_DB_POOL_MAX", "5")))
 
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
