@@ -496,6 +496,11 @@
 
   input[type="text"]::placeholder { color: var(--text-muted); }
 
+  .api-key-input::placeholder {
+    color: #9b907a;
+    opacity: 1;
+  }
+
   select {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238a6e2e'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
@@ -1778,14 +1783,14 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               <div class="field-label-row">
                 <label class="field-label"><a href="https://www.themoviedb.org/settings/api" target="_blank" style="color:inherit;text-decoration:none;border-bottom:1px solid var(--text-muted);">TMDB API Key</a></label>
               </div>
-              <input type="text" id="cfg-tmdb-key" placeholder="If blank uses server key." oninput="build(); queuePreviewReload(); saveApiKeys()">
+              <input type="text" id="cfg-tmdb-key" class="api-key-input" placeholder="Using Bingecat's Keys" autocomplete="off" spellcheck="false" oninput="onApiKeyInput()">
               <div class="field-hint" id="tmdb-key-hint" style="display:none"></div>
             </div>
             <div class="field">
               <div class="field-label-row">
                 <label class="field-label"><a href="https://mdblist.com/preferences/" target="_blank" style="color:inherit;text-decoration:none;border-bottom:1px solid var(--text-muted);">MDBList API Key</a></label>
               </div>
-              <input type="text" id="cfg-mdblist-key" placeholder="If blank uses server key." oninput="build(); queuePreviewReload(); saveApiKeys()">
+              <input type="text" id="cfg-mdblist-key" class="api-key-input" placeholder="Using Bingecat's Keys" autocomplete="off" spellcheck="false" oninput="onApiKeyInput()">
               <div class="field-hint" id="mdblist-key-hint" style="display:none"></div>
             </div>
             <div class="field">
@@ -2632,6 +2637,8 @@ let mediaType = 'movie', resolvedImdbId = '', resolvedTmdbId = '';
 let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, quality_configured: false };
 let serverCapsLoaded = false;
 let searchDebounce = null, previewDebounce = null, previewLoading = false, imdbResolvePending = false;
+const SERVER_KEYS_PLACEHOLDER = "Using Bingecat's Keys";
+const STORED_API_KEY_NAMES = ['postersplus_tmdb_key', 'postersplus_mdblist_key'];
 
 const previewPanel = document.querySelector('.preview-panel');
 
@@ -2830,6 +2837,31 @@ async function fetchServerCaps() {
   } catch(e) {}
 }
 
+function clearPersistedApiKeys() {
+  try {
+    STORED_API_KEY_NAMES.forEach(name => localStorage.removeItem(name));
+  } catch(e) {}
+}
+
+function _userApiKey(id) {
+  const value = vEl(id);
+  return value === SERVER_KEYS_PLACEHOLDER ? '' : value;
+}
+
+function userTmdbKey() {
+  return _userApiKey('cfg-tmdb-key');
+}
+
+function userMdblistKey() {
+  return _userApiKey('cfg-mdblist-key');
+}
+
+function onApiKeyInput() {
+  clearPersistedApiKeys();
+  build();
+  queuePreviewReload();
+}
+
 function updateKeyBadges() {
   const tmdbBadge = document.getElementById('tmdb-key-badge');
   const mdbBadge  = document.getElementById('mdblist-key-badge');
@@ -2839,19 +2871,21 @@ function updateKeyBadges() {
   const mdbInput  = document.getElementById('cfg-mdblist-key');
 
   if (serverCaps.tmdb_key_set) {
-    tmdbBadge.style.display = ''; tmdbBadge.textContent = 'Server Key Set'; tmdbBadge.className = 'server-key-badge';
+    if (tmdbBadge) { tmdbBadge.style.display = ''; tmdbBadge.textContent = 'Server Key Set'; tmdbBadge.className = 'server-key-badge'; }
     tmdbHint.style.display = ''; tmdbHint.textContent = 'Server-side TMDB key configured. Your key (if entered) takes priority.';
-    tmdbInput.placeholder = 'Optional — server key used if blank';
+    tmdbInput.placeholder = SERVER_KEYS_PLACEHOLDER;
   } else {
-    tmdbBadge.style.display = ''; tmdbBadge.textContent = 'No Server Key'; tmdbBadge.className = 'server-key-badge missing';
+    if (tmdbBadge) { tmdbBadge.style.display = ''; tmdbBadge.textContent = 'No Server Key'; tmdbBadge.className = 'server-key-badge missing'; }
     tmdbHint.style.display = 'none';
     tmdbInput.placeholder = 'Required — no server key configured';
   }
 
   if (serverCaps.mdblist_key_set) {
+    if (mdbBadge) { mdbBadge.style.display = ''; mdbBadge.textContent = 'Server Key Set'; mdbBadge.className = 'server-key-badge'; }
     mdbHint.style.display = ''; mdbHint.textContent = 'Server-side MDblist key configured. Your key (if entered) takes priority.';
-    mdbInput.placeholder = 'Optional — server key used if blank';
+    mdbInput.placeholder = SERVER_KEYS_PLACEHOLDER;
   } else {
+    if (mdbBadge) { mdbBadge.style.display = ''; mdbBadge.textContent = 'No Server Key'; mdbBadge.className = 'server-key-badge missing'; }
     mdbHint.style.display = ''; mdbHint.textContent = 'Cached titles work without a key. Uncached titles require a key.';
     mdbInput.placeholder = 'Required for uncached titles';
   }
@@ -3131,8 +3165,7 @@ function loadSashOrder() {
 }
 
 function saveApiKeys() {
-  localStorage.setItem('postersplus_tmdb_key',    vEl('cfg-tmdb-key'));
-  localStorage.setItem('postersplus_mdblist_key', vEl('cfg-mdblist-key'));
+  clearPersistedApiKeys();
   localStorage.setItem('postersplus_language', vEl('cfg-language'));
   localStorage.setItem('postersplus_primary_client', vEl('cfg-primary-client'));
 }
@@ -3150,14 +3183,13 @@ function persistImdbId(imdbId) {
 }
 
 function hydrateFromLocalStorage() {
-  const tmdb = localStorage.getItem('postersplus_tmdb_key');
-  const mdbl = localStorage.getItem('postersplus_mdblist_key');
+  clearPersistedApiKeys();
+  document.getElementById('cfg-tmdb-key').value = '';
+  document.getElementById('cfg-mdblist-key').value = '';
   const lang = localStorage.getItem('postersplus_language');
   const client = localStorage.getItem('postersplus_primary_client');
   if (lang) document.getElementById('cfg-language').value = lang;
   if (client && CLIENT_INSETS[client]) document.getElementById('cfg-primary-client').value = client;
-  if (tmdb) document.getElementById('cfg-tmdb-key').value = tmdb;
-  if (mdbl) document.getElementById('cfg-mdblist-key').value = mdbl;
   try {
     const raw = localStorage.getItem('postersplus_selection');
     if (!raw) return;
@@ -3252,8 +3284,8 @@ async function doSearch() {
   const q = document.getElementById('cfg-search-query').value.trim();
   if (!q) return;
 
-  const userTmdbKey = vEl('cfg-tmdb-key');
-  if (!userTmdbKey && !serverCaps.tmdb_key_set) {
+  const tmdbApiKey = userTmdbKey();
+  if (!tmdbApiKey && !serverCaps.tmdb_key_set) {
     setLog('preview-log', 'Enter your TMDB API key above to search', 'err');
     return;
   }
@@ -3265,7 +3297,7 @@ async function doSearch() {
     const apiOrigin = window.location.origin;
     const accKey = vEl('cfg-access-key');
     const params = new URLSearchParams({ q });
-    if (userTmdbKey) params.set('tmdb_key', userTmdbKey);
+    if (tmdbApiKey) params.set('tmdb_key', tmdbApiKey);
     if (accKey)      params.set('access_key', accKey);
 
     const resp = await fetch(`${apiOrigin}/search?${params}`);
@@ -3394,15 +3426,16 @@ function clearSelection() {
 }
 
 async function fetchImdbId(tmdbId, type) {
-  const userTmdbKey = vEl('cfg-tmdb-key');
+  const tmdbApiKey = userTmdbKey();
   const accKey = vEl('cfg-access-key');
 
   try {
-    if (userTmdbKey) {
+    if (tmdbApiKey) {
       // Direct browser call when user has their own key
+      const encodedKey = encodeURIComponent(tmdbApiKey);
       const endpoint = type === 'tv'
-        ? `https://api.themoviedb.org/3/tv/${tmdbId}/external_ids?api_key=${userTmdbKey}`
-        : `https://api.themoviedb.org/3/movie/${tmdbId}/external_ids?api_key=${userTmdbKey}`;
+        ? `https://api.themoviedb.org/3/tv/${tmdbId}/external_ids?api_key=${encodedKey}`
+        : `https://api.themoviedb.org/3/movie/${tmdbId}/external_ids?api_key=${encodedKey}`;
       const resp = await fetch(endpoint);
       const data = await resp.json();
       return data.imdb_id || null;
@@ -3445,8 +3478,8 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
   const tmdbId         = usePlaceholders ? '{tmdb_id}'  : (resolvedTmdbId  || '{tmdb_id}');
   const accKey         = vEl('cfg-access-key');
   const type           = usePlaceholders ? '{type}'     : mediaType;
-  const userTmdbKey    = vEl('cfg-tmdb-key');
-  const userMdblistKey = vEl('cfg-mdblist-key');
+  const tmdbApiKey     = userTmdbKey();
+  const mdblistApiKey  = userMdblistKey();
 
   const ratingMode = ni('cfg-rating-mode');
   const badgeMode  = ni('cfg-badge-display-mode');
@@ -3461,8 +3494,8 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
   params.set('type',    type);
   params.set('primary_client', vEl('cfg-primary-client') || 'stremio_desktop_web');
   if (accKey)         params.set('access_key',  accKey);
-  if (userTmdbKey)    params.set('tmdb_key',     usePlaceholders ? '{tmdb_key}'    : userTmdbKey);
-  if (userMdblistKey) params.set('mdblist_key',  usePlaceholders ? '{mdblist_key}' : userMdblistKey);
+  if (tmdbApiKey)    params.set('tmdb_key',     usePlaceholders ? '{tmdb_key}'    : tmdbApiKey);
+  if (mdblistApiKey) params.set('mdblist_key',  usePlaceholders ? '{mdblist_key}' : mdblistApiKey);
   params.set('top_gradient',    vEl('cfg-top-gradient')    || 'high');
   params.set('bottom_gradient', vEl('cfg-bottom-gradient') || 'high');
   params.set('fallback_to_imdb', c('tog-fallback-imdb') ? 'true' : 'false');
@@ -3666,7 +3699,7 @@ async function loadPreview() {
   if (previewLoading) { clearTimeout(previewDebounce); return; }
   if (imdbResolvePending) return;
   if (!resolvedImdbId || !resolvedTmdbId) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
-  if (!vEl('cfg-tmdb-key') && !serverCaps.tmdb_key_set) { setLog('preview-log', 'This instance has no server side TMDB key. You must provide your own or ask the operator to add one.', 'err'); return; }
+  if (!userTmdbKey() && !serverCaps.tmdb_key_set) { setLog('preview-log', 'This instance has no server side TMDB key. You must provide your own or ask the operator to add one.', 'err'); return; }
   previewLoading = true;
   document.getElementById('preview-status').textContent = 'LOADING';
   const frame = document.getElementById('preview-frame');
@@ -4018,11 +4051,10 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
       onPrimaryClientChange({ rebuild: false });
     }
 
-    // Only import API keys if they are real values (not placeholder tokens)
-    const tmdbKey  = p.get('tmdb_key')    || '';
-    const mdbKey   = p.get('mdblist_key') || '';
-    if (tmdbKey  && !tmdbKey.startsWith('{'))  document.getElementById('cfg-tmdb-key').value    = tmdbKey;
-    if (mdbKey   && !mdbKey.startsWith('{'))   document.getElementById('cfg-mdblist-key').value = mdbKey;
+    // API keys from URLs are deliberately ignored. A generated or imported
+    // poster URL may contain server-side keys from an older config; copying
+    // them into the form would expose them in browser state.
+    if (p.has('tmdb_key') || p.has('mdblist_key')) clearPersistedApiKeys();
 
     // ── Media identity (skip template placeholders) ────────────────────────
     const rawTmdb = p.get('tmdb_id') || '';
