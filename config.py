@@ -119,6 +119,29 @@ QUALITY_WAIT_TIMEOUT         = float(os.environ.get("QUALITY_WAIT_TIMEOUT", "30"
 # apparent per-key concurrency limit while still allowing good parallelism.
 MDBLIST_CONCURRENCY          = int(os.environ.get("MDBLIST_CONCURRENCY", "3"))
 
+# Cache warming — proactively populate the TMDB metadata cache (logos, posters,
+# credits) and the MDBList rating/award cache for currently-trending titles, so
+# the first real requests for them are fast and don't all hit upstream APIs at
+# once. Off by default — enable explicitly once the server keys' quotas are
+# understood. Each budget is a ceiling on actual API calls (cache hits don't
+# count), so steady-state runs after the first one are typically far cheaper
+# than the configured budgets.
+CACHE_WARM_ENABLED           = os.environ.get("CACHE_WARM_ENABLED", "false").strip().lower() == "true"
+CACHE_WARM_TMDB_BUDGET       = int(os.environ.get("CACHE_WARM_TMDB_BUDGET", "2000"))
+CACHE_WARM_MDBLIST_BUDGET    = int(os.environ.get("CACHE_WARM_MDBLIST_BUDGET", "500"))
+CACHE_WARM_INTERVAL_HOURS    = float(os.environ.get("CACHE_WARM_INTERVAL_HOURS", "24"))
+
+# Also pre-fetch quality badge data (resolution/source/HDR tokens) for each
+# warmed title via the configured quality source (AIOStreams or scraper).
+# Series default to S01E01. Off by default: this is a *per-title* request
+# against your scraper/debrid-backed addon, separate from TMDB/MDBList, and
+# at a budget of a couple thousand it can mean thousands of scrape requests
+# in a short window. WARNING: if your quality source is a public Stremio
+# addon (rather than your own self-hosted instance), this volume of traffic
+# in a short period can get your server's IP rate-limited or blocked by that
+# addon. Only enable this if you understand and accept that risk.
+CACHE_WARM_QUALITY_ENABLED   = os.environ.get("CACHE_WARM_QUALITY_ENABLED", "false").strip().lower() == "true"
+
 # Digital release (r/movieleaks) scraper settings
 DIGITAL_RELEASE_MIN_AGE_DAYS = 1    # ignore posts younger than this (mods still cleaning up)
 DIGITAL_RELEASE_MAX_AGE_DAYS = 30   # expire entries older than this from the cache

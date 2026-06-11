@@ -205,6 +205,20 @@
     color: var(--gold);
     font-weight: bold;
   }
+  .whatsnew-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+  .whatsnew-section-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
 
   .status-bar {
     display: flex;
@@ -1690,7 +1704,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
       <div class="notch"></div>
       <div class="panel-header">
         <span class="panel-title">Configuration</span>
-        <button type="button" class="panel-index whatsnew-version" id="whatsnew-version" onclick="openWhatsNew()" data-acked="true" title="What's new">v1.1-dev</button>
+        <button type="button" class="panel-index whatsnew-version" id="whatsnew-version" onclick="openWhatsNew()" data-acked="true" title="What's new">v1.2-dev</button>
       </div>
       <div class="panel-body">
 
@@ -2169,6 +2183,16 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                 <span class="range-val" id="rng-lb">0.28</span>
               </div>
             </div>
+            <div class="toggle-row" style="border-bottom:none;">
+              <div>
+                <div class="toggle-label">Bottom Anchor</div>
+                <div class="field-hint">Logos only expand upwards, ideal for bottom logo placement. By default logos share a midline, expanding in both directions vertically. Configure this using a horizontal logo, for example 2022 "Let the Right one in". </div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="tog-logo-bottom-anchor" onchange="build(); queuePreviewReload()">
+                <div class="toggle-track"><div class="toggle-thumb"></div></div>
+              </label>
+            </div>
             </div>
           </div>
         </div>
@@ -2215,6 +2239,16 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </div>
               <label class="toggle-switch">
                 <input type="checkbox" id="tog-release-cinema-only" checked onchange="build(); queuePreviewReload()">
+                <div class="toggle-track"><div class="toggle-thumb"></div></div>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Winner Star</div>
+                <div class="field-hint">Prefix a ★ before award winners.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="tog-sash-winner-star" onchange="build(); queuePreviewReload()">
                 <div class="toggle-track"><div class="toggle-thumb"></div></div>
               </label>
             </div>
@@ -2608,10 +2642,10 @@ const TMDB_IMG = 'https://image.tmdb.org/t/p/w92';
 
 const SASH_SLOTS = [
   { id:'wins',       label:'Best Picture / Major Emmy Win',     color:'#c9a84c' },
-  { id:'gg_wins',    label:'Golden Globe Win',                  color:'#c9a84c' },
+  { id:'gg_wins',    label:'Major Golden Globe Win',                  color:'#c9a84c' },
   { id:'festival',   label:'Festival Winner',                   color:'#c9a84c' },
   { id:'pic_noms',   label:'Best Picture / Major Emmy Nom',     color:'#9a9a9a' },
-  { id:'gg_noms',    label:'Golden Globe Nom',                  color:'#9a9a9a' },
+  { id:'gg_noms',    label:'Major Golden Globe Nom',                  color:'#9a9a9a' },
   { id:'studio',     label:'Notable Studio Name',               color:'#9060cc' },
   { id:'director',   label:'Notable Director Name',             color:'#9060cc' },
   { id:'cast',       label:'Notable Cast Name',                 color:'#4ab87a' },
@@ -2622,7 +2656,7 @@ const SASH_SLOTS = [
   { id:'metacritic', label:'Metacritic Must-See',               color:'#9a9a9a' },
   { id:'true_story', label:'True Story',                        color:'#3ab0a8' },
   { id:'structural',     label:'Short / Mini / Binge',              color:'#3ab0a8' },
-  { id:'release_status', label:'Release Status (extra API call)',    color:'#e05555' },
+  { id:'release_status', label:'Release Status',    color:'#e05555' },
 ];
 
 // All sash slots are enabled by default.  "release_status" sits last in the
@@ -3557,8 +3591,9 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
   params.set('logo_priority',         vEl('cfg-logo-priority') || 'native_original');
   params.set('fallback_bg_style',     vEl('cfg-fallback-bg-style') || 'minimal');
   params.set('logo_max_w_ratio',      n('cfg-logo-w').toFixed(2));
-  params.set('logo_max_h_ratio',  n('cfg-logo-h').toFixed(2));
-  params.set('logo_bottom_ratio', n('cfg-logo-bottom').toFixed(2));
+  params.set('logo_max_h_ratio',      n('cfg-logo-h').toFixed(2));
+  params.set('logo_bottom_ratio',     n('cfg-logo-bottom').toFixed(2));
+  if (c('tog-logo-bottom-anchor')) params.set('logo_bottom_anchor', 'true');
 
   // ── Info Sash ──────────────────────────────────────────────────────────────
   params.set('sash_mode', sashMode);
@@ -3566,6 +3601,7 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
   params.set('cinema_greyscale_skip_if_available', c('tog-cinema-greyscale-skip') ? 'true' : 'false');
   params.set('release_status_cinema_only', c('tog-release-cinema-only') ? 'true' : 'false');
   if (showSash) {
+    if (c('tog-sash-winner-star')) params.set('sash_winner_star', 'true');
     if (sashMode === 'notch') {
       params.set('sash_badge_style',         vEl('cfg-sash-badge-style') || 'silver');
       params.set('sash_badge_size_w',        n('cfg-sash-badge-size-w').toFixed(2));
@@ -3991,7 +4027,7 @@ function applyImport() {
 // Bump WHATS_NEW_VERSION whenever the modal content changes — existing users
 // will see the unread dot on the chip until they open and acknowledge it.
 // The chip itself stays visible so users can re-open the list whenever.
-const WHATS_NEW_VERSION = '1.0.0';
+const WHATS_NEW_VERSION = '1.2-dev';
 
 function openWhatsNew() {
   document.getElementById('whatsnew-modal').classList.add('open');
@@ -4095,6 +4131,7 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
 
   // ── Sash ────────────────────────────────────────────────────────────────
   if (p.has('sash_poster_color')) _setEl('tog-sash-poster-color', p.get('sash_poster_color'));
+  if (p.has('sash_winner_star')) _setEl('tog-sash-winner-star',  p.get('sash_winner_star'));
   if (p.has('cinema_greyscale')) _setEl('tog-cinema-greyscale', p.get('cinema_greyscale'));
   if (p.has('cinema_greyscale_skip_if_available')) _setEl('tog-cinema-greyscale-skip', p.get('cinema_greyscale_skip_if_available'));
   if (p.has('release_status_cinema_only')) _setEl('tog-release-cinema-only', p.get('release_status_cinema_only'));
@@ -4158,10 +4195,11 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
   updateOriginalArt();
 
   // ── Logo ────────────────────────────────────────────────────────────────
-  if (p.has('logo_max_w_ratio'))   _setEl('cfg-logo-w',      p.get('logo_max_w_ratio'));
-  if (p.has('logo_max_h_ratio'))   _setEl('cfg-logo-h',      p.get('logo_max_h_ratio'));
-  if (p.has('logo_bottom_ratio'))  _setEl('cfg-logo-bottom', p.get('logo_bottom_ratio'));
-  if (p.has('textless'))           _setEl('tog-textless',    p.get('textless'));
+  if (p.has('logo_max_w_ratio'))     _setEl('cfg-logo-w',              p.get('logo_max_w_ratio'));
+  if (p.has('logo_max_h_ratio'))     _setEl('cfg-logo-h',              p.get('logo_max_h_ratio'));
+  if (p.has('logo_bottom_ratio'))    _setEl('cfg-logo-bottom',         p.get('logo_bottom_ratio'));
+  if (p.has('logo_bottom_anchor'))   _setEl('tog-logo-bottom-anchor',  p.get('logo_bottom_anchor'));
+  if (p.has('textless'))             _setEl('tog-textless',            p.get('textless'));
   if (p.has('use_original_art'))   _setEl('tog-original-art', p.get('use_original_art'));
   if (p.has('original_art_source')) _setEl('cfg-original-art-source', p.get('original_art_source'));
 
@@ -4384,15 +4422,31 @@ initCustomMobileSliders();
 
 <div class="import-modal" id="whatsnew-modal" onclick="if(event.target===this)closeWhatsNew()">
   <div class="import-modal-box">
-    <div class="import-modal-title">What's new in v1.0.0</div>
-    <ul class="whatsnew-list">
-      <li>Info Sash badge style — rounded rectangle alternative to the diagonal sash, with adjustable X/Y position</li>
-      <li>Golden Globe wins and nominations now have their own dedicated sash slots</li>
-      <li>Backdrop fallback — TMDB landscape backdrop is cropped to portrait when no textless poster (or no poster at all) is available</li>
-      <li>Genre-tinted fallback canvas — atmospheric colour matched to genre when no art exists</li>
-      <li>Smoother edges — Cairo antialiasing on award badge corners and pill renders</li>
-      <li>MDBlist rate-limit cooldown — automatic global pause on 429 to prevent cascade failures</li>
-    </ul>
+    <div class="import-modal-title">What's new</div>
+    <div class="whatsnew-body">
+      <div>
+        <div class="whatsnew-section-title">v1.2-dev</div>
+        <ul class="whatsnew-list">
+          <li>Award sash labels are now clearer: "Globe Winner" / "Globe Nominee" replace the ambiguous "Golden Globe" label, matching the Oscar/Emmy naming pattern</li>
+          <li>New toggle to show a star icon instead of win/nominee text on award sashes</li>
+          <li>Background cache pre-warming: proactively refreshes posters, logos, and metadata for trending/popular titles ahead of requests, with configurable TMDB/MDBList budgets and an optional (off by default) quality-badge pre-fetch for self-hosted instances</li>
+        </ul>
+      </div>
+      <div>
+        <div class="whatsnew-section-title">v1.1.0</div>
+        <ul class="whatsnew-list">
+          <li>New Frosted Bar poster layout, with frosted, black, silver, gold, and rating-focused styles</li>
+          <li>Rebuilt textless-poster detection around a new OCR model, with background scanning and load controls for live installations</li>
+          <li>Smarter TMDB poster selection: a tiny number of votes can no longer promote a badly rated poster over substantially better artwork</li>
+          <li>Expanded artwork selection: original-art controls, language-aware poster matching, improved logo fallback, and face- and saliency-aware cropping</li>
+          <li>New notch sash style, plus release-status sashes for BluRay, Streaming, Cinema, and Production</li>
+          <li>Backdrop fallback and genre-tinted fallback canvas when no poster or textless art is available</li>
+          <li>MDBList rate-limit cooldown: automatic global pause on 429 to prevent cascade failures</li>
+          <li>New preset gallery and a reorganized, mobile-friendly tabbed configurator</li>
+          <li>New poster-output translations for French, Portuguese, and Italian</li>
+        </ul>
+      </div>
+    </div>
     <div class="import-modal-btns">
       <button class="btn btn-primary" onclick="closeWhatsNew()">Got it</button>
     </div>

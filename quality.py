@@ -43,7 +43,7 @@ def _extract_tokens_from_parsed_file(parsed: dict) -> set[str]:
     quality = parsed.get("quality", "").upper()
     if "REMUX" in quality:
         tokens.add("REMUX")
-    elif quality == "WEB-DL":
+    elif "WEB-DL" in quality or "WEBDL" in quality:
         tokens.add("WEBDL")
 
     audio_tags = {t.upper() for t in parsed.get("audioTags", [])}

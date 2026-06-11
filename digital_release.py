@@ -114,12 +114,24 @@ async def sync_digital_releases(client: httpx.AsyncClient) -> int:
     return added
 
 
-async def digital_release_poll_loop(client: httpx.AsyncClient) -> None:
-    """Background task: initial sync shortly after startup, then every 24 h."""
+async def digital_release_poll_loop(
+    client: httpx.AsyncClient,
+    initial_sync_done: asyncio.Event | None = None,
+) -> None:
+    """
+    Background task: initial sync shortly after startup, then every 24 h.
+
+    If *initial_sync_done* is given, it's set once the first sync attempt
+    finishes (success or failure) — other startup tasks (e.g. cache warming)
+    can wait on it so they don't run concurrently with this one.
+    """
     await asyncio.sleep(60)   # let the service finish warming up first
     while True:
         try:
             await sync_digital_releases(client)
         except Exception as exc:
             logger.error(f"Digital release poll loop error: {exc}")
+        finally:
+            if initial_sync_done is not None and not initial_sync_done.is_set():
+                initial_sync_done.set()
         await asyncio.sleep(_POLL_INTERVAL)

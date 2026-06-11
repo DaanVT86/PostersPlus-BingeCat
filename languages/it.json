@@ -58,9 +58,11 @@
     "Romanian": "Rumeno",
     "Hungarian": "Ungherese",
     "Czech": "Ceco",
-    "Best Picture": "Miglior film",
+    "Oscar Winner": "Miglior film",
+    "Oscar Nominee": "Candidato all'Oscar",
     "Emmy Winner": "Vincitore Emmy",
     "Emmy Nominee": "Candidato agli Emmy",
-    "Golden Globe": "Golden Globe"
+    "Globe Winner": "Vincitore Golden Globe",
+    "Globe Nominee": "Candidato al Globo"
   }
 }

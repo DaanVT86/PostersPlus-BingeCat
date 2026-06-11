@@ -60,9 +60,11 @@
     "Czech": "Checo",
     "Hebrew": "Hebraico",
     "Greek": "Grego",
-    "Best Picture": "Melhor Filme",
+    "Oscar Winner": "Vencedor do Oscar",
+    "Oscar Nominee": "Nomeado ao Oscar",
     "Emmy Winner": "Vencedor de Emmy",
     "Emmy Nominee": "Nomeado p/ Emmy",
-    "Golden Globe": "Globo de Ouro"
+    "Globe Winner": "Globo de Ouro",
+    "Globe Nominee": "Nomeado ao Globo"
   }
 }

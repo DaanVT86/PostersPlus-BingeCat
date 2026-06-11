@@ -230,6 +230,15 @@ def init_db() -> None:
         )
     """)
 
+    # Small generic key/value store for app-level bookkeeping (e.g. the last
+    # cache-warm cycle's timestamp) that doesn't warrant its own table.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
     # Migrate existing tmdb_metadata_cache rows.
     for col, definition in (
         ("credits_json",        "TEXT"),
@@ -245,6 +254,7 @@ def init_db() -> None:
         ("text_backdrop_path",  "TEXT"),
         ("original_poster_path","TEXT"),
         ("poster_langs_json",   "TEXT"),
+        ("imdb_id",             "TEXT"),
     ):
         _add_column_if_missing(conn, "tmdb_metadata_cache", col, definition)
 
@@ -917,7 +927,7 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
                    runtime, number_of_seasons, number_of_episodes,
                    original_language, original_title, backdrop_path, tmdb_status, vote_count,
                    text_backdrop_path, original_poster_path,
-                   poster_langs_json
+                   poster_langs_json, imdb_id
             FROM tmdb_metadata_cache
             WHERE cache_key = ?
             """,
@@ -933,7 +943,7 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
             runtime, number_of_seasons, number_of_episodes,
             original_language, original_title, backdrop_path, tmdb_status, vote_count,
             text_backdrop_path, original_poster_path,
-            poster_langs_json,
+            poster_langs_json, imdb_id,
         ) = row
 
         age_days = (time.time() - cached_at) / 86400
@@ -979,6 +989,7 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
             "text_backdrop_path":   text_backdrop_path,
             "original_poster_path": original_poster_path,
             "poster_langs":         json.loads(poster_langs_json or "{}"),
+            "imdb_id":              imdb_id,
         }
     except Exception as exc:
         logger.error(f"TMDB metadata cache read error: {exc}")
@@ -1007,6 +1018,7 @@ def set_cached_tmdb_metadata(
     text_backdrop_path: str | None = None,
     original_poster_path: str | None = None,
     poster_langs: dict | None = None,
+    imdb_id: str | None = None,
 ) -> None:
     try:
         with _db_lock:
@@ -1019,8 +1031,8 @@ def set_cached_tmdb_metadata(
                      runtime, number_of_seasons, number_of_episodes,
                      original_language, original_title, backdrop_path, tmdb_status, vote_count,
                      text_backdrop_path, original_poster_path,
-                     poster_langs_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     poster_langs_json, imdb_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cache_key,
@@ -1044,6 +1056,7 @@ def set_cached_tmdb_metadata(
                     text_backdrop_path,
                     original_poster_path,
                     json.dumps(poster_langs or {}),
+                    imdb_id,
                 ),
             )
             get_db().commit()
@@ -1181,3 +1194,35 @@ def set_cached_text_detection(cache_key: str, has_text: bool) -> None:
             get_db().commit()
     except Exception as exc:
         logger.error(f"Text-detection cache write error: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# App state — small key/value store for cross-restart bookkeeping
+# ---------------------------------------------------------------------------
+
+def get_app_state(key: str) -> str | None:
+    """Return the stored string value for *key*, or None if unset/on error."""
+    try:
+        row = get_db().execute(
+            "SELECT value FROM app_state WHERE key = ?", (key,)
+        ).fetchone()
+        return None if row is None else row[0]
+    except Exception as exc:
+        logger.error(f"App state read error ({key}): {exc}")
+        return None
+
+
+def set_app_state(key: str, value: str) -> None:
+    """Upsert a string value in the app-state key/value store."""
+    try:
+        with _db_lock:
+            get_db().execute(
+                """
+                INSERT INTO app_state (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (key, value),
+            )
+            get_db().commit()
+    except Exception as exc:
+        logger.error(f"App state write error ({key}): {exc}")

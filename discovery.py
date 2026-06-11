@@ -264,10 +264,10 @@ LANGUAGE_LABELS: dict[str, str] = {
 
 # Sash type (controls colour) for each priority slot
 _SASH_TYPES: dict[str, str] = {
-    "wins":            "win",       # gold — Oscar Best Picture + Emmy Outstanding wins
-    "gg_wins":         "win",       # gold — Golden Globe wins (separate slot)
-    "pic_noms":        "nom",       # silver — Best Picture nom + Major Emmy nom (film vs TV, never coexist)
-    "gg_noms":         "nom",       # silver — Golden Globe nomination
+    "wins":            "win",       # gold — Oscar Winner + Emmy Winner
+    "gg_wins":         "win",       # gold — Globe Winner (separate slot)
+    "pic_noms":        "nom",       # silver — Oscar Nominee + Emmy Nominee (film vs TV, never coexist)
+    "gg_noms":         "nom",       # silver — Globe Nominee
     "emmy_noms":       "nom",       # silver — legacy alias for pic_noms
     "noms":            "nom",       # silver — legacy catch-all for any nomination
     "festival":        "win",       # gold — major festival win is prestige-equivalent to Oscar
@@ -308,8 +308,8 @@ class DiscoveryMeta:
     """All discoverable facts about a title, computed once and cached."""
 
     # Awards (from MDblist keywords + Emmy ID set)
-    award_wins: list[str] = field(default_factory=list)   # "Best Picture", "Emmy Winner"
-    award_noms: list[str] = field(default_factory=list)   # "Best Picture Nom", "Emmy Nominee"
+    award_wins: list[str] = field(default_factory=list)   # "Oscar Winner", "Emmy Winner", "Globe Winner"
+    award_noms: list[str] = field(default_factory=list)   # "Oscar Nominee", "Emmy Nominee", "Globe Nominee"
 
     # Prestige signals (from TMDB credits / production_companies)
     matched_studios:   list[str] = field(default_factory=list)
@@ -502,23 +502,23 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
         # prioritised independently. A title can win both Oscar and Emmy
         # (impossible in practice) but both share this slot since one is film,
         # one is TV — they never coexist on the same title.
-        w = [v for v in meta.award_wins if v != "Golden Globe"]
+        w = [v for v in meta.award_wins if v != "Globe Winner"]
         return w[0] if w else None
 
     if slot == "gg_wins":
         # Golden Globe wins — all top film and TV categories.
-        return "Golden Globe" if "Golden Globe" in meta.award_wins else None
+        return "Globe Winner" if "Globe Winner" in meta.award_wins else None
 
     if slot in ("pic_noms", "emmy_noms"):
         # Best Picture nominations (film) and Major Emmy nominations (TV) share
         # this slot — they never coexist on the same title, mirroring wins.
         # emmy_noms is kept as a legacy alias for backward-compat with old URLs.
-        match = next((n for n in meta.award_noms if "Best Picture" in n or "Emmy" in n), None)
+        match = next((n for n in meta.award_noms if "Oscar Nominee" in n or "Emmy" in n), None)
         return match
 
     if slot == "gg_noms":
         # Golden Globe nominations — all top film and TV categories.
-        return "Golden Globe" if "Golden Globe" in meta.award_noms else None
+        return "Globe Nominee" if "Globe Nominee" in meta.award_noms else None
 
     if slot == "noms":
         # Legacy catch-all: any nomination (kept for backward-compat with

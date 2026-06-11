@@ -32,7 +32,7 @@ Those not self-hosting can [visit the public instance.](https://postersplus.elfh
 
 ## Features
 
-- **Ratings overlay** - weighted composite score from Letterboxd, Trakt, Rotten Tomatoes, IMDb, Metacritic, TMDb, MyAnimeList, and more. Three display modes (Score Bar, Clean, Minimalist, Bar) with many sub-modes. Three colour palettes, poster-aware overlays for a frosted look and optional glow on high scores.
+- **Ratings overlay** - weighted composite score from Letterboxd, Trakt, Rotten Tomatoes, IMDb, Metacritic, TMDb, MyAnimeList, and more. Four display modes (Score Bar, Clean, Minimalist, Bar) with many sub-modes. Three colour palettes, poster-aware overlays for a frosted look and optional glow on high scores.
 
 - **Award sashes** - Oscar Best Picture, Golden Globe (film and TV, five major categories), Emmy Outstanding Series (Drama, Comedy, Limited), festival winners, notable studios/directors/cast, trending titles, newly streaming (release-date recency plus r/movieleaks tracking), cult classics, true stories, and Metacritic Must-See. Priority order is fully configurable and any sash can be disabled. Can also be rendered as a notch, for those that prefer a more modern look.
 
@@ -271,11 +271,11 @@ Sashes display contextual metadata about a title - awards, festival recognition,
 
 | Sash | Triggers on |
 |---|---|
-| Best Picture / Emmy Win | Oscar Best Picture winner, Emmy Outstanding Drama/Comedy/Limited winner |
-| Golden Globe Win | Golden Globe winner (film drama/comedy, TV drama/comedy/limited) |
+| Oscar Winner, Emmy Winner | Oscar Best Picture winner, Emmy Outstanding Drama/Comedy/Limited winner |
+| Globe Winner | Golden Globe winner (film drama/comedy, TV drama/comedy/limited) |
 | Festival Winner | Cannes, Venice, Sundance, TIFF, and other major festivals |
-| Best Picture / Emmy Nom | Oscar Best Picture nominee, Emmy Outstanding nominee |
-| Golden Globe Nom | Golden Globe nominee (same categories as above) |
+| Oscar Nominee, Emmy Nominee | Oscar Best Picture nominee, Emmy Outstanding nominee |
+| Globe Nominee | Golden Globe nominee (same categories as above) |
 | Notable Studio | A24, Neon, Pixar, and other curated studios |
 | Notable Director | Curated list of notable directors |
 | Notable Cast | Curated list of notable cast members |

@@ -61,9 +61,11 @@
     "Czech": "Czech",
     "Hebrew": "Hebrew",
     "Greek": "Greek",
-    "Best Picture": "Best Picture",
+    "Oscar Winner": "Oscar Winner",
+    "Oscar Nominee": "Oscar Nominee",
     "Emmy Winner": "Emmy Winner",
     "Emmy Nominee": "Emmy Nominee",
-    "Golden Globe": "Golden Globe"
+    "Globe Winner": "Globe Winner",
+    "Globe Nominee": "Globe Nominee"
   }
 }

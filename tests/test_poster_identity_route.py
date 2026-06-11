@@ -19,7 +19,9 @@ def _close_thread_cache_connection() -> None:
 
 class PosterIdentityRouteTests(unittest.TestCase):
     def test_poster_route_accepts_imdb_only_when_identity_resolves(self):
-        async def fake_digital_loop(client):
+        async def fake_digital_loop(client, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
             await asyncio.Event().wait()
 
         async def fake_resolve_identity(**kwargs):

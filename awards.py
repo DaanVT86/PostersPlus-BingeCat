@@ -1190,16 +1190,16 @@ def parse_mdblist_awards(
 
     # --- Best Picture (Oscar) ---
     if "best-picture-winner" in keyword_names:
-        wins.append("Best Picture")
+        wins.append("Oscar Winner")
     elif "best-picture-nominated" in keyword_names:
-        noms.append("Best Picture")
+        noms.append("Oscar Nominee")
 
     # --- Golden Globe (all top film + TV categories) ---
     if numeric_tmdb_id is not None:
         if numeric_tmdb_id in _GG_ALL_WINNERS:
-            wins.append("Golden Globe")
+            wins.append("Globe Winner")
         elif numeric_tmdb_id in _GG_ALL_NOMS:
-            noms.append("Golden Globe")
+            noms.append("Globe Nominee")
 
     # --- Emmy ---
     if numeric_tmdb_id is not None and numeric_tmdb_id in EMMY_WINNER_TMDB_IDS:
@@ -1296,13 +1296,12 @@ def _sash_body_cairo(
     return Image.fromarray(rgba, "RGBA")
 
 
-# Awards whose winner and nominee share the same label text (see
-# parse_mdblist_awards), so the notch badge — which can't use colour for win/nom
-# because notch_style owns the trim colour — prefixes a ★ to mark the winner,
-# mirroring the star convention in score/compact modes.  Emmy is excluded (its
-# labels already say "Winner"/"Nominee"); festival winners are intentionally
-# left unmarked.  Strings must match the labels emitted by parse_mdblist_awards.
-_STAR_WIN_AWARDS = {"Best Picture", "Golden Globe"}
+# Formerly used to auto-star awards whose winner and nominee shared the same
+# label text ("Best Picture", "Golden Globe").  Those labels were renamed to
+# "Oscar Winner"/"Oscar Nominee" and "Globe Winner"/"Globe Nominee" so the
+# auto-star is no longer needed.  The set is kept empty for safety; the star
+# prefix is now controlled by the sash_winner_star URL parameter instead.
+_STAR_WIN_AWARDS: set[str] = set()
 
 
 def sample_frosted_notch_rgb(
@@ -1676,7 +1675,10 @@ def draw_award_sash(
     length_ratio: float = 1.15,
     height_ratio: float = 0.12,
     poster_color: tuple[float, float, float] | None = None,
+    star: bool = False,
 ) -> Image.Image:
+    if star:
+        label = f"★  {label}"
     width, height = image.size
 
     # SS = supersample factor. 2× supersample + LANCZOS downsample gives edges

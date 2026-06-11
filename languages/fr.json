@@ -58,9 +58,11 @@
     "Romanian": "Roumain",
     "Hungarian": "Hongrois",
     "Czech": "Tchèque",
-    "Best Picture": "Meilleur film",
+    "Oscar Winner": "Oscar du meilleur film",
+    "Oscar Nominee": "Nommé aux Oscars",
     "Emmy Winner": "Lauréat Emmy",
     "Emmy Nominee": "Nommé aux Emmy",
-    "Golden Globe": "Golden Globe"
+    "Globe Winner": "Lauréat Golden Globe",
+    "Globe Nominee": "Nommé Golden Globe"
   }
 }
