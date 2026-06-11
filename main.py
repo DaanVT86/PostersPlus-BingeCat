@@ -695,7 +695,7 @@ class RequestConfig:
     bar_accent:              str   = "silver"   # "silver"|"gold"|"palette_0"|"palette_1"|"palette_2"
     bar_score_out_of_10:     bool  = False
     bar_match_notch:         bool  = False  # share one frosted tint with the sash notch
-    bar_append:              str   = "rating_year"  # "rating_year"|"rating"|"year"|"sash"
+    bar_append:              str   = "rating_year"  # "rating_year"|"rating"|"year"|"sash"|"second_rating"
 
     logo_max_w_ratio:   float = field(default_factory=lambda: _cfg.LOGO_MAX_W_RATIO)
     logo_max_h_ratio:   float = field(default_factory=lambda: _cfg.LOGO_MAX_H_RATIO)
@@ -883,7 +883,7 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.greyscale_no_quality    = _b("greyscale_no_quality",    cfg.greyscale_no_quality)
     cfg.score_color_mode        = _i("score_color_mode",       cfg.score_color_mode,       0,   2)
     cfg.badge_display_mode      = _i("badge_display_mode",     cfg.badge_display_mode,     0,   5)
-    cfg.rating_display_mode     = _i("rating_display_mode",    cfg.rating_display_mode,    0,   4)
+    cfg.rating_display_mode     = _i("rating_display_mode",    cfg.rating_display_mode,    0,   5)
 
     if "show_quality_badges" in params and "badge_display_mode" not in params:
         if _parse_bool(params.get("show_quality_badges"), True):
@@ -922,7 +922,7 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.bar_score_out_of_10     = _b("bar_score_out_of_10",     cfg.bar_score_out_of_10)
     cfg.bar_match_notch         = _b("bar_match_notch",         cfg.bar_match_notch)
     _bap = (params.get("bar_append") or "").strip().lower()
-    if _bap in ("rating_year", "rating", "year", "sash"):
+    if _bap in ("rating_year", "rating", "year", "sash", "second_rating"):
         cfg.bar_append = _bap
 
     cfg.logo_max_w_ratio   = _f("logo_max_w_ratio",   cfg.logo_max_w_ratio,  0.0, 1.5)
@@ -1586,8 +1586,8 @@ def build_poster(
                 color_mode=cfg.score_color_mode,
             )
 
-        elif cfg.rating_display_mode == 2:
-            font_size = int(width * cfg.numeric_score_font_size_ratio)
+        elif cfg.rating_display_mode in (2, 5):
+            font_size = max(1, int(width * cfg.numeric_score_font_size_ratio))
             # Score formatting:
             #   out of 100 (default): "87", "100", "N/A"
             #   out of 10:            "8.7", "8.0" (always one decimal), "10"
@@ -1597,7 +1597,6 @@ def build_poster(
                 _score_text = "10" if score >= 100 else f"{score / 10:.1f}"
             else:
                 _score_text = str(score)
-            label = f"{genre_label} ★ {_score_text}"
             rating_cy = height * cfg.numeric_score_y_offset
 
             try:
@@ -1605,13 +1604,72 @@ def build_poster(
             except IOError:
                 font_meta = ImageFont.load_default()
 
-            tx, ty = _text_center(draw, label, font_meta, width / 2, rating_cy)  # type: ignore
-            draw.text(
-                (tx, ty - int(font_size * 0.10)),
-                label,
-                font=font_meta,
-                fill=(200, 200, 200, 255),
-            )
+            if cfg.rating_display_mode == 2:
+                label = f"{genre_label} ★ {_score_text}"
+                tx, ty = _text_center(draw, label, font_meta, width / 2, rating_cy)  # type: ignore
+                draw.text(
+                    (tx, ty - int(font_size * 0.10)),
+                    label,
+                    font=font_meta,
+                    fill=(200, 200, 200, 255),
+                )
+            else:
+                _ink = (200, 200, 200, 255)
+                _has_mc = metacritic_score is not None
+
+                def _dual_clean_layout(_font_size: int):
+                    try:
+                        _font = ImageFont.truetype(os.path.join(_FONTS_DIR, "Inter-Bold.ttf"), _font_size)
+                    except IOError:
+                        _font = ImageFont.load_default()
+                    _gap = max(4, int(_font_size * 0.24))
+                    _mc_old_size = max(8, int(_font_size * 0.82))
+                    _mc_size = max(8, int(_font_size * 0.94))
+                    _items = [
+                        ("text", genre_label, draw.textlength(genre_label, font=_font)),
+                        ("star", "★", draw.textlength("★", font=_font)),
+                        ("text", _score_text, draw.textlength(_score_text, font=_font)),
+                    ]
+                    if _has_mc:
+                        _mc_text = str(metacritic_score)
+                        _items.extend([
+                            ("mc", "", _mc_size),
+                            ("text", _mc_text, draw.textlength(_mc_text, font=_font)),
+                        ])
+                    _total = sum(item[2] for item in _items) + _gap * (len(_items) - 1)
+                    return _font, _items, _gap, _mc_size, _mc_old_size, _total
+
+                _max_line_w = max(1, int(width * 0.92))
+                _min_font_size = 1
+                while True:
+                    font_meta, _items, _gap, _mc_size, _mc_old_size, _total_w = _dual_clean_layout(font_size)
+                    if _total_w <= _max_line_w or font_size <= _min_font_size:
+                        break
+                    _next_font_size = max(_min_font_size, int(font_size * (_max_line_w / _total_w)))
+                    font_size = _next_font_size if _next_font_size < font_size else font_size - 1
+
+                _label_for_y = f"{genre_label} ★ {_score_text}"
+                _, ty = _text_center(draw, _label_for_y, font_meta, width / 2, rating_cy)  # type: ignore
+                _text_y = ty - int(font_size * 0.10)
+                _mc_cy = round(_text_y + font_size * 0.60 + (_mc_size - _mc_old_size) / 2)
+                _cursor = (width - _total_w) / 2
+                for _idx, (_kind, _text, _item_w) in enumerate(_items):
+                    if _kind == "text":
+                        draw.text((_cursor, _text_y), _text, font=font_meta, fill=_ink)
+                    elif _kind == "star":
+                        draw.text((_cursor, _text_y), "★", font=font_meta, fill=_ink)
+                    else:
+                        if not _draw_metacritic_minimal_icon(
+                            image,
+                            x=round(_cursor),
+                            y_center=_mc_cy,
+                            size=_mc_size,
+                            color=_ink,
+                        ):
+                            draw.text((_cursor, _text_y), "m", font=font_meta, fill=_ink)
+                    _cursor += _item_w
+                    if _idx < len(_items) - 1:
+                        _cursor += _gap
 
         elif cfg.rating_display_mode == 3:
             font_size = int(width * cfg.minimalist_mode_font_size_ratio)
@@ -1724,12 +1782,19 @@ def build_poster(
                 _parts = [_year_str, genre_label or "", f"★ {_score_str}" if _score_str else ""]
             elif cfg.bar_append == "rating":
                 _parts = [genre_label or "", f"★ {_score_str}" if _score_str else ""]
+            elif cfg.bar_append == "second_rating":
+                _parts = [genre_label or "", f"★ {_score_str}" if _score_str else ""]
             elif cfg.bar_append == "year":
                 _parts = [_year_str, genre_label or ""]
             else:  # "sash"
                 _parts = [genre_label or "", translate_sash(_bar_sash, cfg.logo_language) if _bar_sash else ""]
             _parts = [p for p in _parts if p]
             _sep = "  ·  " if len(_parts) <= 2 else " · "
+            _center_segments = None
+            if cfg.bar_append == "second_rating":
+                _center_segments = [("text", part) for part in _parts]
+                if _score_str and metacritic_score is not None:
+                    _center_segments.append(("mc", str(metacritic_score)))
             image = draw_frosted_bar(
                 image,
                 left_text   = "",
@@ -1752,6 +1817,7 @@ def build_poster(
                     )
                 ) if cfg.bar_style in ("rating_black", "rating_frosted") else None,
                 tint_rgb         = _shared_tint,
+                center_segments  = _center_segments,
             )
 
     # --- Discovery sash / badge ---

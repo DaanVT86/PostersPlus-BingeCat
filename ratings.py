@@ -5,7 +5,7 @@ import httpx
 import numpy as np
 
 logger = logging.getLogger(__name__)
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 try:
     import cairo as _cairo
@@ -27,6 +27,7 @@ from config import (
 
 
 _RATING_VOTE_KEYS = ("vote_count", "votes", "count", "rating_count", "ratings_count")
+_METACRITIC_ICON_MASK_CACHE: dict[int, Image.Image | None] = {}
 
 
 def _rating_vote_count(raw: dict) -> int | None:
@@ -410,6 +411,31 @@ def sample_frosted_bar_rgb(
     return float(ar[:, :, 0].mean()), float(ar[:, :, 1].mean()), float(ar[:, :, 2].mean())
 
 
+def _load_metacritic_icon_mask(size: int) -> Image.Image | None:
+    """Return a resized alpha mask for the inline Metacritic mark."""
+    import os
+
+    size = max(1, int(size))
+    if size not in _METACRITIC_ICON_MASK_CACHE:
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "static",
+            "logos",
+            "metacritic-minimal-white.png",
+        )
+        try:
+            icon = Image.open(path).convert("RGBA")
+            icon = ImageOps.contain(icon, (size, size), method=Image.Resampling.LANCZOS)
+            mask = Image.new("L", (size, size), 0)
+            alpha = ImageOps.autocontrast(icon.getchannel("A"))
+            mask.paste(alpha, ((size - icon.width) // 2, (size - icon.height) // 2))
+            _METACRITIC_ICON_MASK_CACHE[size] = mask
+        except Exception:
+            _METACRITIC_ICON_MASK_CACHE[size] = None
+    cached = _METACRITIC_ICON_MASK_CACHE[size]
+    return cached.copy() if cached is not None else None
+
+
 def draw_frosted_bar(
     image: Image.Image,
     left_text: str,
@@ -423,6 +449,7 @@ def draw_frosted_bar(
     score: int | str | None = None,
     fill_color: tuple[int, int, int] | None = None,
     tint_rgb: tuple[float, float, float] | None = None,
+    center_segments: list[tuple[str, str]] | None = None,
 ) -> Image.Image:
     """Full-width frosted glass or dark-body strip near the bottom of the poster.
 
@@ -568,7 +595,38 @@ def draw_frosted_bar(
     td        = ImageDraw.Draw(txt_layer)
     h_pad     = max(20, int(width * 0.055))
 
-    if center_text:
+    if center_segments:
+        sep_text = " · "
+        sep_w = td.textlength(sep_text, font=font)
+        icon_size = max(8, int(font_size * 0.94))
+        icon_old_size = max(8, int(font_size * 0.82))
+        icon_gap = max(3, int(font_size * 0.18))
+        measured: list[tuple[str, str, float]] = []
+        for kind, text in center_segments:
+            if kind == "mc":
+                seg_w = icon_size + icon_gap + td.textlength(text, font=font)
+            else:
+                seg_w = td.textlength(text, font=font)
+            measured.append((kind, text, seg_w))
+        total_w = sum(item[2] for item in measured) + sep_w * (len(measured) - 1)
+        cursor = (width - total_w) / 2
+        icon_cy = round(text_y + font_size * 0.60 + (icon_size - icon_old_size) / 2)
+        for idx, (kind, text, seg_w) in enumerate(measured):
+            if kind == "mc":
+                mask = _load_metacritic_icon_mask(icon_size)
+                if mask is not None:
+                    swatch = Image.new("RGBA", mask.size, ink)
+                    txt_layer.paste(swatch, (round(cursor), round(icon_cy - mask.height / 2)), mask)
+                    td.text((cursor + icon_size + icon_gap, text_y), text, font=font, fill=ink)
+                else:
+                    td.text((cursor, text_y), f"m {text}", font=font, fill=ink)
+            else:
+                td.text((cursor, text_y), text, font=font, fill=ink)
+            cursor += seg_w
+            if idx < len(measured) - 1:
+                td.text((cursor, text_y), sep_text, font=font, fill=ink)
+                cursor += sep_w
+    elif center_text:
         cw = int(td.textlength(center_text, font=font))
         td.text(((width - cw) // 2, text_y), center_text, font=font, fill=ink)
     if left_text:

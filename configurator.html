@@ -1927,6 +1927,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                 <option value="2">Clean</option>
                 <option value="3">Minimalist</option>
                 <option value="4">Bar</option>
+                <option value="5">Dual Clean</option>
               </select>
             </div>
             <div id="rating-alt-colors-toggle" style="margin-bottom:14px;">
@@ -2057,6 +2058,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                 <select id="cfg-bar4-append" onchange="build(); queuePreviewReload()">
                   <option value="rating_year" selected>Rating and Year</option>
                   <option value="rating">Rating</option>
+                  <option value="second_rating">Rating + Second rating</option>
                   <option value="year">Year</option>
                   <option value="sash">Info Sash</option>
                 </select>
@@ -3564,7 +3566,7 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
       params.set('score_glow_threshold', ni('cfg-glow-thresh'));
       params.set('score_glow_blur',      ni('cfg-glow-blur'));
       params.set('score_glow_alpha',     ni('cfg-glow-alpha'));
-    } else if (ratingMode === 2) {
+    } else if (ratingMode === 2 || ratingMode === 5) {
       params.set('numeric_score_font_size_ratio', n('cfg-font-mode2').toFixed(3));
       params.set('numeric_score_y_offset',        n('cfg-y-mode2').toFixed(2));
       params.set('score_out_of_10',               c('tog-score-out-of-10') ? 'true' : 'false');
@@ -3854,7 +3856,7 @@ function _updateBarRatingRows() {
 function updateRatingFields() {
   const mode = parseInt(document.getElementById('cfg-rating-mode').value);
   document.getElementById('rating-mode1-fields').style.display      = mode === 1 ? '' : 'none';
-  document.getElementById('rating-mode2-fields').style.display      = mode === 2 ? '' : 'none';
+  document.getElementById('rating-mode2-fields').style.display      = (mode === 2 || mode === 5) ? '' : 'none';
   document.getElementById('rating-mode3-fields').style.display      = mode === 3 ? '' : 'none';
   document.getElementById('rating-mode4-fields').style.display      = mode === 4 ? '' : 'none';
   document.getElementById('rating-glow-fields').style.display       = mode === 1 ? '' : 'none';
