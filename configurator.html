@@ -82,7 +82,14 @@
     margin-bottom: 32px;
   }
 
-  .header-left { display: flex; align-items: baseline; gap: 20px; }
+  .header-left { display: flex; align-items: center; gap: 20px; }
+
+  .logo-lockup {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
 
   .logo {
     font-family: var(--serif);
@@ -112,7 +119,7 @@
     font-size: 9px;
     font-weight: 300;
     color: var(--silver-dim);
-    letter-spacing: 0.3em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
   }
 
@@ -1510,7 +1517,9 @@
     .preview-frame { height: auto; min-height: 240px; padding: 12px; }
     .preview-poster { width: 100%; height: auto; max-height: 70vh; object-fit: contain; }
     .header { flex-direction: row; align-items: center; }
-    .logo-sep, .logo-sub { display: none; }
+    .logo-sep { display: none; }
+    .logo-lockup { gap: 3px; }
+    .logo-sub { font-size: 7px; letter-spacing: 0.1em; }
     .header-github,
     .header-discord,
     .header-theme { opacity: 0.6; margin-top: 0; }
@@ -1670,8 +1679,9 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
 
   <header class="header">
     <div class="header-left">
-      <div>
+      <div class="logo-lockup">
         <span class="logo"><em>Posters</em>+</span>
+        <span class="logo-sub">Powered by Bingecat</span>
       </div>
     </div>
     <div class="header-right">
