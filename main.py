@@ -1624,7 +1624,7 @@ def build_poster(
                         _font = ImageFont.load_default()
                     _gap = max(4, int(_font_size * 0.24))
                     _mc_old_size = max(8, int(_font_size * 0.82))
-                    _mc_size = max(8, int(_font_size * 0.86))
+                    _mc_size = max(8, _font_size)
                     _items = [
                         ("text", genre_label, draw.textlength(genre_label, font=_font)),
                         ("star", "★", draw.textlength("★", font=_font)),
@@ -1718,7 +1718,7 @@ def build_poster(
             pip_cy  = round(y + font_size * 0.60)
             star_w  = draw.textlength("★", font=font_meta)
             mc_old_size = max(8, int(font_size * 0.82))
-            mc_w    = max(8, int(font_size * 0.86))
+            mc_w    = max(8, font_size)
             mc_size = mc_w
             mc_cy   = pip_cy + (mc_size - mc_old_size) // 2
 
