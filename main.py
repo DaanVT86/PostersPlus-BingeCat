@@ -1624,7 +1624,7 @@ def build_poster(
                         _font = ImageFont.load_default()
                     _gap = max(4, int(_font_size * 0.24))
                     _mc_old_size = max(8, int(_font_size * 0.82))
-                    _mc_size = max(8, int(_font_size * 0.94))
+                    _mc_size = max(8, int(_font_size * 0.86))
                     _items = [
                         ("text", genre_label, draw.textlength(genre_label, font=_font)),
                         ("star", "★", draw.textlength("★", font=_font)),
@@ -1718,7 +1718,7 @@ def build_poster(
             pip_cy  = round(y + font_size * 0.60)
             star_w  = draw.textlength("★", font=font_meta)
             mc_old_size = max(8, int(font_size * 0.82))
-            mc_w    = max(8, int(font_size * 0.94))
+            mc_w    = max(8, int(font_size * 0.86))
             mc_size = mc_w
             mc_cy   = pip_cy + (mc_size - mc_old_size) // 2
 
@@ -1792,9 +1792,19 @@ def build_poster(
             _sep = "  ·  " if len(_parts) <= 2 else " · "
             _center_segments = None
             if cfg.bar_append == "second_rating":
-                _center_segments = [("text", part) for part in _parts]
+                _center_segments = [("text", genre_label or "")]
+                if _score_str:
+                    _center_segments.extend([
+                        ("sep", ""),
+                        ("star", "★"),
+                        ("text", _score_str),
+                    ])
                 if _score_str and metacritic_score is not None:
-                    _center_segments.append(("mc", str(metacritic_score)))
+                    _center_segments.extend([
+                        ("sep", ""),
+                        ("mc", ""),
+                        ("text", str(metacritic_score)),
+                    ])
             image = draw_frosted_bar(
                 image,
                 left_text   = "",

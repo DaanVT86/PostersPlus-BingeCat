@@ -596,19 +596,21 @@ def draw_frosted_bar(
     h_pad     = max(20, int(width * 0.055))
 
     if center_segments:
-        sep_text = " · "
-        sep_w = td.textlength(sep_text, font=font)
-        icon_size = max(8, int(font_size * 0.94))
+        token_gap = max(4, int(font_size * 0.24))
+        icon_size = max(8, int(font_size * 0.86))
         icon_old_size = max(8, int(font_size * 0.82))
-        icon_gap = max(3, int(font_size * 0.18))
         measured: list[tuple[str, str, float]] = []
         for kind, text in center_segments:
             if kind == "mc":
-                seg_w = icon_size + icon_gap + td.textlength(text, font=font)
+                seg_w = icon_size
+            elif kind == "sep":
+                seg_w = td.textlength("·", font=font)
+            elif kind == "star":
+                seg_w = td.textlength("★", font=font)
             else:
                 seg_w = td.textlength(text, font=font)
             measured.append((kind, text, seg_w))
-        total_w = sum(item[2] for item in measured) + sep_w * (len(measured) - 1)
+        total_w = sum(item[2] for item in measured) + token_gap * (len(measured) - 1)
         cursor = (width - total_w) / 2
         icon_cy = round(text_y + font_size * 0.60 + (icon_size - icon_old_size) / 2)
         for idx, (kind, text, seg_w) in enumerate(measured):
@@ -617,15 +619,17 @@ def draw_frosted_bar(
                 if mask is not None:
                     swatch = Image.new("RGBA", mask.size, ink)
                     txt_layer.paste(swatch, (round(cursor), round(icon_cy - mask.height / 2)), mask)
-                    td.text((cursor + icon_size + icon_gap, text_y), text, font=font, fill=ink)
                 else:
-                    td.text((cursor, text_y), f"m {text}", font=font, fill=ink)
+                    td.text((cursor, text_y), "m", font=font, fill=ink)
+            elif kind == "sep":
+                td.text((cursor, text_y), "·", font=font, fill=ink)
+            elif kind == "star":
+                td.text((cursor, text_y), "★", font=font, fill=ink)
             else:
                 td.text((cursor, text_y), text, font=font, fill=ink)
             cursor += seg_w
             if idx < len(measured) - 1:
-                td.text((cursor, text_y), sep_text, font=font, fill=ink)
-                cursor += sep_w
+                cursor += token_gap
     elif center_text:
         cw = int(td.textlength(center_text, font=font))
         td.text(((width - cw) // 2, text_y), center_text, font=font, fill=ink)
