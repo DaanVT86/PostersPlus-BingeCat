@@ -683,6 +683,7 @@ class RequestConfig:
     #   0 = Year (Genre + year, rating as a colour-coded pip — the original look)
     #   1 = Rating (Genre | Score, score printed as text)
     #   2 = Year + Rating (Genre | Year | Score)
+    #   3 = Dual rating (Genre | Score | Metacritic Score when available)
     minimalist_append_mode: int = 0
 
     # Frosted bar (rating_display_mode == 4)
@@ -906,7 +907,7 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.minimalist_mode_font_size_ratio = _f("minimalist_mode_font_size_ratio", cfg.minimalist_mode_font_size_ratio, 0.0, 0.5)
     cfg.minimalist_mode_font_x_offset = _f("minimalist_mode_font_x_offset", cfg.minimalist_mode_font_x_offset, 0.0, 1.0)
     cfg.minimalist_mode_font_y_offset = _f("minimalist_mode_font_y_offset", cfg.minimalist_mode_font_y_offset, 0.0, 1.0)
-    cfg.minimalist_append_mode = _i("minimalist_append_mode", cfg.minimalist_append_mode, 0, 2)
+    cfg.minimalist_append_mode = _i("minimalist_append_mode", cfg.minimalist_append_mode, 0, 3)
 
     cfg.bar_height_ratio        = _f("bar_height_ratio",        cfg.bar_height_ratio,        0.04, 0.20)
     cfg.bar_font_size_ratio     = _f("bar_font_size_ratio",     cfg.bar_font_size_ratio,     0.15, 0.70)
@@ -1225,6 +1226,7 @@ def build_poster(
     release_year: str | None = None,
     age_rating: int | None = None,
     no_poster: bool = False,
+    metacritic_score: int | None = None,
 ) -> Image.Image:
 
     width, height = image.size
@@ -1626,11 +1628,13 @@ def build_poster(
             # Segments, each tagged with the SEPARATOR that precedes it:
             #   "pip"  — silver vertical pip (before the year)
             #   "star" — ★ glyph (before the rating/score)
+            #   "mc"   — minimalist Metacritic mark (before critic score)
             #   "rpip" — pip COLOURED by score (mode 0 only: the rating shown
             #            purely by colour, no number)
             # Mode 0 ("Year"): genre [rating-pip] year
             # Mode 1 ("Rating"): genre ★ score
             # Mode 2 ("Year + Rating"): genre [pip] year ★ score
+            # Mode 3 ("Dual rating"): genre ★ score [mc] metacritic score
             _has_score = score not in ("N/A", None)
             parts = [(genre_label, None)]   # (text, separator_before)
             if cfg.minimalist_append_mode == 0:
@@ -1639,21 +1643,28 @@ def build_poster(
             elif cfg.minimalist_append_mode == 1:
                 if _has_score:
                     parts.append((str(score), "star"))
-            else:  # 2 — Year + Rating
+            elif cfg.minimalist_append_mode == 2:
                 if release_year:
                     parts.append((str(release_year), "pip"))
                 if _has_score:
                     parts.append((str(score), "star"))
+            else:  # 3 — Dual rating
+                if _has_score:
+                    parts.append((str(score), "star"))
+                    if metacritic_score is not None:
+                        parts.append((str(metacritic_score), "mc"))
 
             pip_gap = int(font_size * 0.55)
             pip_w   = max(4, int(font_size * 0.18))
             pip_h   = int(font_size * 1.4)
             pip_cy  = round(y + font_size * 0.60)
             star_w  = draw.textlength("★", font=font_meta)
+            mc_w    = max(8, int(font_size * 0.82))
+            mc_size = mc_w
 
             # Lay out right-to-left: each segment, with its separator to its left.
             cursor = right_edge
-            ops    = []   # (kind, x[, text]); kind in text|pip|rpip|star
+            ops    = []   # (kind, x[, text]); kind in text|pip|rpip|star|mc
             for i in range(len(parts) - 1, -1, -1):
                 seg, sep = parts[i]
                 seg_x = cursor - draw.textlength(seg, font=font_meta)
@@ -1661,7 +1672,12 @@ def build_poster(
                 cursor = seg_x
                 if sep:
                     cursor -= pip_gap
-                    sep_w  = star_w if sep == "star" else pip_w
+                    if sep == "star":
+                        sep_w = star_w
+                    elif sep == "mc":
+                        sep_w = mc_w
+                    else:
+                        sep_w = pip_w
                     sep_x  = cursor - sep_w
                     ops.append((sep, sep_x))
                     cursor = sep_x - pip_gap
@@ -1672,6 +1688,15 @@ def build_poster(
                     draw.text((ox, y), op[2], font=font_meta, fill=_ink)
                 elif kind == "star":
                     draw.text((ox, y), "★", font=font_meta, fill=_ink)
+                elif kind == "mc":
+                    if not _draw_metacritic_minimal_icon(
+                        image,
+                        x=round(ox),
+                        y_center=pip_cy,
+                        size=mc_size,
+                        color=_ink,
+                    ):
+                        draw.text((ox, y), "m", font=font_meta, fill=_ink)
                 elif kind == "rpip":
                     draw_score_bar_vertical(image, score, x=ox, y_center=pip_cy,
                                             height=pip_h, width=pip_w,
@@ -2211,11 +2236,14 @@ _FONTS_DIR = os.path.join(BASE_DIR, "fonts")
 # fallback posters instead of the flat gradient.  Cached in memory; a *copy* is
 # returned per request because build_poster draws onto the base.
 _GENRE_BG_DIR = os.path.join(BASE_DIR, "static", "genre_bg")
+_STATIC_LOGO_DIR = os.path.join(BASE_DIR, "static", "logos")
+_METACRITIC_MINIMAL_ICON_PATH = os.path.join(_STATIC_LOGO_DIR, "metacritic-minimal-white.png")
 # Two interchangeable fallback-background sets, chosen per request via
 # fallback_bg_style: "minimal" (procedural textured) or "photoreal" (hand-made
 # photographic art that blends with real posters).
 _GENRE_BG_STYLES = ("minimal", "photoreal")
 _genre_bg_cache: dict[str, "Image.Image | None"] = {}   # keyed "style/genre"
+_metacritic_icon_mask_cache: dict[int, "Image.Image | None"] = {}
 
 
 def _genre_bg_path(style: str, name: str) -> "str | None":
@@ -2246,6 +2274,56 @@ def _load_genre_background(genre: str, style: str = "minimal") -> "Image.Image |
             _genre_bg_cache[key] = None
     base = _genre_bg_cache[key]
     return base.copy() if base is not None else None
+
+
+def _load_metacritic_icon_mask(size: int) -> "Image.Image | None":
+    """Return a resized alpha mask for the minimalist Metacritic mark."""
+    size = max(1, int(size))
+    if size not in _metacritic_icon_mask_cache:
+        try:
+            icon = Image.open(_METACRITIC_MINIMAL_ICON_PATH).convert("RGBA")
+            icon = ImageOps.contain(icon, (size, size), method=Image.Resampling.LANCZOS)
+            mask = Image.new("L", (size, size), 0)
+            alpha = ImageOps.autocontrast(icon.getchannel("A"))
+            mask.paste(alpha, ((size - icon.width) // 2, (size - icon.height) // 2))
+            _metacritic_icon_mask_cache[size] = mask
+        except Exception:
+            _metacritic_icon_mask_cache[size] = None
+    cached = _metacritic_icon_mask_cache[size]
+    return cached.copy() if cached is not None else None
+
+
+def _draw_metacritic_minimal_icon(
+    image: Image.Image,
+    *,
+    x: int,
+    y_center: int,
+    size: int,
+    color: tuple[int, int, int, int],
+) -> bool:
+    mask = _load_metacritic_icon_mask(size)
+    if mask is None:
+        return False
+    swatch = Image.new("RGBA", mask.size, color)
+    image.paste(swatch, (int(x), int(y_center - mask.height / 2)), mask)
+    return True
+
+
+def _metacritic_score_from_ratings(ratings: dict | None) -> int | None:
+    """Return the critic Metacritic score normalized to the poster's 0-100 scale."""
+    if not isinstance(ratings, dict):
+        return None
+    raw_value = ratings.get("metacritic")
+    if raw_value in (None, ""):
+        return None
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    normaliser = _cfg.SCORE_NORMALISERS.get("metacritic")
+    if normaliser is not None:
+        value = float(normaliser(value))
+    return max(0, min(100, round(value)))
 
 
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
@@ -2301,6 +2379,7 @@ def _compute_render_assets_signature() -> str:
     roots = (
         os.path.join(BASE_DIR, "languages"),
         os.path.join(BASE_DIR, "static", "genre_bg"),
+        os.path.join(BASE_DIR, "static", "logos"),
     )
     for root in roots:
         if not os.path.isdir(root):
@@ -3328,6 +3407,7 @@ async def get_poster(
             and effective_mdblist_key
             and (rating_result is FETCH_FAILED or rate_limited)
         )
+        metacritic_score = None
 
         if rating_failed:
             if rate_limited:
@@ -3422,6 +3502,10 @@ async def get_poster(
                 logger.info(f"Awards for {imdb_id}: wins={award_wins} noms={award_noms} "
                             f"festival={festival_label} age_rating={age_rating} "
                             f"cult={is_cult} true_story={is_true_story} metacritic={is_metacritic}")
+
+            metacritic_score = _metacritic_score_from_ratings(
+                ratings_dict if isinstance(ratings_dict, dict) else None
+            )
 
         # ------------------------------------------------------------------
         # Write rating + awards to cache (only on a fresh fetch).
@@ -3594,6 +3678,7 @@ async def get_poster(
             release_year=release_year,
             age_rating=age_rating,
             no_poster=is_no_poster,
+            metacritic_score=metacritic_score,
         )
 
         def _composite_and_encode() -> bytes:
