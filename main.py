@@ -1659,8 +1659,10 @@ def build_poster(
             pip_h   = int(font_size * 1.4)
             pip_cy  = round(y + font_size * 0.60)
             star_w  = draw.textlength("★", font=font_meta)
-            mc_w    = max(8, int(font_size * 0.82))
+            mc_old_size = max(8, int(font_size * 0.82))
+            mc_w    = max(8, int(font_size * 0.94))
             mc_size = mc_w
+            mc_cy   = pip_cy + (mc_size - mc_old_size) // 2
 
             # Lay out right-to-left: each segment, with its separator to its left.
             cursor = right_edge
@@ -1692,7 +1694,7 @@ def build_poster(
                     if not _draw_metacritic_minimal_icon(
                         image,
                         x=round(ox),
-                        y_center=pip_cy,
+                        y_center=mc_cy,
                         size=mc_size,
                         color=_ink,
                     ):
