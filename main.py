@@ -1622,33 +1622,36 @@ def build_poster(
                         _font = ImageFont.truetype(os.path.join(_FONTS_DIR, "Inter-Bold.ttf"), _font_size)
                     except IOError:
                         _font = ImageFont.load_default()
-                    _gap = max(4, int(_font_size * 0.24))
+                    _inner_gap = max(4, int(_font_size * 0.24))
+                    _separator_gap = max(8, int(_font_size * 0.42))
                     _mc_old_size = max(8, int(_font_size * 0.82))
                     _mc_size = max(8, int(_font_size * 0.86))
                     _items = [
-                        ("text", genre_label, draw.textlength(genre_label, font=_font)),
                         ("star", "★", draw.textlength("★", font=_font)),
                         ("text", _score_text, draw.textlength(_score_text, font=_font)),
                     ]
+                    _gaps = [_inner_gap]
                     if _has_mc:
                         _mc_text = str(metacritic_score)
                         _items.extend([
+                            ("sep", "·", draw.textlength("·", font=_font)),
                             ("mc", "", _mc_size),
                             ("text", _mc_text, draw.textlength(_mc_text, font=_font)),
                         ])
-                    _total = sum(item[2] for item in _items) + _gap * (len(_items) - 1)
-                    return _font, _items, _gap, _mc_size, _mc_old_size, _total
+                        _gaps.extend([_separator_gap, _separator_gap, _inner_gap])
+                    _total = sum(item[2] for item in _items) + sum(_gaps)
+                    return _font, _items, _gaps, _mc_size, _mc_old_size, _total
 
                 _max_line_w = max(1, int(width * 0.92))
                 _min_font_size = 1
                 while True:
-                    font_meta, _items, _gap, _mc_size, _mc_old_size, _total_w = _dual_clean_layout(font_size)
+                    font_meta, _items, _gaps, _mc_size, _mc_old_size, _total_w = _dual_clean_layout(font_size)
                     if _total_w <= _max_line_w or font_size <= _min_font_size:
                         break
                     _next_font_size = max(_min_font_size, int(font_size * (_max_line_w / _total_w)))
                     font_size = _next_font_size if _next_font_size < font_size else font_size - 1
 
-                _label_for_y = f"{genre_label} ★ {_score_text}"
+                _label_for_y = f"★ {_score_text}"
                 _, ty = _text_center(draw, _label_for_y, font_meta, width / 2, rating_cy)  # type: ignore
                 _text_y = ty - int(font_size * 0.10)
                 _mc_cy = round(_text_y + font_size * 0.60 + (_mc_size - _mc_old_size) / 2)
@@ -1658,6 +1661,8 @@ def build_poster(
                         draw.text((_cursor, _text_y), _text, font=font_meta, fill=_ink)
                     elif _kind == "star":
                         draw.text((_cursor, _text_y), "★", font=font_meta, fill=_ink)
+                    elif _kind == "sep":
+                        draw.text((_cursor, _text_y), "·", font=font_meta, fill=_ink)
                     else:
                         if not _draw_metacritic_minimal_icon(
                             image,
@@ -1668,8 +1673,8 @@ def build_poster(
                         ):
                             draw.text((_cursor, _text_y), "m", font=font_meta, fill=_ink)
                     _cursor += _item_w
-                    if _idx < len(_items) - 1:
-                        _cursor += _gap
+                    if _idx < len(_gaps):
+                        _cursor += _gaps[_idx]
 
         elif cfg.rating_display_mode == 3:
             font_size = int(width * cfg.minimalist_mode_font_size_ratio)
