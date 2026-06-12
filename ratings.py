@@ -597,7 +597,7 @@ def draw_frosted_bar(
 
     if center_segments:
         token_gap = max(4, int(font_size * 0.24))
-        icon_size = max(8, font_size)
+        icon_size = max(8, int(font_size * 0.86))
         icon_old_size = max(8, int(font_size * 0.82))
         measured: list[tuple[str, str, float]] = []
         for kind, text in center_segments:
