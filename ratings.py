@@ -450,6 +450,7 @@ def draw_frosted_bar(
     fill_color: tuple[int, int, int] | None = None,
     tint_rgb: tuple[float, float, float] | None = None,
     center_segments: list[tuple[str, str]] | None = None,
+    text_color: tuple[int, int, int] | None = None,
 ) -> Image.Image:
     """Full-width frosted glass or dark-body strip near the bottom of the poster.
 
@@ -590,6 +591,9 @@ def draw_frosted_bar(
         ink = (15, 15, 15, 248)
         bar_img, _, _, _ = _build_frosted_base()
         text_y += max(1, int(bar_h * 0.03))
+
+    if text_color is not None:
+        ink = (*text_color, 248)
 
     txt_layer = Image.new("RGBA", (width, bar_h), (0, 0, 0, 0))
     td        = ImageDraw.Draw(txt_layer)

@@ -95,6 +95,12 @@ BADGE_ANCHOR_Y_RATIO = 0.050   # y offset from top
 
 TMDB_POSTER_CACHE_DURATION   = 60
 TMDB_LOGO_CACHE_DURATION     = 60
+# +/- half this many days of deterministic per-key jitter applied to the
+# poster/logo durations above, so a large batch cached at once (e.g. an
+# initial pre-warm) doesn't all expire on the same day. 10 -> spread of
+# 55-65 days for a 60-day base duration. Same cache_key always gets the
+# same jitter.
+TMDB_IMAGE_CACHE_JITTER_DAYS = int(os.environ.get("TMDB_IMAGE_CACHE_JITTER_DAYS", "10"))
 TMDB_METADATA_CACHE_DURATION = 7    # re-check textless status / logos weekly
 DAYS_CONSIDERED_NEW          = 14
 NEW_CACHE_DURATION           = 1
@@ -131,6 +137,27 @@ CACHE_WARM_TMDB_BUDGET       = int(os.environ.get("CACHE_WARM_TMDB_BUDGET", "200
 CACHE_WARM_MDBLIST_BUDGET    = int(os.environ.get("CACHE_WARM_MDBLIST_BUDGET", "500"))
 CACHE_WARM_INTERVAL_HOURS    = float(os.environ.get("CACHE_WARM_INTERVAL_HOURS", "24"))
 
+# Optionally align steady-state cache-warm cycles to a fixed local hour of day
+# (e.g. "4" or "4:30" for 4:00am / 4:30am), instead of running exactly
+# CACHE_WARM_INTERVAL_HOURS after the previous cycle finished. Useful for
+# scheduling the (CPU-heavy, OCR-driven) warm cycle for off-peak hours.
+# "Local" means the container's TZ — set TZ in your compose/.env if needed
+# (defaults to UTC otherwise). Unset/empty = old behaviour (every
+# CACHE_WARM_INTERVAL_HOURS). The very first cycle ever still runs after
+# CACHE_WARM_STARTUP_GRACE_SECS regardless, so a fresh install pre-warms
+# immediately.
+CACHE_WARM_AT_HOUR: float | None = None
+_cache_warm_at_raw = os.environ.get("CACHE_WARM_AT_HOUR", "").strip()
+if _cache_warm_at_raw:
+    try:
+        if ":" in _cache_warm_at_raw:
+            _hh, _mm = _cache_warm_at_raw.split(":", 1)
+            CACHE_WARM_AT_HOUR = (int(_hh) + int(_mm) / 60.0) % 24
+        else:
+            CACHE_WARM_AT_HOUR = float(_cache_warm_at_raw) % 24
+    except ValueError:
+        CACHE_WARM_AT_HOUR = None
+
 # Also pre-fetch quality badge data (resolution/source/HDR tokens) for each
 # warmed title via the configured quality source (AIOStreams or scraper).
 # Series default to S01E01. Off by default: this is a *per-title* request
@@ -142,6 +169,20 @@ CACHE_WARM_INTERVAL_HOURS    = float(os.environ.get("CACHE_WARM_INTERVAL_HOURS",
 # addon. Only enable this if you understand and accept that risk.
 CACHE_WARM_QUALITY_ENABLED   = os.environ.get("CACHE_WARM_QUALITY_ENABLED", "false").strip().lower() == "true"
 
+# Optionally pre-warm specific Stremio catalogs in addition to TMDB
+# trending/popular — useful when a user has a particular addon catalog
+# (e.g. a custom list) that they want fast on first load. Comma-separated
+# list of addon manifest URLs (the same install links pasted into Stremio).
+# Each catalog the manifest exposes is fetched (with pagination) and its
+# items are resolved to TMDB ids and warmed first, ahead of trending/popular,
+# within the same TMDB/MDBList budgets above.
+CACHE_WARM_CATALOG_URLS = [
+    u.strip() for u in os.environ.get("CACHE_WARM_CATALOG_URLS", "").split(",") if u.strip()
+]
+# Max items pre-warmed per catalog (across pagination), so a single large
+# catalog can't consume the entire warm budget.
+CACHE_WARM_CATALOG_MAX_ITEMS = int(os.environ.get("CACHE_WARM_CATALOG_MAX_ITEMS", "100"))
+
 # Digital release (r/movieleaks) scraper settings
 DIGITAL_RELEASE_MIN_AGE_DAYS = 1    # ignore posts younger than this (mods still cleaning up)
 DIGITAL_RELEASE_MAX_AGE_DAYS = 30   # expire entries older than this from the cache
@@ -152,13 +193,28 @@ DIGITAL_RELEASE_MAX_AGE_DAYS = 30   # expire entries older than this from the ca
 # so changing settings immediately produces a fresh render on next request.
 # Override with COMPOSITE_CACHE_TTL=X in your .env file.
 COMPOSITE_CACHE_TTL        = int(os.environ.get("COMPOSITE_CACHE_TTL", "604800"))   # 7 days
+# +/- half this many seconds of deterministic per-key jitter applied to
+# COMPOSITE_CACHE_TTL, so a large batch of composites rendered around the
+# same time don't all expire (and get re-rendered) at once. Default 2 days ->
+# spread of 6-8 days for the default 7-day TTL. Same cache_key always gets
+# the same jitter.
+COMPOSITE_CACHE_TTL_JITTER = int(os.environ.get("COMPOSITE_CACHE_TTL_JITTER", str(2 * 86400)))
 # Maximum number of composite cache entries. When exceeded the oldest entries are
 # evicted on each insert to keep the table at this size. 0 = no cap (rely on TTL alone).
 COMPOSITE_MAX_ENTRIES      = int(os.environ.get("COMPOSITE_MAX_ENTRIES", "0"))
+# Number of fully-rendered composites kept in the in-memory LRU (L1) cache.
+# These are served without any SQLite read, keeping the hot working set off the
+# OS page cache.  Each entry is roughly 100-300 KB; 500 entries ≈ 50-150 MB.
+# Set to 0 to disable L1 entirely (fall through to SQLite for every request).
+COMPOSITE_MEM_ENTRIES      = int(os.environ.get("COMPOSITE_MEM_ENTRIES", "500"))
 # Set to any truthy value (1, true, yes) to skip composite cache reads and writes
 # entirely. Every request re-renders from scratch. Useful during development when
 # iterating on rendering changes and you don't want stale renders served.
 DISABLE_COMPOSITE_CACHE    = os.environ.get("DISABLE_COMPOSITE_CACHE", "").strip().lower() in ("1", "true", "yes")
+# Movies with only a theatrical release date older than this many years are treated
+# as "Streaming" rather than "Cinema" — guards against stale TMDB data where a
+# physical/digital date was never added.  Set to 0 to disable the gate entirely.
+CINEMA_MAX_AGE_YEARS       = max(0, int(os.environ.get("CINEMA_MAX_AGE_YEARS", "3")))
 
 def _parse_bool_env(key: str, default: bool = False) -> bool:
     val = os.environ.get(key, "").strip().lower()

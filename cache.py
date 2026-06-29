@@ -1,4 +1,5 @@
 #cache.py
+import hashlib
 import logging
 import os
 import sqlite3
@@ -6,6 +7,7 @@ import threading
 import tempfile
 import time
 import json
+from collections import OrderedDict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -20,13 +22,26 @@ from config import (
     TMDB_POSTER_CACHE_DURATION,
     TMDB_LOGO_CACHE_DIR,
     TMDB_LOGO_CACHE_DURATION,
+    TMDB_IMAGE_CACHE_JITTER_DAYS,
     TMDB_METADATA_CACHE_DURATION,
     COMPOSITE_CACHE_TTL,
+    COMPOSITE_CACHE_TTL_JITTER,
     COMPOSITE_MAX_ENTRIES,
+    COMPOSITE_MEM_ENTRIES,
     QUALITY_OLD_CACHE_DURATION,
     DIGITAL_RELEASE_MAX_AGE_DAYS,
     RATING_MIN_VOTES,
 )
+
+
+def _ttl_jitter(cache_key: str, window: float) -> float:
+    """Deterministic +/- window/2 offset derived from cache_key, so the same
+    key always gets the same jitter (stable across reads and cache-warm
+    cycles) while spreading expiry times across a batch of keys."""
+    if window <= 0:
+        return 0.0
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:8]
+    return (int(digest, 16) / 0xFFFFFFFF) * window - window / 2
 
 # One SQLite connection PER THREAD (thread-local).  A single shared connection
 # serialises every statement — reads included — on its internal mutex, so under
@@ -287,11 +302,36 @@ def _quality_ttl(release_date: str | None) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Final poster cache
+# Final poster cache  (L1 in-memory LRU + L2 SQLite)
 # ---------------------------------------------------------------------------
 
+# L1: bounded in-memory LRU — most-recently-used composites served without
+# any SQLite read, keeping the hot set off the OS page cache.
+_composite_l1: OrderedDict[str, bytes] = OrderedDict()
+_composite_l1_lock = threading.Lock()
+
+
+def composite_l1_stats() -> dict:
+    with _composite_l1_lock:
+        count = len(_composite_l1)
+        total_bytes = sum(len(v) for v in _composite_l1.values())
+    return {"entries": count, "bytes": total_bytes}
+
+
 def get_cached_final_poster(cache_key: str) -> bytes | None:
-    """Return cached JPEG bytes for a fully composited poster, or None on miss/expiry."""
+    """Return cached JPEG bytes for a fully composited poster, or None on miss/expiry.
+
+    Checks the in-memory LRU (L1) first; falls through to SQLite (L2) on miss
+    and promotes the result to L1 so the next hit is served entirely from RAM.
+    """
+    # L1: in-memory LRU — no disk I/O, no OS page-cache pressure
+    if COMPOSITE_MEM_ENTRIES > 0:
+        with _composite_l1_lock:
+            if cache_key in _composite_l1:
+                _composite_l1.move_to_end(cache_key)
+                return _composite_l1[cache_key]
+
+    # L2: SQLite with TTL check
     try:
         row = get_db().execute(
             "SELECT jpeg_bytes, cached_at FROM final_poster_cache WHERE cache_key = ?",
@@ -301,7 +341,8 @@ def get_cached_final_poster(cache_key: str) -> bytes | None:
             return None
         jpeg_bytes, cached_at = row
         age_secs = time.time() - cached_at
-        if age_secs > COMPOSITE_CACHE_TTL:
+        effective_ttl = COMPOSITE_CACHE_TTL + _ttl_jitter(cache_key, COMPOSITE_CACHE_TTL_JITTER)
+        if age_secs > effective_ttl:
             logger.info(f"Final poster cache expired for {cache_key} ({age_secs/86400:.1f}d old)")
             with _db_lock:
                 get_db().execute(
@@ -309,14 +350,31 @@ def get_cached_final_poster(cache_key: str) -> bytes | None:
                 )
                 get_db().commit()
             return None
-        return bytes(jpeg_bytes)
+        data = bytes(jpeg_bytes)
+        # Promote to L1
+        if COMPOSITE_MEM_ENTRIES > 0:
+            with _composite_l1_lock:
+                _composite_l1[cache_key] = data
+                _composite_l1.move_to_end(cache_key)
+                while len(_composite_l1) > COMPOSITE_MEM_ENTRIES:
+                    _composite_l1.popitem(last=False)
+        return data
     except Exception as exc:
         logger.error(f"Final poster cache read error: {exc}")
         return None
 
 
 def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes) -> None:
-    """Store a fully composited JPEG poster, evicting oldest entries if over the cap."""
+    """Store a fully composited JPEG poster into L1 (RAM) and L2 (SQLite)."""
+    # L1: always store the freshly-rendered composite so the next hit skips SQLite
+    if COMPOSITE_MEM_ENTRIES > 0:
+        with _composite_l1_lock:
+            _composite_l1[cache_key] = jpeg_bytes
+            _composite_l1.move_to_end(cache_key)
+            while len(_composite_l1) > COMPOSITE_MEM_ENTRIES:
+                _composite_l1.popitem(last=False)
+
+    # L2: persist to SQLite for warm restarts
     try:
         with _db_lock:
             get_db().execute(
@@ -377,6 +435,10 @@ def get_cache_stats() -> dict:
             stats["db_file_bytes"] = os.path.getsize(DB_PATH)
         except OSError:
             stats["db_file_bytes"] = None
+
+        l1 = composite_l1_stats()
+        stats["composite_l1_entries"] = l1["entries"]
+        stats["composite_l1_bytes"]   = l1["bytes"]
     except Exception as exc:
         logger.error(f"Cache stats error: {exc}")
     return stats
@@ -455,8 +517,11 @@ def prune_caches() -> None:
 
             db.commit()
 
-        _prune_file_cache(TMDB_POSTER_CACHE_DIR, TMDB_POSTER_CACHE_DURATION)
-        _prune_file_cache(TMDB_LOGO_CACHE_DIR, TMDB_LOGO_CACHE_DURATION)
+        # Use the high end of the per-key jitter range so prune never deletes
+        # a file before get_cached_tmdb_poster/_logo would (which apply the
+        # same jitter per cache_key).
+        _prune_file_cache(TMDB_POSTER_CACHE_DIR, TMDB_POSTER_CACHE_DURATION + TMDB_IMAGE_CACHE_JITTER_DAYS / 2)
+        _prune_file_cache(TMDB_LOGO_CACHE_DIR, TMDB_LOGO_CACHE_DURATION + TMDB_IMAGE_CACHE_JITTER_DAYS / 2)
 
         # Reclaim free pages left by the deletes.
         with _db_lock:
@@ -792,7 +857,7 @@ def _atomic_write(path: str, data: bytes) -> None:
                 pass
 
 
-def _prune_file_cache(base_dir: str, ttl_days: int) -> None:
+def _prune_file_cache(base_dir: str, ttl_days: float) -> None:
     cutoff = time.time() - ttl_days * 86400
     removed = 0
     try:
@@ -825,8 +890,9 @@ def get_cached_tmdb_poster(cache_key: str) -> bytes | None:
         return None
 
     age_days = (time.time() - os.path.getmtime(path)) / 86400
+    effective_days = TMDB_POSTER_CACHE_DURATION + _ttl_jitter(cache_key, TMDB_IMAGE_CACHE_JITTER_DAYS)
 
-    if age_days > TMDB_POSTER_CACHE_DURATION:
+    if age_days > effective_days:
         logger.info(f"TMDB poster cache expired for {cache_key}")
         try:
             os.remove(path)
@@ -879,8 +945,9 @@ def get_cached_tmdb_logo(cache_key: str) -> bytes | None:
         return None
 
     age_days = (time.time() - os.path.getmtime(path)) / 86400
+    effective_days = TMDB_LOGO_CACHE_DURATION + _ttl_jitter(cache_key, TMDB_IMAGE_CACHE_JITTER_DAYS)
 
-    if age_days > TMDB_LOGO_CACHE_DURATION:
+    if age_days > effective_days:
         logger.info(f"TMDB logo cache expired for {cache_key}")
         try:
             os.remove(path)

@@ -1950,6 +1950,18 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                 </select>
                 <div class="field-hint">Picks what to append after the genre.</div>
               </div>
+              <div class="field" style="border-top:none; padding-top:0; margin-top:6px;">
+                <label class="field-label">Text Colour</label>
+                <div style="display:flex; gap:8px; align-items:center; width:100%;">
+                  <input type="text" id="cfg-rtc-m1" placeholder="default" maxlength="6"
+                         style="flex:1; min-width:0; font-family:monospace; text-transform:uppercase; letter-spacing:0.05em;"
+                         oninput="_syncRtcM(1); build(); queuePreviewReload()">
+                  <input type="color" id="cfg-rtcp-m1" value="#c8c8c8"
+                         style="width:36px; height:28px; flex-shrink:0; padding:2px; border:1px solid var(--border); border-radius:4px; background:var(--black3); cursor:pointer;"
+                         oninput="document.getElementById('cfg-rtc-m1').value=this.value.slice(1).toUpperCase(); _setAllRtc(this.value.slice(1).toUpperCase()); build(); queuePreviewReload()">
+                </div>
+                <div class="field-hint">Hex colour for the genre/rating text. Leave blank for the mode default.</div>
+              </div>
               <div class="field">
                 <label class="field-label">Font Size</label>
                 <div class="range-row">
@@ -1973,6 +1985,18 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </div>
             </div>
             <div id="rating-mode2-fields" style="display:none;">
+              <div class="field" style="border-top:none; padding-top:0; margin-top:6px;">
+                <label class="field-label">Text Colour</label>
+                <div style="display:flex; gap:8px; align-items:center; width:100%;">
+                  <input type="text" id="cfg-rtc-m2" placeholder="default" maxlength="6"
+                         style="flex:1; min-width:0; font-family:monospace; text-transform:uppercase; letter-spacing:0.05em;"
+                         oninput="_syncRtcM(2); build(); queuePreviewReload()">
+                  <input type="color" id="cfg-rtcp-m2" value="#c8c8c8"
+                         style="width:36px; height:28px; flex-shrink:0; padding:2px; border:1px solid var(--border); border-radius:4px; background:var(--black3); cursor:pointer;"
+                         oninput="document.getElementById('cfg-rtc-m2').value=this.value.slice(1).toUpperCase(); _setAllRtc(this.value.slice(1).toUpperCase()); build(); queuePreviewReload()">
+                </div>
+                <div class="field-hint">Hex colour for the genre/rating text. Leave blank for the mode default.</div>
+              </div>
               <div class="toggle-row cfg-sep">
                 <div>
                   <div class="toggle-label">Display score out of 10</div>
@@ -2007,6 +2031,18 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                   <option value="3">Dual rating</option>
                 </select>
                 <div class="field-hint">If rating is not chosen the seperator color will give an approximation.</div>
+              </div>
+              <div class="field" style="border-top:none; padding-top:0; margin-top:6px;">
+                <label class="field-label">Text Colour</label>
+                <div style="display:flex; gap:8px; align-items:center; width:100%;">
+                  <input type="text" id="cfg-rtc-m3" placeholder="default" maxlength="6"
+                         style="flex:1; min-width:0; font-family:monospace; text-transform:uppercase; letter-spacing:0.05em;"
+                         oninput="_syncRtcM(3); build(); queuePreviewReload()">
+                  <input type="color" id="cfg-rtcp-m3" value="#c8c8c8"
+                         style="width:36px; height:28px; flex-shrink:0; padding:2px; border:1px solid var(--border); border-radius:4px; background:var(--black3); cursor:pointer;"
+                         oninput="document.getElementById('cfg-rtc-m3').value=this.value.slice(1).toUpperCase(); _setAllRtc(this.value.slice(1).toUpperCase()); build(); queuePreviewReload()">
+                </div>
+                <div class="field-hint">Hex colour for the genre/rating text. Leave blank for the mode default.</div>
               </div>
               <div class="field">
                 <label class="field-label">Font Size</label>
@@ -2062,6 +2098,18 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                   <option value="year">Year</option>
                   <option value="sash">Info Sash</option>
                 </select>
+              </div>
+              <div class="field" style="border-top:none; padding-top:0; margin-top:6px;">
+                <label class="field-label">Text Colour</label>
+                <div style="display:flex; gap:8px; align-items:center; width:100%;">
+                  <input type="text" id="cfg-rtc-m4" placeholder="default" maxlength="6"
+                         style="flex:1; min-width:0; font-family:monospace; text-transform:uppercase; letter-spacing:0.05em;"
+                         oninput="_syncRtcM(4); build(); queuePreviewReload()">
+                  <input type="color" id="cfg-rtcp-m4" value="#c8c8c8"
+                         style="width:36px; height:28px; flex-shrink:0; padding:2px; border:1px solid var(--border); border-radius:4px; background:var(--black3); cursor:pointer;"
+                         oninput="document.getElementById('cfg-rtc-m4').value=this.value.slice(1).toUpperCase(); _setAllRtc(this.value.slice(1).toUpperCase()); build(); queuePreviewReload()">
+                </div>
+                <div class="field-hint">Hex colour for the genre/rating text. Leave blank for the mode default.</div>
               </div>
               <div class="toggle-row">
                 <div>
@@ -2234,6 +2282,18 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                 <option value="silver">Black, Silver Trim</option>
                 <option value="gold">Black, Gold Trim</option>
               </select>
+            </div>
+            <div class="field" id="sash-text-color-field" style="display:none; border-top:none; padding-top:0; margin-top:6px;">
+              <label class="field-label">Text Colour</label>
+              <div style="display:flex; gap:8px; align-items:center; width:100%;">
+                <input type="text" id="cfg-sash-text-color" placeholder="default" maxlength="6"
+                       style="flex:1; min-width:0; font-family:monospace; text-transform:uppercase; letter-spacing:0.05em;"
+                       oninput="_syncSashColorPicker(); build(); queuePreviewReload()">
+                <input type="color" id="cfg-sash-text-color-picker" value="#e1e1e1"
+                       style="width:36px; height:28px; flex-shrink:0; padding:2px; border:1px solid var(--border); border-radius:4px; background:var(--black3); cursor:pointer;"
+                       oninput="document.getElementById('cfg-sash-text-color').value=this.value.slice(1).toUpperCase(); build(); queuePreviewReload()">
+              </div>
+              <div class="field-hint">Hex colour for the sash/notch text. Leave blank for the mode default.</div>
             </div>
             <div class="toggle-row">
               <div>
@@ -3589,6 +3649,9 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
       params.set('bar_frost_opacity',   n('cfg-bar-frost').toFixed(2));
       params.set('bar_bottom_inset',    n('cfg-bar-inset').toFixed(3));
     }
+    const _rtcEl = document.getElementById('cfg-rtc-m' + ratingMode);
+    const _rtc = _rtcEl ? _rtcEl.value.trim() : '';
+    if (/^[0-9a-fA-F]{6}$/i.test(_rtc)) params.set('rating_text_color', _rtc);
     // Rating weights only affect the displayed score
     const mw = getWeights('movie-weights', MOVIE_SOURCES);
     const tw = getWeights('tv-weights',    TV_SOURCES);
@@ -3615,6 +3678,8 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
   params.set('release_status_cinema_only', c('tog-release-cinema-only') ? 'true' : 'false');
   if (showSash) {
     if (c('tog-sash-winner-star')) params.set('sash_winner_star', 'true');
+    const _stc = document.getElementById('cfg-sash-text-color').value.trim();
+    if (/^[0-9a-fA-F]{6}$/i.test(_stc)) params.set('sash_text_color', _stc);
     if (sashMode === 'notch') {
       params.set('sash_badge_style',         vEl('cfg-sash-badge-style') || 'silver');
       params.set('sash_badge_size_w',        n('cfg-sash-badge-size-w').toFixed(2));
@@ -3805,11 +3870,18 @@ function updateSashBadgeFields() {
   // Release-status-only filter does nothing when no sash is drawn.
   document.getElementById('sash-release-cinema-only-row').style.display = shown ? '' : 'none';
   document.getElementById('sash-style-field').style.display      = isNotch ? '' : 'none';
+  document.getElementById('sash-text-color-field').style.display = shown ? '' : 'none';
   document.getElementById('sash-muted-row').style.display        = isBand ? '' : 'none';
   document.getElementById('sash-poster-color-row').style.display = isBand ? '' : 'none';
   document.getElementById('sash-badge-offsets').style.display    = isNotch ? '' : 'none';
   document.getElementById('sash-size-fields').style.display      = isBand ? '' : 'none';
   if (isNotch) { initCustomMobileSliders(); updateBadgeStyleFields(); }
+}
+
+function _syncSashColorPicker() {
+  const hex = document.getElementById('cfg-sash-text-color').value.trim();
+  if (/^[0-9a-fA-F]{6}$/.test(hex))
+    document.getElementById('cfg-sash-text-color-picker').value = '#' + hex;
 }
 
 function onSashModeChange() {
@@ -3862,6 +3934,22 @@ function updateRatingFields() {
   document.getElementById('rating-glow-fields').style.display       = mode === 1 ? '' : 'none';
   document.getElementById('rating-alt-colors-toggle').style.display = (mode === 1 || mode === 3) ? '' : 'none';
   if (mode === 4) _updateBarRatingRows();
+}
+
+function _setAllRtc(val) {
+  for (const m of [1, 2, 3, 4]) {
+    const inp = document.getElementById('cfg-rtc-m' + m);
+    const pic = document.getElementById('cfg-rtcp-m' + m);
+    if (inp) inp.value = val;
+    if (pic && /^[0-9a-fA-F]{6}$/i.test(val)) pic.value = '#' + val;
+  }
+}
+
+function _syncRtcM(mode) {
+  const hex = document.getElementById('cfg-rtc-m' + mode).value.trim();
+  if (/^[0-9a-fA-F]{6}$/.test(hex))
+    document.getElementById('cfg-rtcp-m' + mode).value = '#' + hex;
+  _setAllRtc(hex);
 }
 
 // ---------------------------------------------------------------------------
@@ -4144,6 +4232,12 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
 
   // ── Sash ────────────────────────────────────────────────────────────────
   if (p.has('sash_poster_color')) _setEl('tog-sash-poster-color', p.get('sash_poster_color'));
+  if (p.has('sash_text_color')) {
+    const _stcVal = p.get('sash_text_color').replace('#', '').toUpperCase();
+    document.getElementById('cfg-sash-text-color').value = _stcVal;
+    if (/^[0-9A-F]{6}$/.test(_stcVal))
+      document.getElementById('cfg-sash-text-color-picker').value = '#' + _stcVal;
+  }
   if (p.has('sash_winner_star')) _setEl('tog-sash-winner-star',  p.get('sash_winner_star'));
   if (p.has('cinema_greyscale')) _setEl('tog-cinema-greyscale', p.get('cinema_greyscale'));
   if (p.has('cinema_greyscale_skip_if_available')) _setEl('tog-cinema-greyscale-skip', p.get('cinema_greyscale_skip_if_available'));
@@ -4204,6 +4298,9 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
   if (p.has('score_glow_blur'))                _setEl('cfg-glow-blur',    p.get('score_glow_blur'));
   if (p.has('score_glow_alpha'))               _setEl('cfg-glow-alpha',   p.get('score_glow_alpha'));
   if (p.has('score_color_mode'))               _setEl('cfg-score-color-mode', p.get('score_color_mode'));
+  if (p.has('rating_text_color')) {
+    _setAllRtc(p.get('rating_text_color').replace('#', '').toUpperCase());
+  }
   updateRatingFields();
   updateOriginalArt();
 

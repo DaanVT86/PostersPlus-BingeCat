@@ -1365,6 +1365,7 @@ def draw_award_badge(
     frost_opacity: float = 0.75,      # frosted overlay opacity (0.0–1.0)
     tint_rgb: tuple[float, float, float] | None = None,  # override sampled colour (frosted)
     star: bool | None = None,         # override ★ decision (resolved on canonical label)
+    text_color: tuple[int, int, int] | None = None,  # override default white text
 ) -> Image.Image:
     """
     Centred notch badge that emerges from the top edge of the poster.
@@ -1523,7 +1524,8 @@ def draw_award_badge(
         txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
         td = ImageDraw.Draw(txt_layer)
         tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss)
-        td.text((tx, ty), label, font=font, fill=(210, 210, 218, 245))
+        _txt_rgb_black = text_color if text_color is not None else (210, 210, 218)
+        td.text((tx, ty), label, font=font, fill=(*_txt_rgb_black, 245))
         badge_ss = Image.alpha_composite(badge_ss, txt_layer)
         badge_final = badge_ss.resize((badge_w, badge_h), Image.LANCZOS)
         result = image.copy()
@@ -1637,8 +1639,9 @@ def draw_award_badge(
     txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
     td = ImageDraw.Draw(txt_layer)
     tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss)
+    _txt_rgb = text_color if text_color is not None else (255, 255, 255)
     td.text((tx + SS, ty + SS), label, font=font, fill=(0, 0, 0, 160))
-    td.text((tx, ty),           label, font=font, fill=(255, 255, 255, 235))
+    td.text((tx, ty),           label, font=font, fill=(*_txt_rgb, 235))
     badge = Image.alpha_composite(badge, txt_layer)
 
     # ── Downscale → composite ────────────────────────────────────────────────
@@ -1676,6 +1679,7 @@ def draw_award_sash(
     height_ratio: float = 0.12,
     poster_color: tuple[float, float, float] | None = None,
     star: bool = False,
+    text_color: tuple[int, int, int] | None = None,
 ) -> Image.Image:
     if star:
         label = f"★  {label}"
@@ -1753,9 +1757,10 @@ def draw_award_sash(
     text_layer = Image.new("RGBA", sash.size, (0, 0, 0, 0))
     td         = ImageDraw.Draw(text_layer)
 
+    _txt_rgb = text_color if text_color is not None else (225, 225, 225)
     tx, ty = _text_center(td, label, font, band_cx, band_cy)
     td.text((tx + 2 * SS, ty + 2 * SS), label, font=font, fill=(0, 0, 0, 180))
-    td.text((tx, ty),                   label, font=font, fill=(225, 225, 225, 225))
+    td.text((tx, ty),                   label, font=font, fill=(*_txt_rgb, 225))
 
     sash = Image.alpha_composite(sash, text_layer)
 

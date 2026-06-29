@@ -60,6 +60,7 @@ from config import (
     DEBUG_LOGO_SIZING,
     TMDB_POSTER_MIN_VOTES,
     TMDB_POSTER_MAX_SCORE_DROP,
+    CINEMA_MAX_AGE_YEARS,
 )
 
 
@@ -80,43 +81,101 @@ def normalise_poster(image: Image.Image) -> Image.Image:
 
 
 def ensure_light_logo(logo: Image.Image,
-                       lum_threshold: float = 0.2,
-                       sat_threshold: float = 0.25) -> Image.Image:
+                      lum_threshold: float = 0.2,
+                      sat_threshold: float = 0.25,
+                      light_lum: float = 0.6,
+                      light_frac_min: float = 0.05,
+                      card_coverage_max: float = 0.6) -> Image.Image:
     """
-    If the visible pixels of a logo are too dark AND mostly achromatic (low
-    saturation), force them to white so they read on dark poster backgrounds.
-    Coloured logos (red titles, branded colours, etc.) are left untouched —
-    only neutral black/dark-grey logos are converted.
+    Whiten a logo's pixels *only* when we are confident it is a dark, achromatic
+    wordmark that would otherwise be invisible on a dark poster — and leave every
+    other logo completely untouched. Doing nothing is always preferable to a
+    recolour that could make the logo worse.
+
+    The asset this primarily guards against is a logo that is a *filled dark card
+    with light text baked in* (e.g. white "JURY DUTY" letters on a solid black
+    rectangle). Averaging the luminance of every opaque pixel — the naive test —
+    is dominated by the dark card, mislabels the asset "dark", and blanket-whitens
+    it into a solid white block, erasing the text. Two complementary structural
+    guards catch that before any recolour:
+
+      • Light-content guard — if a non-trivial share of the solid pixels are
+        already light, the logo carries its own legible content (light text,
+        free-standing or on a dark card) and reads fine on a dark poster. This
+        is the signal that tells a "black card + white text" asset (has a light
+        population) apart from plain "black text" (has none).
+
+      • Card guard — if the solid pixels fill most of their own bounding box, the
+        logo is a filled card/emblem rather than glyphs on transparency.
+        Whitening it would produce a solid block, so never touch it. This backs
+        up the light-content guard for the dark-card / dark-or-no-text case,
+        where there is no light population to detect.
+
+    Only after both guards pass do the original tests apply — the ink must be
+    dark (low mean luminance) and achromatic (low saturation), so coloured or
+    branded logos keep their hues. Colour statistics are computed over *solid*
+    pixels (alpha >= 128) so a soft anti-aliased fringe can't skew them; the
+    recolour itself still covers the full visible mask (alpha > 30) to keep
+    edge anti-aliasing intact.
     """
     rgba = np.array(logo.convert("RGBA"), dtype=np.float32)
     alpha = rgba[:, :, 3]
-    visible = alpha > 30
 
-    if not visible.any():
+    # Analyse only solidly-opaque pixels so a semi-transparent AA halo can't
+    # skew the luminance/saturation/coverage statistics below.
+    solid = alpha >= 128
+    if not solid.any():
+        return logo  # nothing solid to analyse — leave as-is
+
+    r = rgba[:, :, 0][solid]
+    g = rgba[:, :, 1][solid]
+    b = rgba[:, :, 2][solid]
+    lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0  # per-pixel 0–1
+
+    # Guard 1 — the logo already carries light content (white text, on a card
+    # or free-standing), so it already reads on a dark poster. Leave it alone.
+    light_frac = float((lum >= light_lum).mean())
+    if light_frac >= light_frac_min:
+        logger.debug(
+            f"ensure_light_logo: skip (light content {light_frac:.0%} >= "
+            f"{light_frac_min:.0%}) — already legible on dark"
+        )
         return logo
 
-    r = rgba[:, :, 0][visible]
-    g = rgba[:, :, 1][visible]
-    b = rgba[:, :, 2][visible]
+    # Guard 2 — a filled card/emblem fills most of its bounding box. Whitening
+    # it would produce a solid block, so never touch it.
+    ys, xs = np.nonzero(solid)
+    bbox_area = (int(ys.max()) - int(ys.min()) + 1) * (int(xs.max()) - int(xs.min()) + 1)
+    coverage = float(solid.sum()) / bbox_area if bbox_area else 0.0
+    if coverage >= card_coverage_max:
+        logger.debug(
+            f"ensure_light_logo: skip (coverage {coverage:.0%} >= "
+            f"{card_coverage_max:.0%}) — filled card/shape, not a wordmark"
+        )
+        return logo
 
-    avg_lum = (0.2126 * r + 0.7152 * g + 0.0722 * b).mean() / 255.0
+    # Original gates — only whiten genuinely dark, achromatic ink.
+    avg_lum = float(lum.mean())
     if avg_lum > lum_threshold:
-        return logo  # Already light enough
+        return logo  # already light enough
 
-    # Check average saturation of visible pixels.
     # Saturation = (max - min) / max per pixel (HSV definition).
     max_c = np.maximum(np.maximum(r, g), b)
     min_c = np.minimum(np.minimum(r, g), b)
     coloured = max_c > 0
     if coloured.any():
-        avg_sat = (((max_c - min_c) / np.where(coloured, max_c, 1.0)) * coloured).mean()
+        avg_sat = float((((max_c - min_c) / np.where(coloured, max_c, 1.0)) * coloured).mean())
     else:
         avg_sat = 0.0
-
     if avg_sat > sat_threshold:
-        return logo  # Coloured logo — preserve original hues
+        return logo  # coloured/branded logo — preserve original hues
 
-    # Dark, achromatic logo — force to white
+    logger.debug(
+        f"ensure_light_logo: whitening dark wordmark "
+        f"(light={light_frac:.0%}, coverage={coverage:.0%}, "
+        f"avg_lum={avg_lum:.2f}, avg_sat={avg_sat:.2f})"
+    )
+    visible = alpha > 30
     out = rgba.copy()
     out[:, :, 0][visible] = 255
     out[:, :, 1][visible] = 255
@@ -1185,6 +1244,219 @@ async def fetch_popular_candidates(
     return candidates
 
 
+async def fetch_supplemental_candidates(
+    client: httpx.AsyncClient,
+    tmdb_key: str,
+    max_items: int = 500,
+) -> list[dict]:
+    """
+    Build a deduped, ranked list of cache-warming candidates from TMDB lists
+    that trending/popular don't cover: critically-acclaimed catalogue staples
+    (top rated) and titles currently airing/in theatres (now playing, on the
+    air) — the kind of thing a user finds via a "Top Rated" or "Now Playing"
+    catalog rather than trending/popular.
+
+    Returns a list of dicts: ``{"tmdb_id": str, "media_type": "movie"|"tv"}``,
+    each (media_type, tmdb_id) pair appearing at most once. May return fewer
+    than *max_items* if these lists are exhausted first.
+    """
+    pages_per_list = max(1, (max_items + 19) // 20)  # 20 results per page
+
+    async def _fetch_list(media_type: str, list_name: str) -> list[dict]:
+        results: list[dict] = []
+        for page in range(1, pages_per_list + 1):
+            try:
+                resp = await client.get(
+                    f"https://api.themoviedb.org/3/{media_type}/{list_name}",
+                    params={"api_key": tmdb_key, "page": page},
+                )
+                resp.raise_for_status()
+                page_results = resp.json().get("results", [])
+            except Exception as exc:
+                logger.warning(f"Cache warm: {list_name} fetch failed ({media_type} p{page}): {exc}")
+                break
+            if not page_results:
+                break
+            for item in page_results:
+                results.append({"tmdb_id": str(item["id"]), "media_type": media_type})
+        return results
+
+    lists = await asyncio.gather(
+        _fetch_list("movie", "top_rated"),
+        _fetch_list("tv", "top_rated"),
+        _fetch_list("movie", "now_playing"),
+        _fetch_list("tv", "on_the_air"),
+    )
+
+    # Round-robin merge across the four lists, deduping as we go.
+    seen: set[tuple[str, str]] = set()
+    candidates: list[dict] = []
+    for group in zip(*[l + [None] * (max(len(x) for x in lists) - len(l)) for l in lists]):
+        for item in group:
+            if item is None:
+                continue
+            key = (item["media_type"], item["tmdb_id"])
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(item)
+            if len(candidates) >= max_items:
+                return candidates
+
+    return candidates
+
+
+async def resolve_tmdb_id_from_imdb(
+    client: httpx.AsyncClient,
+    imdb_id: str,
+    tmdb_key: str,
+    media_type_hint: str | None = None,
+) -> dict | None:
+    """
+    Resolve an IMDB id (``tt...``) to a TMDB id via TMDB's /find endpoint.
+
+    Returns ``{"tmdb_id": str, "media_type": "movie"|"tv"}``, preferring a
+    result matching *media_type_hint* when both movie and tv results are
+    present, or ``None`` if TMDB has no match for either.
+    """
+    try:
+        resp = await client.get(
+            f"https://api.themoviedb.org/3/find/{imdb_id}",
+            params={"api_key": tmdb_key, "external_source": "imdb_id"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning(f"Cache warm: TMDB find failed for {imdb_id}: {exc}")
+        return None
+
+    movie_results = data.get("movie_results") or []
+    tv_results    = data.get("tv_results") or []
+
+    if media_type_hint == "tv" and tv_results:
+        return {"tmdb_id": str(tv_results[0]["id"]), "media_type": "tv"}
+    if media_type_hint == "movie" and movie_results:
+        return {"tmdb_id": str(movie_results[0]["id"]), "media_type": "movie"}
+    if movie_results:
+        return {"tmdb_id": str(movie_results[0]["id"]), "media_type": "movie"}
+    if tv_results:
+        return {"tmdb_id": str(tv_results[0]["id"]), "media_type": "tv"}
+    return None
+
+
+
+def _normalize_manifest_url(url: str) -> str:
+    """Normalise a user-pasted addon install link to a manifest.json URL."""
+    url = url.strip()
+    if url.startswith("stremio://"):
+        url = "https://" + url[len("stremio://"):]
+    if not url.endswith("/manifest.json"):
+        url = url.rstrip("/") + "/manifest.json"
+    return url
+
+
+async def fetch_catalog_candidates(
+    client: httpx.AsyncClient,
+    catalog_urls: list[str],
+    tmdb_key: str,
+    max_items_per_catalog: int = 100,
+) -> list[dict]:
+    """
+    Build a deduped list of ``{"tmdb_id", "media_type"}`` candidates by
+    fetching the catalogs exposed by the given Stremio addon manifest URLs,
+    the same way a Stremio client would when a user opens that catalog.
+
+    IMDB ids (the common case for Cinemeta-backed catalogs) are resolved to
+    TMDB ids via TMDB's /find endpoint. ``tmdb:<id>`` ids are used directly.
+    Any other id namespace (kitsu/mal/anilist/etc.) is skipped — there's no
+    TMDB mapping for those, so warming can't cover that title.
+    """
+    if not catalog_urls or not tmdb_key:
+        return []
+
+    seen: set[tuple[str, str]] = set()
+    candidates: list[dict] = []
+    resolve_sem = asyncio.Semaphore(10)
+
+    async def _resolve(meta_id: str, media_type: str) -> dict | None:
+        if meta_id.startswith("tmdb:"):
+            return {"tmdb_id": meta_id.split(":", 1)[1], "media_type": media_type}
+        if meta_id.startswith("tt"):
+            async with resolve_sem:
+                return await resolve_tmdb_id_from_imdb(client, meta_id, tmdb_key, media_type)
+        return None
+
+    for raw_url in catalog_urls:
+        manifest_url = _normalize_manifest_url(raw_url)
+        try:
+            resp = await client.get(manifest_url, timeout=15.0, follow_redirects=True)
+            resp.raise_for_status()
+            manifest = resp.json()
+        except Exception as exc:
+            logger.warning(f"Cache warm: catalog manifest fetch failed for {manifest_url}: {exc}")
+            continue
+
+        base = manifest_url[: -len("/manifest.json")]
+        catalogs = manifest.get("catalogs") or []
+        if not catalogs:
+            logger.warning(f"Cache warm: no catalogs in manifest {manifest_url}")
+            continue
+
+        for catalog in catalogs:
+            cat_type = catalog.get("type")
+            cat_id   = catalog.get("id")
+            if not cat_type or not cat_id:
+                continue
+
+            metas: list[dict] = []
+            while len(metas) < max_items_per_catalog:
+                skip = len(metas)
+                path = (
+                    f"/catalog/{cat_type}/{cat_id}.json"
+                    if skip == 0
+                    else f"/catalog/{cat_type}/{cat_id}/skip={skip}.json"
+                )
+                try:
+                    page_resp = await client.get(f"{base}{path}", timeout=15.0, follow_redirects=True)
+                    page_resp.raise_for_status()
+                    page_metas = page_resp.json().get("metas") or []
+                except Exception as exc:
+                    logger.warning(f"Cache warm: catalog fetch failed for {base}{path}: {exc}")
+                    break
+                if not page_metas:
+                    break
+                metas.extend(page_metas)
+
+            metas = metas[:max_items_per_catalog]
+
+            resolved = await asyncio.gather(*(
+                _resolve(
+                    meta.get("id", ""),
+                    "tv" if meta.get("type") in ("series", "tv") else "movie",
+                )
+                for meta in metas
+                if meta.get("id")
+            ))
+
+            added = 0
+            for item in resolved:
+                if item is None:
+                    continue
+                key = (item["media_type"], item["tmdb_id"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(item)
+                added += 1
+
+            logger.info(
+                f"Cache warm: catalog {cat_type}/{cat_id} from {base} — "
+                f"{len(metas)} items, {added} new candidates"
+            )
+
+    return candidates
+
+
 async def fetch_release_status(
     client: httpx.AsyncClient,
     tmdb_id: str,
@@ -1254,6 +1526,7 @@ async def fetch_release_status(
                 resp.raise_for_status()
                 today = _date.today()
                 has_physical = has_digital = has_theatrical = False
+                earliest_theatrical: _date | None = None
                 for entry in resp.json().get("results", []):
                     for rd in entry.get("release_dates", []):
                         rtype = rd.get("type")
@@ -1270,13 +1543,25 @@ async def fetch_release_status(
                             has_digital = True
                         elif rtype == 3:
                             has_theatrical = True
+                            if earliest_theatrical is None or rdate < earliest_theatrical:
+                                earliest_theatrical = rdate
 
                 if has_physical:
                     result = "Physical"
                 elif has_digital:
                     result = "Streaming"
                 elif has_theatrical:
-                    result = "Cinema"
+                    # If the only known release is theatrical but is older than
+                    # CINEMA_MAX_AGE_YEARS, treat as Streaming — the title is almost
+                    # certainly available digitally and TMDB just never got updated.
+                    if (
+                        CINEMA_MAX_AGE_YEARS > 0
+                        and earliest_theatrical is not None
+                        and (today - earliest_theatrical).days > CINEMA_MAX_AGE_YEARS * 365
+                    ):
+                        result = "Streaming"
+                    else:
+                        result = "Cinema"
                 elif tmdb_status == "Released":
                     # Released per TMDB but no release date records found —
                     # incomplete TMDB data rather than genuinely unreleased.
