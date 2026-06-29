@@ -104,7 +104,7 @@ TMDB_IMAGE_CACHE_JITTER_DAYS = int(os.environ.get("TMDB_IMAGE_CACHE_JITTER_DAYS"
 TMDB_METADATA_CACHE_DURATION = 7    # re-check textless status / logos weekly
 DAYS_CONSIDERED_NEW          = 14
 NEW_CACHE_DURATION           = 1
-OLD_CACHE_DURATION           = 14
+OLD_CACHE_DURATION           = 30
 TRENDING_CACHE_DURATION      = 1
 # Quality (AIOStreams) TTL — separate from rating TTL because stream availability
 # for older titles is very stable.  New content keeps the 1-day window so fresh

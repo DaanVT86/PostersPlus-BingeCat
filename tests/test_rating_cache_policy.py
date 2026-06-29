@@ -45,7 +45,7 @@ class RatingCachePolicyTests(unittest.TestCase):
         else:
             cache._local.conn = self.previous_conn
 
-    def _insert(self, imdb_id, policy):
+    def _insert(self, imdb_id, policy, *, cached_at=None, release_date="2020-01-01"):
         self.conn.execute(
             """
             INSERT INTO rating_cache VALUES (
@@ -56,8 +56,8 @@ class RatingCachePolicyTests(unittest.TestCase):
                 imdb_id,
                 json.dumps({"imdb": 75}),
                 "Drama",
-                int(time.time()),
-                "2020-01-01",
+                int(time.time()) if cached_at is None else cached_at,
+                release_date,
                 "",
                 "",
                 1,
@@ -94,6 +94,19 @@ class RatingCachePolicyTests(unittest.TestCase):
             ("tt0000002",),
         ).fetchone()[0]
         self.assertEqual(remaining, 0)
+
+    def test_old_release_rating_cache_is_reused_for_29_days(self):
+        twenty_nine_days_ago = int(time.time() - 29 * 86400)
+        self._insert(
+            "tt0000003",
+            cache.RATING_MIN_VOTES,
+            cached_at=twenty_nine_days_ago,
+            release_date="2020-01-01",
+        )
+
+        result = cache.get_cached_rating("tt0000003")
+
+        self.assertIsNotNone(result)
 
 
 if __name__ == "__main__":
