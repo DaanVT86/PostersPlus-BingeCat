@@ -1,15 +1,17 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from i18n import normalize_locale, resolve_locale_chain
 from preset_registry import BINGECAT_PRESET_REGISTRY, get_preset, list_public_presets
 
 
 def test_bingecat_presets_are_immutable_and_have_pinned_hashes():
     expected_hashes = {
-        "clean-notch@1": "dc9d4a268a5786a2f5a69b15134edb86ac07e5bad3a58a772654f3c84eb658c2",
-        "prestige@1": "6e758a59565ce0a944789da9065341baf89e76f75ad9ed90a395e70542f67463",
-        "minimalist@1": "e755ccdea405c6f41b1aa59bf4cae66e34b5824a80c2d0017fc9c302d4895416",
+        "clean-notch@1": "d7b5d56bd01620b8860499bcc6a06597357762784dff160ffe0c8c50e01f63ee",
+        "prestige@1": "6345f175f12b7df5c0bc7831e449ba5bff6f7cd956c96607006674c8b61a12a8",
+        "minimalist@1": "b761456d72e8d8669b583f724e43cec753e587629d01111ba33d6af1c4faa04f",
     }
 
     assert set(BINGECAT_PRESET_REGISTRY) == set(expected_hashes)
@@ -21,6 +23,16 @@ def test_bingecat_presets_are_immutable_and_have_pinned_hashes():
         assert preset.config.badge_display_mode == 0
         assert "access_key" not in preset.config.canonical_json()
         assert "key" not in preset.metadata().to_dict()
+
+
+def test_validated_preset_registry_cannot_be_replaced_or_mutated():
+    clean_notch = get_preset("clean-notch@1")
+
+    with pytest.raises(TypeError):
+        BINGECAT_PRESET_REGISTRY["clean-notch@1"] = get_preset("prestige@1")
+
+    assert BINGECAT_PRESET_REGISTRY["clean-notch@1"] is clean_notch
+    assert get_preset("clean-notch@1") is clean_notch
 
 
 def test_minimalist_preset_matches_the_supplied_v1_visual_config():

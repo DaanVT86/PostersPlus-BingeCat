@@ -6,6 +6,7 @@ the standalone configurator remains free to evolve its legacy preset list.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from render_spec import CanonicalRenderSpec, canonicalize_config
@@ -156,14 +157,14 @@ def _build_registry() -> dict[str, Preset]:
     return registry
 
 
-BINGECAT_PRESET_REGISTRY = _build_registry()
+_BINGECAT_PRESET_REGISTRY = _build_registry()
 
 
-def _validate_registry() -> None:
+def _validate_registry(registry: Mapping[str, Preset]) -> None:
     expected_refs = {"clean-notch@1", "prestige@1", "minimalist@1"}
-    if set(BINGECAT_PRESET_REGISTRY) != expected_refs:
+    if set(registry) != expected_refs:
         raise RuntimeError("BingeCat preset registry has an invalid version set")
-    for ref, preset in BINGECAT_PRESET_REGISTRY.items():
+    for ref, preset in registry.items():
         if preset.ref != ref or preset.config.badge_display_mode != 0:
             raise RuntimeError(f"invalid BingeCat preset: {ref}")
         serialised = preset.config.canonical_json().lower()
@@ -171,7 +172,10 @@ def _validate_registry() -> None:
             raise RuntimeError(f"secret field in BingeCat preset: {ref}")
 
 
-_validate_registry()
+_validate_registry(_BINGECAT_PRESET_REGISTRY)
+BINGECAT_PRESET_REGISTRY: Mapping[str, Preset] = MappingProxyType(
+    _BINGECAT_PRESET_REGISTRY
+)
 
 
 def get_preset(ref: str) -> Preset:

@@ -13,7 +13,7 @@ import math
 from typing import Any, Mapping
 
 
-_SCHEMA = "bingecat_postersplus_render"
+_SCHEMA = "bingecat_postersplus_v2"
 _VERSION = 1
 
 _SASH_SLOTS = frozenset(
@@ -167,8 +167,11 @@ def _float(value: Any, default: float, low: float, high: float, *, opacity: bool
 
 def _int(value: Any, default: int, low: int, high: int) -> int:
     try:
-        result = int(float(value))
-    except (TypeError, ValueError):
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            return default
+        result = int(parsed)
+    except (TypeError, ValueError, OverflowError):
         return default
     return max(low, min(high, result))
 

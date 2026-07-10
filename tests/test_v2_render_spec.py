@@ -1,8 +1,18 @@
 import hashlib
+import json
 
 import pytest
 
 from render_spec import canonicalize_config, compile_requirements
+
+
+def test_canonical_spec_uses_the_v2_contract_schema_and_version():
+    spec = canonicalize_config({})
+
+    assert spec.schema == "bingecat_postersplus_v2"
+    assert spec.version == 1
+    assert json.loads(spec.canonical_json())["schema"] == "bingecat_postersplus_v2"
+    assert json.loads(spec.canonical_json())["version"] == 1
 
 
 def test_canonicalize_normalizes_legacy_aliases_and_values():
@@ -45,6 +55,23 @@ def test_canonicalize_clamps_render_allocation_inputs():
     assert spec.top_gradient_opacity == 0.0
     assert spec.bottom_gradient_height == 0.0
     assert spec.bottom_gradient_opacity == 1.0
+
+
+@pytest.mark.parametrize("non_finite", ("inf", "-inf", "nan"))
+def test_integer_normalizers_default_non_finite_spellings(non_finite):
+    spec = canonicalize_config(
+        {
+            "badge_height": non_finite,
+            "score_glow_alpha": non_finite,
+            "top_gradient_height": non_finite,
+            "bottom_gradient_opacity": non_finite,
+        }
+    )
+
+    assert spec.badge_height == 20
+    assert spec.score_glow_alpha == 40
+    assert spec.top_gradient_height == 0.0
+    assert spec.bottom_gradient_opacity == 0.0
 
 
 def test_canonical_identity_ignores_unknown_and_secret_fields():
