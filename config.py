@@ -20,6 +20,12 @@ TMDB_LOGO_CACHE_DIR   = "/app/cache/tmdb_logos" # base logos from TMDB
 ACCESS_KEY            = os.environ.get("ACCESS_KEY")
 AIOSTREAMS_URL        = os.environ.get("AIOSTREAMS_URL", "")
 AIOSTREAMS_AUTH       = os.environ.get("AIOSTREAMS_AUTH", "")
+POSTERSPLUS_BINGECAT_REQUEST_SECRET = os.environ.get(
+    "POSTERSPLUS_BINGECAT_REQUEST_SECRET", ""
+).strip()
+BINGECAT_POSTERSPLUS_CALLBACK_SECRET = os.environ.get(
+    "BINGECAT_POSTERSPLUS_CALLBACK_SECRET", ""
+).strip()
 
 # Quality source selection.
 # QUALITY_SOURCE: "aiostreams" (default) or "scraper".

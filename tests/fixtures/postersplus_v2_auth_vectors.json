@@ -1,0 +1,48 @@
+{
+  "schema": "bingecat_postersplus_v2_auth_vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "bingecat_post_enrich",
+      "secret_utf8": "golden-bingecat-request-secret",
+      "caller": "bingecat",
+      "audience": "postersplus",
+      "method": "POST",
+      "path": "/v2/enrich",
+      "request_id": "01890f47-1f4d-4e7a-8c21-0f570f46c9af",
+      "timestamp": 1700000000,
+      "body_utf8": "{\"schema\":\"bingecat_postersplus_v2\",\"version\":1}",
+      "body_sha256": "c98b28edc5972418e3ef7b5270de6efefc6ad20e864e0bc7428e1a5d09706042",
+      "canonical_utf8": "v1\nbingecat\npostersplus\nPOST\n/v2/enrich\n01890f47-1f4d-4e7a-8c21-0f570f46c9af\n1700000000\nc98b28edc5972418e3ef7b5270de6efefc6ad20e864e0bc7428e1a5d09706042",
+      "signature": "f7b5dc18050d62ca92ca89baa3de601fc589d632d3757134b996682025c225e9"
+    },
+    {
+      "name": "bingecat_get_presets_empty_body",
+      "secret_utf8": "golden-bingecat-request-secret",
+      "caller": "bingecat",
+      "audience": "postersplus",
+      "method": "GET",
+      "path": "/v2/presets",
+      "request_id": "f6417d72-447b-44ac-9038-5bb06a51b3ca",
+      "timestamp": 1700000060,
+      "body_utf8": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_utf8": "v1\nbingecat\npostersplus\nGET\n/v2/presets\nf6417d72-447b-44ac-9038-5bb06a51b3ca\n1700000060\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "1fa01ec9b27103c332c305c6cf832f22936d5477008116c807ab7bfae075746f"
+    },
+    {
+      "name": "postersplus_post_config_callback",
+      "secret_utf8": "golden-postersplus-callback-secret",
+      "caller": "postersplus",
+      "audience": "bingecat",
+      "method": "POST",
+      "path": "/api/internal/posterplus/v2/configs",
+      "request_id": "b302b625-8db4-41d9-91cb-7e5a6ab3de37",
+      "timestamp": 1700000120,
+      "body_utf8": "{\"schema\":\"bingecat_postersplus_v2\",\"version\":1,\"handoff_id\":\"fixture\"}",
+      "body_sha256": "2b6c48e3bb1d9d85f0247fa7665a5909e56df78ea6711425c90fe3d51149e8b4",
+      "canonical_utf8": "v1\npostersplus\nbingecat\nPOST\n/api/internal/posterplus/v2/configs\nb302b625-8db4-41d9-91cb-7e5a6ab3de37\n1700000120\n2b6c48e3bb1d9d85f0247fa7665a5909e56df78ea6711425c90fe3d51149e8b4",
+      "signature": "4785bd5d798b3147be72c44275f61346d89c24746cd29b3df372c85ca6c5ddd5"
+    }
+  ]
+}
