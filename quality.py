@@ -7,7 +7,7 @@ import httpx
 logger = logging.getLogger(__name__)
 from PIL import Image, ImageDraw, ImageFont
 
-from awards import FETCH_FAILED
+from awards import FETCH_FAILED, _FetchFailed
 from cache import set_cached_quality
 from config import (
     AIOSTREAMS_AUTH,
@@ -399,7 +399,7 @@ def _warm_badge_cache(height: int) -> None:
             continue
         w, h = raw.size
         new_w = max(1, round(w * height / h))
-        _BADGE_CACHE[(token, height)] = raw.resize((new_w, height), Image.LANCZOS)
+        _BADGE_CACHE[(token, height)] = raw.resize((new_w, height), Image.Resampling.LANCZOS)
 
 
 def _init_badge_cache() -> None:
@@ -433,7 +433,7 @@ def get_resized_badge(token: str, height: int) -> Image.Image | None:
 
     w, h = raw.size
     new_w = max(1, round(w * height / h))
-    resized = raw.resize((new_w, height), Image.LANCZOS)
+    resized = raw.resize((new_w, height), Image.Resampling.LANCZOS)
     _BADGE_CACHE[key] = resized
     return resized
 
@@ -461,7 +461,7 @@ def _resize_premultiplied(img: Image.Image, size: tuple[int, int]) -> Image.Imag
     alpha = arr[..., 3:4] / 255.0                  # normalised alpha, H×W×1
     arr[..., :3] *= alpha                           # premultiply RGB
     pre = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGBA")
-    pre = pre.resize(size, Image.LANCZOS)
+    pre = pre.resize(size, Image.Resampling.LANCZOS)
     arr2 = np.array(pre, dtype=np.float32)
     alpha2 = arr2[..., 3:4] / 255.0
     nonzero = alpha2[..., 0] > 0
@@ -602,6 +602,6 @@ def render_badges_left(
             text_h = bb[3] - bb[1]
             ty = y_top + (badge_height - text_h) // 2
             draw.text((x, ty), label, font=_FALLBACK_FONT, fill=(255, 255, 255, 220))
-            x += (bb[2] - bb[0]) + badge_gap
+            x += int(bb[2] - bb[0]) + badge_gap
 
 

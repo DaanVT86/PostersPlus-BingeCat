@@ -32,9 +32,9 @@ Those not self-hosting can [visit the public instance.](https://postersplus.elfh
 
 ## Features
 
-- **Ratings overlay** - weighted composite score from Letterboxd, Trakt, Rotten Tomatoes, IMDb, Metacritic, TMDb, MyAnimeList, and more. Four display modes (Score Bar, Clean, Minimalist, Bar) with many sub-modes. Three colour palettes, poster-aware overlays for a frosted look and optional glow on high scores.
+- **Ratings overlay** - weighted composite score from Letterboxd, Trakt, Rotten Tomatoes, IMDb, Metacritic, TMDb, MyAnimeList, and more. Four display modes (Score Bar, Clean, Minimalist, Bar) with many sub-modes. Three built-in colour palettes plus custom score-to-hex palettes, poster-aware overlays for a frosted look and optional glow on high scores.
 
-- **Award sashes** - Oscar Best Picture, Golden Globe (film and TV, five major categories), Emmy Outstanding Series (Drama, Comedy, Limited), festival winners, notable studios/directors/cast, trending titles, newly streaming (release-date recency plus r/movieleaks tracking), cult classics, true stories, and Metacritic Must-See. Priority order is fully configurable and any sash can be disabled. Can also be rendered as a notch, for those that prefer a more modern look.
+- **Award sashes** - Oscar Best Picture, Golden Globe (film and TV, five major categories), Emmy Outstanding Series (Drama, Comedy, Limited), festival winners, notable studios/directors/cast, trending titles, TV lifecycle signals (new season, returning, season finale), premieres, just-added digital movies, cult classics, true stories, and Metacritic Must-See. Priority order is fully configurable and any sash can be disabled. Can also be rendered as a notch, for those that prefer a more modern look.
 
 - **Quality badges** - six display modes: Quality Notch (vertical tier-coloured accent pill), Quality + Age Rating (age numeral tinted by 4K/Remux/HDR tier), Badge Row (PNG icons for 4K, 1080p, Remux, Web, DV, HDR10+, HDR10), Combined Text Badge, Age Rating Only, or hidden. A minimum quality threshold (`badge_min_score`) can suppress the badge when stream quality falls below a configurable bar. Sourced from an AIOStreams integration, Torrentio or Comet and fetched in the background on first request. Plex and Jellyfin will use your local files' actual quality for completely accurate data.
 
@@ -131,6 +131,13 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 | `MDBLIST_API_KEY` | - | MDBList API key for ratings and award data |
 | `MDBLIST_API_KEY_2` | - | Optional second MDBList key. Retried in the same request when the primary key is rate-limited |
 | `MDBLIST_CONCURRENCY` | `3` | Maximum concurrent outbound MDBList requests per worker |
+| `TVDB_API_KEY` | - | Optional TheTVDB v4 API key. When set, TVDB is used as a *fallback* art source (logos, backdrops, optionally posters) for titles where TMDB returns nothing usable — reducing fallbacks to text titles / genre canvas. Leave blank to disable entirely |
+| `TVDB_SUBSCRIBER_PIN` | - | Only required for user-supported ("subscriber") TVDB keys; leave blank for company keys |
+| `TVDB_USE_LOGOS` | `true` | Use TVDB clearlogos when TMDB + Metahub have none |
+| `TVDB_USE_BACKDROPS` | `true` | Use TVDB backgrounds (fanart) when no textless TMDB poster/backdrop exists |
+| `TVDB_USE_POSTERS` | `false` | Use TVDB posters as a last resort. Off by default because they often carry burned-in title text; only used when text detection confirms a clean image |
+| `TVDB_LOGO_PRIORITY` | `3` | Where a TVDB clearlogo sits in the logo chain: `1` = before TMDB and Metahub, `2` = after TMDB but before Metahub, `3` = last resort (only when both have nothing). TVDB logos are often higher quality, so `1`/`2` improve results but change logos currently sourced from TMDB/Metahub |
+| `TVDB_CONCURRENCY` | `3` | Maximum concurrent outbound TVDB requests per worker |
 | `BINGECAT_DATABASE_URL` | - | Optional read-only BingeCat PostgreSQL DSN for IMDb/TMDB ID resolution |
 | `BINGECAT_ID_RESOLUTION_ENABLED` | `true` | Enables BingeCat DB identity lookup when `BINGECAT_DATABASE_URL` is set |
 | `BINGECAT_DB_POOL_MIN` | `0` | Minimum BingeCat Postgres pool connections |
@@ -168,7 +175,7 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 | `TEXTLESS_DETECTION_CONCURRENCY` | `2` | Independent PP-OCR sessions in a dedicated executor. Use `1` on small hosts; each extra session uses roughly 25-40 MB; capped at 4 and CPU count |
 | `TEXTLESS_SCAN_TOP` | `0.08` | Fraction of poster height skipped from the top before counting text (covers top/middle/bottom titles; ignores top-edge logos) |
 | `BAKE_PPOCR_MODEL` | `true` | Build-time only. Bake the ~4.6MB PP-OCRv5 Mobile model into the image |
-| `DEFAULT_LOGO_LANGUAGE` | `en` | ISO 639-1 language code for title logos |
+| `DEFAULT_LOGO_LANGUAGE` | `en` | ISO language/locale code for title logos and poster language preference. `TMDB_LANGUAGE` is also accepted as a fallback alias. Use `fr-fr` for French-France fallback behavior. |
 | `DISCOVERY_OVERRIDES_PATH` | `/app/cache/discovery_overrides.json` | Optional custom path for discovery list overrides |
 
 > CPU guidance: keep `WORKERS × TEXTLESS_DETECTION_CONCURRENCY` at or below the CPU cores available to the container. Larger values can oversubscribe CPU, duplicate uncached work across workers, and reduce sustained throughput.
@@ -280,9 +287,14 @@ Sashes display contextual metadata about a title - awards, festival recognition,
 | Notable Director | Curated list of notable directors |
 | Notable Cast | Curated list of notable cast members |
 | Trending | Currently in TMDB's trending top 40 |
+| New Season | TV show with a recent or upcoming S2+ season premiere |
+| Returning | TV show with a recent or upcoming non-premiere episode |
+| Premiere | Show initial release within the last two weeks |
+| Just Added | Movie with a recent TMDB digital/TV release date |
+| Season Finale | Recently completed final TV season |
 | Cult Classic | Curated list of cult classics |
 | Foreign Language | Non-English language title |
-| Newly Streaming | Recently added to streaming |
+| Newly Streaming | Legacy combined recency signal |
 | Metacritic Must-See | High Metacritic score |
 | True Story | Based on a true story |
 | Short / Mini / Binge | Short film, miniseries, or bingeable series |

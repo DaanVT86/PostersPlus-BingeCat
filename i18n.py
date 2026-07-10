@@ -47,12 +47,24 @@ def load_languages() -> None:
         logger.info(f"i18n: loaded languages {sorted(_LANGS)}")
 
 
+def _lang_candidates(lang: str | None) -> list[str]:
+    code = (lang or "").strip().lower().replace("_", "-")
+    if not code:
+        return []
+    base = code.split("-", 1)[0]
+    return list(dict.fromkeys([code, base]))
+
+
 def has_language(lang: str | None) -> bool:
-    return bool(lang) and lang.strip().lower() in _LANGS
+    return any(code in _LANGS for code in _lang_candidates(lang))
 
 
 def _table(lang: str | None, key: str) -> dict:
-    return _LANGS.get((lang or "").strip().lower(), {}).get(key, {}) or {}
+    for code in _lang_candidates(lang):
+        table = _LANGS.get(code, {}).get(key, {}) or {}
+        if table:
+            return table
+    return {}
 
 
 def translate_genre(name: str | None, lang: str | None) -> str:

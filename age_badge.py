@@ -136,7 +136,7 @@ def _cairo_pill_mask(w: int, h: int, radius: int) -> Image.Image:
         surface.flush()
         stride = surface.get_stride()
         arr = np.frombuffer(bytes(surface.get_data()), dtype=np.uint8).reshape((h, stride))[:, :w].copy()
-        return Image.fromarray(arr, "L")
+        return Image.fromarray(arr)
     else:
         mask = Image.new("L", (w, h), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
@@ -182,7 +182,7 @@ def _make_text_layer(
     # 3× sigma covers ~99% of a Gaussian — anything beyond that contributes
     # less than 1% intensity and is safely cropped at the layer edge.
     pad = blur * 3 if blur else 0
-    glyph_h = bb[3] - bb[1]
+    glyph_h = int(bb[3] - bb[1])
 
     if tracking and len(text) > 1:
         advances = [_PROBE.textlength(ch, font=font) for ch in text]
@@ -194,7 +194,7 @@ def _make_text_layer(
             draw.text((cx, pad - bb[1]), ch, font=font, fill=fill)
             cx += adv + tracking
     else:
-        glyph_w = bb[2] - bb[0]
+        glyph_w = int(bb[2] - bb[0])
         layer   = Image.new("RGBA", (glyph_w + 2 * pad, glyph_h + 2 * pad), (0, 0, 0, 0))
         # Draw so the glyph ink lands at (pad, pad)..(pad + glyph_w, pad + glyph_h)
         ImageDraw.Draw(layer).text(
@@ -207,7 +207,7 @@ def _make_text_layer(
 
     # Compositing the layer at this offset puts the ink where the original
     # full-canvas (xy + bb[0..1]) draw would have placed it.
-    dest = (xy[0] + bb[0] - pad, xy[1] + bb[1] - pad)
+    dest = (int(xy[0] + bb[0] - pad), int(xy[1] + bb[1] - pad))
     return layer, dest
 
 
@@ -279,8 +279,8 @@ def draw_quality_age_badge(
     # Measure text bounds once
     probe = ImageDraw.Draw(image)
     bb    = probe.textbbox((0, 0), age_text, font=font)
-    tx    = ax - bb[0]
-    ty    = ay - bb[1]
+    tx    = int(ax - bb[0])
+    ty    = int(ay - bb[1])
 
     # ── 1. Ambient glow ───────────────────────────────────────────────────
     # Large, very-soft blur centred on the glyph — creates a luminance halo

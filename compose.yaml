@@ -8,7 +8,7 @@ services:
         # BAKE_PPOCR_MODEL=false in your .env for a lean image that downloads the
         # model once at runtime instead.
         BAKE_PPOCR_MODEL: "${BAKE_PPOCR_MODEL:-true}"
-    image: PostersPlus
+    image: postersplus
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -23,6 +23,12 @@ services:
       - BINGECAT_ID_RESOLUTION_ENABLED=${BINGECAT_ID_RESOLUTION_ENABLED:-true}
       - BINGECAT_DB_POOL_MIN=${BINGECAT_DB_POOL_MIN:-0}
       - BINGECAT_DB_POOL_MAX=${BINGECAT_DB_POOL_MAX:-5}
+      - TVDB_API_KEY=${TVDB_API_KEY:-}
+      - TVDB_SUBSCRIBER_PIN=${TVDB_SUBSCRIBER_PIN:-}
+      - TVDB_USE_LOGOS=${TVDB_USE_LOGOS:-true}
+      - TVDB_USE_BACKDROPS=${TVDB_USE_BACKDROPS:-true}
+      - TVDB_USE_POSTERS=${TVDB_USE_POSTERS:-false}
+      - TVDB_LOGO_PRIORITY=${TVDB_LOGO_PRIORITY:-3}
       - ACCESS_KEY=${ACCESS_KEY:-}
       - WORKERS=${WORKERS:-1}
       - TEXTLESS_DETECTION_CONCURRENCY=${TEXTLESS_DETECTION_CONCURRENCY:-2}

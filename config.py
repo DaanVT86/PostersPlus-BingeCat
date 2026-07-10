@@ -34,6 +34,40 @@ SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
 SERVER_MDBLIST_KEY_2  = os.environ.get("MDBLIST_API_KEY_2", "").strip()
 BINGECAT_DATABASE_URL = os.environ.get("BINGECAT_DATABASE_URL", "").strip()
 
+# TheTVDB v4 API key.  Optional — when empty, every TVDB code path is skipped
+# and behaviour is identical to TMDB-only.  TVDB is used strictly as a fallback
+# source of art (logos, backdrops, optionally textless posters) for titles where
+# TMDB returns nothing usable, to reduce fallbacks to text titles / genre canvas.
+# Unlike TMDB/MDBList (api key per request), TVDB v4 requires a one-month bearer
+# token obtained from POST /login; the key is exchanged for a token internally.
+SERVER_TVDB_KEY       = os.environ.get("TVDB_API_KEY", "").strip()
+# Only required for user-supported ("subscriber") TVDB keys; blank for company keys.
+TVDB_SUBSCRIBER_PIN   = os.environ.get("TVDB_SUBSCRIBER_PIN", "").strip()
+
+def _tvdb_flag(key: str, default: bool) -> bool:
+    raw = os.environ.get(key, "").strip().lower()
+    if raw == "":
+        return default
+    return raw in ("1", "true", "yes")
+
+# Per-asset feature toggles.  Logos/backdrops default on (low regression risk —
+# pure fallback); posters default off because TVDB posters usually carry burned-in
+# title text and must be vetted by text detection before use.
+TVDB_USE_LOGOS        = _tvdb_flag("TVDB_USE_LOGOS",     True)
+TVDB_USE_BACKDROPS    = _tvdb_flag("TVDB_USE_BACKDROPS", True)
+TVDB_USE_POSTERS      = _tvdb_flag("TVDB_USE_POSTERS",   False)
+# Where a TVDB clearlogo sits in the logo source chain:
+#   1 = TVDB first      — beats both TMDB and the Metahub CDN
+#   2 = TVDB mid        — after TMDB's own logos, but before Metahub
+#   3 = TVDB last       — only when TMDB and Metahub both have nothing (default;
+#                         zero change to existing output)
+# TVDB clearlogos are often higher quality than TMDB/Metahub, so 1 or 2 generally
+# improves results — at the cost of altering logos that currently come from those
+# sources.  Ignored entirely when no TVDB key is set.
+TVDB_LOGO_PRIORITY    = max(1, min(3, int(os.environ.get("TVDB_LOGO_PRIORITY", "3"))))
+# Caps concurrent TVDB API calls so a burst of uncached misses can't stampede it.
+TVDB_CONCURRENCY      = max(1, int(os.environ.get("TVDB_CONCURRENCY", "3")))
+
 # Ordered list of all configured server-side MDBList keys (primary first).
 # Used by the key-rotation logic in main.py to fall back when a key is exhausted.
 SERVER_MDBLIST_KEYS: list[str] = [k for k in [SERVER_MDBLIST_KEY, SERVER_MDBLIST_KEY_2] if k]
@@ -48,8 +82,23 @@ BINGECAT_DB_POOL_MAX = max(1, int(os.environ.get("BINGECAT_DB_POOL_MAX", "5")))
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the
 # edge. Set to 0 to disable (e.g. when running without a CDN).
 CDN_CACHE_TTL         = int(os.environ.get("CDN_CACHE_TTL", "0"))
-# JPEG output quality for composited posters (70–95). Higher = better quality, larger files.
+# Image format for composited posters (webp or jpeg). webp is recommended.
+IMAGE_FORMAT          = os.environ.get("IMAGE_FORMAT", "webp").lower()
+# Normalise the common "jpg" alias to the canonical "jpeg" that PIL's save()
+# registry and the image/* media type both expect — "JPG" is not a valid PIL
+# format string and would crash every render.
+if IMAGE_FORMAT == "jpg":
+    IMAGE_FORMAT = "jpeg"
+if IMAGE_FORMAT not in ("webp", "jpeg"):
+    IMAGE_FORMAT = "webp"
+# JPEG output quality for composited posters (70-95). Higher = better quality, larger files.
 JPEG_QUALITY          = max(70, min(95, int(os.environ.get("JPEG_QUALITY", "85"))))
+# WebP output quality for composited posters (70-95).
+WEBP_QUALITY          = max(70, min(95, int(os.environ.get("WEBP_QUALITY", "85"))))
+
+# Maximum age in years for a title to fetch its release status (like Cinema, Streaming).
+# Prevents showing stale "Cinema" badges on very old titles.
+RELEASE_STATUS_MAX_AGE_YEARS = int(os.environ.get("RELEASE_STATUS_MAX_AGE_YEARS", "5"))
 
 # Feature Defaults 
 
@@ -81,7 +130,7 @@ SCORE_GLOW_ALPHA     = 40   # alpha of the glow applied
 LOGO_MAX_W_RATIO  = 0.75   # target/max width of logo — the span every logo normalises to
 LOGO_MAX_H_RATIO  = 0.25   # max height of logo (paired with LOGO_ABS_MAX_H px cap)
 LOGO_BOTTOM_RATIO = 0.28   # distance of logo from the bottom
-DEFAULT_LOGO_LANGUAGE = os.environ.get("DEFAULT_LOGO_LANGUAGE", "en")
+DEFAULT_LOGO_LANGUAGE = os.environ.get("DEFAULT_LOGO_LANGUAGE", os.environ.get("TMDB_LANGUAGE", "en"))
 
 # Quality Badge Defaults
 
@@ -102,10 +151,21 @@ TMDB_LOGO_CACHE_DURATION     = 60
 # same jitter.
 TMDB_IMAGE_CACHE_JITTER_DAYS = int(os.environ.get("TMDB_IMAGE_CACHE_JITTER_DAYS", "10"))
 TMDB_METADATA_CACHE_DURATION = 7    # re-check textless status / logos weekly
+# TVDB artwork listings change slowly; cache the per-title artwork index and the
+# resolved TVDB id for a fortnight.  Negative results (no TVDB match / no art) are
+# cached for a shorter window so newly-added TVDB art is picked up reasonably soon.
+TVDB_ARTWORK_CACHE_DURATION  = int(os.environ.get("TVDB_ARTWORK_CACHE_DURATION", "14"))   # days
+TVDB_NEG_CACHE_DURATION      = int(os.environ.get("TVDB_NEG_CACHE_DURATION", "3"))         # days
+# Artwork-type catalogue (/artwork/types) almost never changes — cache it long.
+TVDB_TYPES_CACHE_DURATION    = int(os.environ.get("TVDB_TYPES_CACHE_DURATION", "30"))      # days
 DAYS_CONSIDERED_NEW          = 14
 NEW_CACHE_DURATION           = 1
 OLD_CACHE_DURATION           = 30
 TRENDING_CACHE_DURATION      = 1
+TRENDING_FETCH_TIME          = os.environ.get("TRENDING_FETCH_TIME", "").strip()
+TRENDING_FETCH_TIMEZONE      = os.environ.get("TRENDING_FETCH_TIMEZONE", "UTC").strip()
+TRENDING_FETCH_COUNT         = int(os.environ.get("TRENDING_FETCH_COUNT", "40"))
+TRENDING_BROAD_FETCH_COUNT   = int(os.environ.get("TRENDING_BROAD_FETCH_COUNT", "100"))
 # Quality (AIOStreams) TTL — separate from rating TTL because stream availability
 # for older titles is very stable.  New content keeps the 1-day window so fresh
 # encodes are picked up quickly; old content is cached for much longer.
@@ -386,11 +446,17 @@ SASH_PRIORITY: list[str] = [
     "director",
     "cast",
     "trending",
+    "new_season",
+    "returning",
+    "premiere",
+    "just_added",
+    "season_finale",
     "cult",
     "foreign",
     "new_release",
     "metacritic",
     "true_story",
     "structural",
+    "trending_broad",
     "release_status",
 ]
