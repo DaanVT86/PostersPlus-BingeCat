@@ -89,6 +89,7 @@ class CanonicalRenderSpec:
     use_original_art: bool = False
     original_art_source: str = "primary"
     sash_priority: tuple[str, ...] = ()
+    sash_exclusions: tuple[str, ...] = ()
     muted: bool = False
     textless: bool = False
     top_gradient: str = "high"
@@ -203,12 +204,16 @@ def _weights(value: Any, allowed: frozenset[str]) -> tuple[tuple[str, float], ..
     return tuple(sorted(normalised.items()))
 
 
-def _sashes(value: Any) -> tuple[str, ...]:
+def _sashes(value: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
     tokens = value.split(",") if isinstance(value, str) else value
     if not isinstance(tokens, (list, tuple)):
-        return ()
+        return (), ()
     parsed = [str(token).strip().lower() for token in tokens if str(token).strip()]
-    excluded = {token[1:] for token in parsed if token.startswith("-")}
+    exclusions = tuple(
+        token[1:] for token in parsed
+        if token.startswith("-") and token[1:] in _SASH_SLOTS
+    )
+    excluded = set(exclusions)
     result: list[str] = []
     for token in parsed:
         if token.startswith("-"):
@@ -217,7 +222,7 @@ def _sashes(value: Any) -> tuple[str, ...]:
         for slot in expanded:
             if slot in _SASH_SLOTS and slot not in excluded and slot not in result:
                 result.append(slot)
-    return tuple(result)
+    return tuple(result), exclusions
 
 
 def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
@@ -244,6 +249,7 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
     badge_display_mode = _int(values.get("badge_display_mode"), defaults.badge_display_mode, 0, 5)
     if badge_display_mode not in {0, 3}:
         raise ValueError("badge_display_mode is restricted to 0 or 3 for BingeCat custom configs")
+    sash_priority, sash_exclusions = _sashes(values.get("sash_priority"))
 
     return CanonicalRenderSpec(
         show_award_sash=_bool(values.get("show_award_sash"), defaults.show_award_sash),
@@ -285,7 +291,8 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         fallback_bg_style=_choice(values.get("fallback_bg_style"), defaults.fallback_bg_style, {"minimal", "photoreal"}),
         use_original_art=_bool(values.get("use_original_art"), defaults.use_original_art),
         original_art_source=_choice(values.get("original_art_source"), defaults.original_art_source, {"primary", "top_rated"}),
-        sash_priority=_sashes(values.get("sash_priority")),
+        sash_priority=sash_priority,
+        sash_exclusions=sash_exclusions,
         muted=_bool(values.get("muted"), defaults.muted),
         textless=_bool(values.get("textless"), defaults.textless),
         top_gradient=top_gradient,
