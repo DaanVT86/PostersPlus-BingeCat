@@ -152,6 +152,39 @@ def test_structural_sash_slots_require_lifecycle_facts(slot):
     assert requirements.lifecycle is True
 
 
+@pytest.mark.parametrize(
+    "config",
+    (
+        {"rating_display_mode": 1, "accent_bar_append_mode": 0},
+        {"rating_display_mode": 1, "accent_bar_append_mode": 2},
+        {"rating_display_mode": 3, "minimalist_append_mode": 0},
+        {"rating_display_mode": 3, "minimalist_append_mode": 2},
+        {"rating_display_mode": 4},  # Default bar_append is rating_year.
+        {"rating_display_mode": 4, "bar_append": "year"},
+    ),
+)
+def test_year_rendering_modes_require_release_year(config):
+    assert compile_requirements(canonicalize_config(config)).release_year is True
+
+
+@pytest.mark.parametrize(
+    "config",
+    (
+        {"rating_display_mode": 0},
+        {"rating_display_mode": 1, "accent_bar_append_mode": 1},
+        {"rating_display_mode": 2},
+        {"rating_display_mode": 3, "minimalist_append_mode": 1},
+        {"rating_display_mode": 3, "minimalist_append_mode": 3},
+        {"rating_display_mode": 4, "bar_append": "rating"},
+        {"rating_display_mode": 4, "bar_append": "sash"},
+        {"rating_display_mode": 4, "bar_append": "second_rating"},
+        {"rating_display_mode": 5},
+    ),
+)
+def test_non_year_rendering_modes_do_not_require_release_year(config):
+    assert compile_requirements(canonicalize_config(config)).release_year is False
+
+
 def test_textless_output_suppresses_logo_and_ocr_work_but_keeps_art_fallback():
     suppressed = compile_requirements(
         canonicalize_config(

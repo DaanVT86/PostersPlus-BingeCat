@@ -141,6 +141,7 @@ class DataRequirements:
     trending: bool
     lifecycle: bool
     release: bool
+    release_year: bool
     credits: bool
     studios: bool
     logo: bool
@@ -343,6 +344,16 @@ def compile_requirements(spec: CanonicalRenderSpec) -> DataRequirements:
         spec.rating_display_mode == 4
         and spec.bar_append in {"rating", "rating_year", "second_rating"}
     )
+    release_year = (
+        spec.rating_display_mode == 1
+        and spec.accent_bar_append_mode in {0, 2}
+    ) or (
+        spec.rating_display_mode == 3
+        and spec.minimalist_append_mode in {0, 2}
+    ) or (
+        spec.rating_display_mode == 4
+        and spec.bar_append in {"rating_year", "year"}
+    )
     return DataRequirements(
         ratings=ratings,
         awards=sash_visible and bool(slots & {"wins", "gg_wins", "festival", "pic_noms", "gg_noms"}),
@@ -351,6 +362,7 @@ def compile_requirements(spec: CanonicalRenderSpec) -> DataRequirements:
         trending=sash_visible and bool(slots & {"trending", "trending_broad"}),
         lifecycle=sash_visible and bool(slots & {"new_season", "returning", "premiere", "just_added", "season_finale", "short_film", "mini_series", "binge_ready", "cinema", "streaming", "physical", "production", "ended", "cancelled", "airing"}),
         release=sash_visible and bool(slots & {"new_release", "cinema", "streaming", "physical"}),
+        release_year=release_year,
         credits=sash_visible and bool(slots & {"director", "cast"}),
         studios=sash_visible and "studio" in slots,
         logo=not spec.use_original_art and not spec.textless,
