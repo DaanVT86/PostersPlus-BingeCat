@@ -137,6 +137,35 @@ def test_requirements_distinguish_keyword_and_age_certification_facts():
     assert requirements.quality is False
 
 
+def test_textless_output_suppresses_logo_and_ocr_work_but_keeps_art_fallback():
+    suppressed = compile_requirements(
+        canonicalize_config(
+            {
+                "rating_display_mode": 0,
+                "sash_mode": "hidden",
+                "textless": True,
+                "use_original_art": False,
+            }
+        )
+    )
+    composited = compile_requirements(
+        canonicalize_config(
+            {
+                "rating_display_mode": 0,
+                "sash_mode": "hidden",
+                "textless": False,
+                "use_original_art": False,
+            }
+        )
+    )
+
+    assert suppressed.logo is False
+    assert suppressed.ocr is False
+    assert suppressed.fallback_art is True
+    assert composited.logo is True
+    assert composited.ocr is True
+
+
 def test_custom_configs_reject_out_of_scope_quality_badges():
     with pytest.raises(ValueError, match="badge_display_mode"):
         canonicalize_config({"badge_display_mode": 5})

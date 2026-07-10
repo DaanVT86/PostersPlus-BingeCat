@@ -353,8 +353,8 @@ def compile_requirements(spec: CanonicalRenderSpec) -> DataRequirements:
         release=sash_visible and bool(slots & {"new_release", "cinema", "streaming", "physical"}),
         credits=sash_visible and bool(slots & {"director", "cast"}),
         studios=sash_visible and "studio" in slots,
-        logo=not spec.use_original_art,
-        ocr=not spec.use_original_art and spec.textless,
+        logo=not spec.use_original_art and not spec.textless,
+        ocr=not spec.use_original_art and not spec.textless,
         fallback_art=not spec.use_original_art,
         quality=False,
     )
