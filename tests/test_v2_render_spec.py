@@ -57,6 +57,14 @@ def test_canonicalize_clamps_render_allocation_inputs():
     assert spec.bottom_gradient_opacity == 1.0
 
 
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    (("pt-BR", "pt"), ("NL_nl", "nl"), ("de-DE", "de"), ("es-419", "es"), ("fr", "en"), ("x" * 10_000, "en")),
+)
+def test_logo_language_is_limited_to_supported_locales_with_english_fallback(requested, expected):
+    assert canonicalize_config({"logo_language": requested}).logo_language == expected
+
+
 @pytest.mark.parametrize("non_finite", ("inf", "-inf", "nan"))
 def test_integer_normalizers_default_non_finite_spellings(non_finite):
     spec = canonicalize_config(

@@ -12,6 +12,8 @@ import json
 import math
 from typing import Any, Mapping
 
+from i18n import normalize_locale
+
 
 _SCHEMA = "bingecat_postersplus_v2"
 _VERSION = 1
@@ -289,7 +291,7 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         logo_max_h_ratio=_float(values.get("logo_max_h_ratio"), defaults.logo_max_h_ratio, 0.0, 1.0),
         logo_bottom_ratio=_float(values.get("logo_bottom_ratio"), defaults.logo_bottom_ratio, 0.0, 1.0),
         logo_bottom_anchor=_bool(values.get("logo_bottom_anchor"), defaults.logo_bottom_anchor),
-        logo_language=str(values.get("logo_language", defaults.logo_language)).strip().lower() or "en",
+        logo_language=normalize_locale(values.get("logo_language")),
         logo_priority=_choice(values.get("logo_priority"), defaults.logo_priority, {"native_original", "original_native", "native_if_original_english", "native_text"}),
         fallback_bg_style=_choice(values.get("fallback_bg_style"), defaults.fallback_bg_style, {"minimal", "photoreal"}),
         use_original_art=_bool(values.get("use_original_art"), defaults.use_original_art),
