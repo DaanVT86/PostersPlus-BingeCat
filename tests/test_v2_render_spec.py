@@ -137,6 +137,21 @@ def test_requirements_distinguish_keyword_and_age_certification_facts():
     assert requirements.quality is False
 
 
+@pytest.mark.parametrize("slot", ("short_film", "mini_series", "binge_ready"))
+def test_structural_sash_slots_require_lifecycle_facts(slot):
+    requirements = compile_requirements(
+        canonicalize_config(
+            {
+                "rating_display_mode": 0,
+                "sash_priority": slot,
+                "use_original_art": True,
+            }
+        )
+    )
+
+    assert requirements.lifecycle is True
+
+
 def test_textless_output_suppresses_logo_and_ocr_work_but_keeps_art_fallback():
     suppressed = compile_requirements(
         canonicalize_config(
