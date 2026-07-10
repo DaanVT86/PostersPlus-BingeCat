@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the existing FastAPI/Pillow renderer and provider adapters as the composition engine, adding isolated contract, auth, preset, source-art, and cache-policy modules. `/v2/enrich` performs bounded provider enrichment; `/v2/render` accepts only an immutable snapshot and normalized derivatives, so visual output is pure and reproducible. Legacy `/poster` adapts recognized query settings into the same canonical identity without changing its response contract.
 
-**Tech Stack:** Python 3.12, FastAPI, Pydantic (strict DTO validation), Pillow/NumPy, httpx, SQLite/WAL, pytest, and injected clock functions/pytest monkeypatching.
+**Tech Stack:** Python 3.11 (the service Docker runtime; code remains 3.12-compatible), FastAPI, Pydantic (strict DTO validation), Pillow/NumPy, httpx, SQLite/WAL, pytest, and injected clock functions/pytest monkeypatching.
 
 ## Global Constraints
 
