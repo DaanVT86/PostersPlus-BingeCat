@@ -18,7 +18,7 @@ class ConfiguratorPreviewLayoutTests(unittest.TestCase):
     def test_form_controls_are_square_across_browsers(self):
         self.assertRegex(
             self.html,
-            r"input\[type=\"text\"\],\s*input\[type=\"number\"\],\s*select\s*\{[^}]*border-radius:\s*0;",
+            r"input\[type=\"text\"\],\s*input\[type=\"number\"\],\s*(?:textarea,\s*)?select\s*\{[^}]*border-radius:\s*0;",
         )
 
     def test_select_focus_preserves_dropdown_arrow(self):

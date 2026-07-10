@@ -3,6 +3,7 @@ import os
 import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from typing import Any
 
 try:
     import cairo as _cairo
@@ -1217,7 +1218,7 @@ def parse_mdblist_awards(
 def _text_center(
     draw: ImageDraw.ImageDraw,
     text: str,
-    font: ImageFont.ImageFont,
+    font: Any,
     cx: float,
     cy: float,
 ) -> tuple[float, float]:
@@ -1348,7 +1349,7 @@ def sample_frosted_notch_rgb(
     crop_y = max(0, by_composite)
     region = image.crop((bx, crop_y, bx + badge_w, crop_y + badge_h))
     blurred = region.filter(ImageFilter.GaussianBlur(radius=max(4, int(badge_h * 0.35))))
-    thumb = blurred.resize((8, 8), Image.LANCZOS).convert("RGB")
+    thumb = blurred.resize((8, 8), Image.Resampling.LANCZOS).convert("RGB")
     arr = np.array(thumb, dtype=np.float32)
     return float(arr[:, :, 0].mean()), float(arr[:, :, 1].mean()), float(arr[:, :, 2].mean())
 
@@ -1430,7 +1431,7 @@ def draw_award_badge(
     # Measure rendered text width at SS resolution
     _tmp_d  = ImageDraw.Draw(Image.new("L", (1, 1)))
     _tbbox  = _tmp_d.textbbox((0, 0), label, font=font)
-    text_w_ss = _tbbox[2] - _tbbox[0]
+    text_w_ss = int(_tbbox[2] - _tbbox[0])
 
     # Badge width: minimum is size_ratio_w-scaled default; expands to fit text
     # with horizontal padding of ~45% of badge_h (22.5% each side).
@@ -1459,7 +1460,7 @@ def draw_award_badge(
         region = image.crop((bx, crop_y, bx + badge_w, crop_y + badge_h))
         blur_r = max(4, int(badge_h * 0.35))
         blurred = region.filter(ImageFilter.GaussianBlur(radius=blur_r))
-        blurred_ss = blurred.resize((bw, bh), Image.LANCZOS).convert("RGBA")
+        blurred_ss = blurred.resize((bw, bh), Image.Resampling.LANCZOS).convert("RGBA")
 
         # Sample dominant colour from the (lightly blurred) region — use a small
         # thumbnail so the mean is fast and noise-free.  tint_rgb (when supplied)
@@ -1467,7 +1468,7 @@ def draw_award_badge(
         if tint_rgb is not None:
             dr, dg, db = tint_rgb
         else:
-            thumb = blurred.resize((8, 8), Image.LANCZOS).convert("RGB")
+            thumb = blurred.resize((8, 8), Image.Resampling.LANCZOS).convert("RGB")
             arr_thumb = np.array(thumb, dtype=np.float32)
             dr, dg, db = arr_thumb[:, :, 0].mean(), arr_thumb[:, :, 1].mean(), arr_thumb[:, :, 2].mean()
 
@@ -1505,7 +1506,7 @@ def draw_award_badge(
         td.text((tx, ty), label, font=font, fill=(0, 0, 0, 245))
         badge_ss = Image.alpha_composite(badge_ss, txt_layer)
 
-        badge_final = badge_ss.resize((badge_w, badge_h), Image.LANCZOS)
+        badge_final = badge_ss.resize((badge_w, badge_h), Image.Resampling.LANCZOS)
         result = image.copy()
         result.alpha_composite(badge_final, (bx, by_composite))
         return result
@@ -1527,7 +1528,7 @@ def draw_award_badge(
         _txt_rgb_black = text_color if text_color is not None else (210, 210, 218)
         td.text((tx, ty), label, font=font, fill=(*_txt_rgb_black, 245))
         badge_ss = Image.alpha_composite(badge_ss, txt_layer)
-        badge_final = badge_ss.resize((badge_w, badge_h), Image.LANCZOS)
+        badge_final = badge_ss.resize((badge_w, badge_h), Image.Resampling.LANCZOS)
         result = image.copy()
         result.alpha_composite(badge_final, (bx, by_composite))
         return result
@@ -1602,7 +1603,7 @@ def draw_award_badge(
             g_s = np.clip(arr[:, :, 1].astype(np.float32) * 255.0 / safe_a, 0, 255).astype(np.uint8)
             b_s = np.clip(arr[:, :, 0].astype(np.float32) * 255.0 / safe_a, 0, 255).astype(np.uint8)
             rgba  = np.stack([r_s, g_s, b_s, arr[:, :, 3]], axis=2)
-            badge = Image.fromarray(rgba, "RGBA")
+            badge = Image.fromarray(rgba)
         except Exception:
             badge = None
 
@@ -1615,7 +1616,7 @@ def draw_award_badge(
         b_arr[:, :, 1] = darkness[:, np.newaxis]
         b_arr[:, :, 2] = np.minimum(255, (darkness * 1.3).astype(np.uint8))[:, np.newaxis]
         b_arr[:, :, 3] = body_alpha
-        body = Image.fromarray(b_arr, "RGBA")
+        body = Image.fromarray(b_arr)
 
         _nc = dict(corners=(False, False, True, True))
         body_mask = Image.new("L", (bw, bh), 0)
@@ -1638,7 +1639,7 @@ def draw_award_badge(
     # ── Text: white on dark body, with drop shadow ───────────────────────────
     txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
     td = ImageDraw.Draw(txt_layer)
-    tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss)
+    tx, ty = _text_center(td, label, font, bw // 2, text_cy_ss)
     _txt_rgb = text_color if text_color is not None else (255, 255, 255)
     td.text((tx + SS, ty + SS), label, font=font, fill=(0, 0, 0, 160))
     td.text((tx, ty),           label, font=font, fill=(*_txt_rgb, 235))
@@ -1665,7 +1666,7 @@ def sample_frosted_sash_rgb(image: Image.Image) -> tuple[float, float, float]:
     width, height = image.size
     reg = image.crop((int(width * 0.55), 0, width, int(height * 0.22)))
     blr = reg.filter(ImageFilter.GaussianBlur(radius=max(6, int(height * 0.02))))
-    th  = blr.resize((8, 8), Image.LANCZOS).convert("RGB")
+    th  = blr.resize((8, 8), Image.Resampling.LANCZOS).convert("RGB")
     ar  = np.array(th, dtype=np.float32)
     return float(ar[:, :, 0].mean()), float(ar[:, :, 1].mean()), float(ar[:, :, 2].mean())
 
@@ -1746,6 +1747,7 @@ def draw_award_sash(
     adjusted_size = sash_height * 0.85 / (len(label) ** 0.35)
     font_size     = int(min(base_size, adjusted_size)) * SS
 
+    font: Any
     try:
         font = ImageFont.truetype(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Inter-Bold.ttf"), font_size)
     except IOError:

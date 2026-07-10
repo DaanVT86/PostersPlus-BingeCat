@@ -28,6 +28,11 @@
   },
   "sashLabels": {
     "trendingToday": "#{rank} Oggi",
+    "New Season": "Nuova stagione",
+    "Returning": "Di ritorno",
+    "Premiere": "Prima",
+    "Just Added": "Appena aggiunto",
+    "Season Finale": "Finale stagione",
     "New": "Nuovo",
     "Must-See": "Da non perdere",
     "Cult Classic": "Cult",
