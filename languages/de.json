@@ -1,0 +1,9 @@
+{
+  "code": "de",
+  "genreLabels": {
+    "Unknown": "Unbekannt", "Action": "Action", "Adventure": "Abenteuer", "Animation": "Animation", "Comedy": "Komödie", "Crime": "Krimi", "Documentary": "Dokumentation", "Drama": "Drama", "Family": "Familie", "Fantasy": "Fantasy", "History": "Geschichte", "Horror": "Horror", "Music": "Musik", "Mystery": "Mystery", "Romance": "Romanze", "Sci-Fi": "Science-Fiction", "Thriller": "Thriller", "War": "Krieg", "Western": "Western", "Kids": "Kinder", "News": "Nachrichten", "Reality": "Reality", "Soap": "Soap", "Talk": "Talkshow"
+  },
+  "sashLabels": {
+    "trendingToday": "#{rank} Heute", "New Season": "Neue Staffel", "Returning": "Kehrt zurück", "Premiere": "Premiere", "Just Added": "Gerade hinzugefügt", "Season Finale": "Staffelfinale", "New": "Neu", "Must-See": "Unbedingt sehen", "Cult Classic": "Kultklassiker", "True Story": "Wahre Geschichte", "Short Film": "Kurzfilm", "Mini Series": "Miniserie", "Binge Ready": "Bereit zum Bingen", "Foreign": "Ausländisch", "French": "Französisch", "German": "Deutsch", "Spanish": "Spanisch", "Italian": "Italienisch", "Portuguese": "Portugiesisch", "Japanese": "Japanisch", "Korean": "Koreanisch", "Chinese": "Chinesisch", "Danish": "Dänisch", "Swedish": "Schwedisch", "Norwegian": "Norwegisch", "Finnish": "Finnisch", "Dutch": "Niederländisch", "Polish": "Polnisch", "Russian": "Russisch", "Turkish": "Türkisch", "Arabic": "Arabisch", "Hindi": "Hindi", "Persian": "Persisch", "Romanian": "Rumänisch", "Hungarian": "Ungarisch", "Czech": "Tschechisch", "Hebrew": "Hebräisch", "Greek": "Griechisch", "Oscar Winner": "Oscar-Gewinner", "Oscar Nominee": "Oscar-Nominierter", "Emmy Winner": "Emmy-Gewinner", "Emmy Nominee": "Emmy-Nominierter", "Globe Winner": "Golden-Globe-Gewinner", "Globe Nominee": "Golden-Globe-Nominierter"
+  }
+}

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,31 @@ _TRENDING_RE = re.compile(r"^#(\d+)\s+Today$")
 
 # Composite nominee labels are joined with this separator in discovery.pick_sash.
 _NOM_SEP = " • "
+
+_V2_LOCALES = frozenset({"en", "pt", "nl", "de", "es"})
+_LOCALE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
+
+
+def normalize_locale(value: str | None) -> str:
+    """Return a supported BingeCat locale, falling back deterministically.
+
+    This is intentionally stricter than the legacy translation lookup: v2
+    contracts accept only the five published locales, while the configurator
+    may still use any translation file installed by an operator.
+    """
+    candidate = (value or "").strip().replace("_", "-").lower()
+    if not _LOCALE_RE.fullmatch(candidate):
+        return "en"
+    base = candidate.split("-", 1)[0]
+    return base if base in _V2_LOCALES else "en"
+
+
+def resolve_locale_chain(requested: str, available: Iterable[str]) -> list[str]:
+    """Resolve requested language then English from a supplied locale set."""
+    available_codes = {str(code).strip().lower().replace("_", "-") for code in available}
+    resolved = normalize_locale(requested)
+    chain = [resolved, "en"]
+    return [code for index, code in enumerate(chain) if code in available_codes and code not in chain[:index]]
 
 
 def load_languages() -> None:
