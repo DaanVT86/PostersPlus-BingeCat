@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from pydantic import ValidationError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -615,6 +616,14 @@ from ratings import (
 )
 from tmdb import composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_trending_candidates, fetch_popular_candidates, fetch_supplemental_candidates, fetch_catalog_candidates, fetch_release_status, fetch_recent_movie_digital_release_date, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, _fetch_metahub_logo, LOGO_ABS_MAX_H
 import tvdb
+from integration_contract import EnrichmentRequest
+from service_auth import AuthError as V2AuthError, SQLiteNonceStore, verify_request as verify_v2_request
+from source_art import SourceArtStore
+from v2_enrich import (
+    UnsupportedPresetVersion,
+    build_runtime as build_v2_enrichment_runtime,
+    enrich as enrich_v2,
+)
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -631,6 +640,8 @@ import tvdb
 
 _HTTP_CLIENT: httpx.AsyncClient | None = None
 _BINGECAT_POOL = None
+_V2_NONCE_STORE: SQLiteNonceStore | None = None
+_V2_SOURCE_STORE: SourceArtStore | None = None
 
 def _make_http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
@@ -2757,6 +2768,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def hide_disabled_v2_prefix(request: Request, call_next):
+    """Do not disclose integration routes at all until their secret exists."""
+
+    if (
+        request.url.path.startswith("/v2/")
+        and not _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    ):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return await call_next(request)
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _FONTS_DIR = os.path.join(BASE_DIR, "fonts")
 
@@ -2987,6 +3012,79 @@ def _load_configurator_html() -> str:
     except FileNotFoundError:
         _configurator_etag = '"missing"'
         return "<h1>Configurator not found</h1><p>Place configurator.html alongside main.py</p>"
+
+
+async def _get_v2_nonce_store():
+    global _V2_NONCE_STORE
+    if _V2_NONCE_STORE is None:
+        _V2_NONCE_STORE = await asyncio.to_thread(
+            SQLiteNonceStore,
+            _cfg.POSTERSPLUS_V2_NONCE_DB_PATH,
+        )
+    return _V2_NONCE_STORE
+
+
+async def _get_v2_source_store():
+    global _V2_SOURCE_STORE
+    if _V2_SOURCE_STORE is None:
+        _V2_SOURCE_STORE = await asyncio.to_thread(SourceArtStore.from_config)
+    return _V2_SOURCE_STORE
+
+
+@app.post("/v2/enrich")
+async def v2_enrich_endpoint(request: Request):
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    try:
+        contract = EnrichmentRequest.model_validate_json(await request.body())
+    except ValidationError as exc:
+        details = [
+            {
+                "loc": list(item.get("loc", ()))[:8],
+                "type": str(item.get("type", "validation_error"))[:80],
+                "msg": str(item.get("msg", "invalid value"))[:200],
+            }
+            for item in exc.errors(include_url=False, include_input=False)[:20]
+        ]
+        return JSONResponse(status_code=422, content={"detail": details})
+    if _HTTP_CLIENT is None:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    runtime = build_v2_enrichment_runtime(
+        _HTTP_CLIENT,
+        _BINGECAT_POOL,
+        tmdb_key=_cfg.SERVER_TMDB_KEY,
+        mdblist_key=(
+            _cfg.SERVER_MDBLIST_KEYS[_mdblist_active_key_idx % len(_cfg.SERVER_MDBLIST_KEYS)]
+            if _cfg.SERVER_MDBLIST_KEYS else ""
+        ),
+        stateless_metadata=_cfg.POSTERSPLUS_INTEGRATION_STATELESS_METADATA,
+        source_store=await _get_v2_source_store(),
+    )
+    try:
+        result = await enrich_v2(
+            contract,
+            datetime.now(timezone.utc),
+            runtime=runtime,
+        )
+    except UnsupportedPresetVersion:
+        raise HTTPException(status_code=409, detail="unsupported_preset_version") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)[:200]) from None
+    except Exception as exc:
+        logger.warning(f"v2 enrichment failed: {type(exc).__name__}")
+        raise HTTPException(status_code=503, detail="Enrichment unavailable") from None
+    return JSONResponse(content=result.model_dump(mode="json"))
 
 
 @app.get("/health")

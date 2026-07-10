@@ -3,12 +3,20 @@ import asyncio
 import colorsys
 import io
 import logging
-from datetime import date as _date
+import math
+import re
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
+from datetime import date as _date, datetime, timezone
+from typing import Literal
 import httpx
 import numpy as np
 
 logger = logging.getLogger(__name__)
 from PIL import Image, ImageFilter
+
+from integration_contract import ArtworkLocator
 
 # SVG title-logo support — TMDB serves many of its highest-voted logos as SVG.
 # Soft import so the service still runs (PNG-only) if cairosvg is unavailable.
@@ -327,6 +335,246 @@ def _select_textless_poster(posters: list[dict]) -> dict | None:
         voted or competitive,
         key=lambda poster: (_rating(poster), _votes(poster)),
     )
+
+
+@dataclass(frozen=True)
+class V2ArtworkCandidate:
+    kind: Literal["poster", "backdrop", "logo"]
+    locator: ArtworkLocator
+    locale: str
+    vote_average: float = 0.0
+    vote_count: int = 0
+
+
+@dataclass(frozen=True)
+class V2TMDBMetadata:
+    tmdb_id: str
+    media_type: str
+    title: str
+    genre_ids: tuple[int, ...] = ()
+    release_date: str | None = None
+    release_year: int | None = None
+    original_language: str | None = None
+    original_title: str | None = None
+    runtime: int | None = None
+    number_of_seasons: int | None = None
+    number_of_episodes: int | None = None
+    tmdb_status: str | None = None
+    vote_count: int | None = None
+    next_episode: dict | None = None
+    last_episode: dict | None = None
+    seasons: tuple[dict, ...] = ()
+    production_companies: tuple[str, ...] = ()
+    directors: tuple[str, ...] = ()
+    cast: tuple[str, ...] = ()
+    imdb_id: str | None = None
+    candidates: tuple[V2ArtworkCandidate, ...] = ()
+
+    def lifecycle_payload(self) -> dict:
+        return {
+            "tmdb_release_date": self.release_date,
+            "runtime": self.runtime,
+            "number_of_seasons": self.number_of_seasons,
+            "number_of_episodes": self.number_of_episodes,
+            "tmdb_status": self.tmdb_status,
+            "next_episode": self.next_episode,
+            "last_episode": self.last_episode,
+            "seasons": list(self.seasons),
+        }
+
+
+_V2_METADATA_CACHE: "OrderedDict[str, tuple[float, V2TMDBMetadata]]" = OrderedDict()
+_V2_METADATA_CACHE_TTL = 3600.0
+_V2_METADATA_CACHE_MAX = 512
+
+
+def clear_v2_metadata_cache() -> None:
+    _V2_METADATA_CACHE.clear()
+
+
+def _v2_artwork_candidates(images: dict) -> tuple[V2ArtworkCandidate, ...]:
+    out: list[V2ArtworkCandidate] = []
+    definitions = (
+        ("poster", "posters", "w500"),
+        ("backdrop", "backdrops", "w1280"),
+        ("logo", "logos", "original"),
+    )
+    for kind, key, size in definitions:
+        rows = images.get(key) if isinstance(images, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for row in rows[:128]:
+            if not isinstance(row, dict):
+                continue
+            path = row.get("file_path")
+            if not isinstance(path, str) or not path.startswith("/"):
+                continue
+            raw_locale = row.get("iso_639_1")
+            locale = str(raw_locale).strip().lower() if raw_locale else "neutral"
+            try:
+                average = float(row.get("vote_average") or 0.0)
+                votes = int(row.get("vote_count") or 0)
+            except (TypeError, ValueError):
+                average, votes = 0.0, 0
+            if not math.isfinite(average):
+                average = 0.0
+            out.append(
+                V2ArtworkCandidate(
+                    kind=kind,
+                    locator=ArtworkLocator(
+                        provider="tmdb",
+                        url=f"https://image.tmdb.org/t/p/{size}{path}",
+                    ),
+                    locale=locale,
+                    vote_average=average,
+                    vote_count=max(0, min(votes, 2_147_483_647)),
+                )
+            )
+    return tuple(out)
+
+
+async def fetch_v2_metadata(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    tmdb_key: str,
+    media_type: str,
+    locales: tuple[str, ...],
+    *,
+    need_images: bool,
+    need_credits: bool,
+    need_external_ids: bool,
+    need_original_assets: bool,
+    cache_mode: Literal["read_write", "read_only", "off"] = "off",
+) -> V2TMDBMetadata:
+    """Fetch one bounded, multi-locale TMDB payload for v2 enrichment."""
+
+    endpoint = "tv" if media_type in ("tv", "series") else "movie"
+    locale_set = {"null", "en"}
+    for locale in locales:
+        base = str(locale).strip().lower().replace("_", "-").split("-", 1)[0]
+        if base.isalpha() and 2 <= len(base) <= 3:
+            locale_set.add(base)
+    ordered_locales = tuple(sorted(locale_set, key=lambda value: (value != "null", value != "en", value)))
+    flags = (need_images, need_credits, need_external_ids, need_original_assets)
+    cache_key = f"{endpoint}:{tmdb_id}:{','.join(ordered_locales)}:{''.join(str(int(v)) for v in flags)}"
+    if cache_mode != "off":
+        cached = _V2_METADATA_CACHE.get(cache_key)
+        if cached and cached[0] > time.monotonic():
+            _V2_METADATA_CACHE.move_to_end(cache_key)
+            return cached[1]
+        _V2_METADATA_CACHE.pop(cache_key, None)
+
+    append: list[str] = []
+    if need_images:
+        append.append("images")
+    if need_credits:
+        append.append("credits")
+    if need_external_ids:
+        append.append("external_ids")
+    params: dict[str, str] = {"api_key": tmdb_key}
+    if append:
+        params["append_to_response"] = ",".join(append)
+    if need_images:
+        params["include_image_language"] = ",".join(ordered_locales)
+    logger.info(f"External API Call: Requested v2 metadata from TMDB for {tmdb_id}")
+    response = await client.get(
+        f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}",
+        params=params,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    raw_date = data.get("release_date") or data.get("first_air_date") or None
+    if isinstance(raw_date, str):
+        try:
+            _date.fromisoformat(raw_date[:10])
+        except ValueError:
+            raw_date = None
+    else:
+        raw_date = None
+    release_year = None
+    if isinstance(raw_date, str) and len(raw_date) >= 4 and raw_date[:4].isdigit():
+        parsed_year = int(raw_date[:4])
+        release_year = parsed_year if 1870 <= parsed_year <= 9999 else None
+    credits = data.get("credits") if isinstance(data.get("credits"), dict) else {}
+    directors = tuple(
+        str(item.get("name"))[:160]
+        for item in (credits.get("crew") or [])[:100]
+        if isinstance(item, dict) and item.get("job") == "Director" and item.get("name")
+    )[:32]
+    cast = tuple(
+        str(item.get("name"))[:160]
+        for item in (credits.get("cast") or [])[:20]
+        if isinstance(item, dict) and item.get("name")
+    )
+    companies = tuple(
+        str(item.get("name"))[:160]
+        for item in (data.get("production_companies") or [])[:32]
+        if isinstance(item, dict) and item.get("name")
+    )
+    external = data.get("external_ids") if isinstance(data.get("external_ids"), dict) else {}
+    original_language = data.get("original_language")
+    if not (
+        isinstance(original_language, str)
+        and 2 <= len(original_language) <= 8
+        and original_language.isalpha()
+    ):
+        original_language = None
+    original_title = data.get("original_title") or data.get("original_name") or None
+    if not isinstance(original_title, str):
+        original_title = None
+    elif len(original_title) > 512:
+        original_title = original_title[:512]
+    tmdb_status = data.get("status") or None
+    if not isinstance(tmdb_status, str):
+        tmdb_status = None
+    elif len(tmdb_status) > 80:
+        tmdb_status = tmdb_status[:80]
+    imdb_id = external.get("imdb_id") or None
+    if not (
+        isinstance(imdb_id, str)
+        and re.fullmatch(r"tt[0-9]{7,10}", imdb_id)
+    ):
+        imdb_id = None
+    metadata = V2TMDBMetadata(
+        tmdb_id=str(tmdb_id),
+        media_type="series" if endpoint == "tv" else "movie",
+        title=str(
+            data.get("title")
+            or data.get("name")
+            or data.get("original_title")
+            or data.get("original_name")
+            or "Unknown Title"
+        )[:512],
+        genre_ids=tuple(
+            int(item["id"])
+            for item in (data.get("genres") or [])[:32]
+            if isinstance(item, dict) and isinstance(item.get("id"), int)
+        ),
+        release_date=raw_date,
+        release_year=release_year,
+        original_language=original_language,
+        original_title=original_title,
+        runtime=data.get("runtime"),
+        number_of_seasons=data.get("number_of_seasons"),
+        number_of_episodes=data.get("number_of_episodes"),
+        tmdb_status=tmdb_status,
+        vote_count=data.get("vote_count"),
+        next_episode=data.get("next_episode_to_air") or None,
+        last_episode=data.get("last_episode_to_air") or None,
+        seasons=tuple(item for item in (data.get("seasons") or [])[:64] if isinstance(item, dict)),
+        production_companies=companies,
+        directors=directors,
+        cast=cast,
+        imdb_id=imdb_id,
+        candidates=_v2_artwork_candidates(data.get("images") or {}) if need_images else (),
+    )
+    if cache_mode == "read_write":
+        _V2_METADATA_CACHE[cache_key] = (time.monotonic() + _V2_METADATA_CACHE_TTL, metadata)
+        _V2_METADATA_CACHE.move_to_end(cache_key)
+        while len(_V2_METADATA_CACHE) > _V2_METADATA_CACHE_MAX:
+            _V2_METADATA_CACHE.popitem(last=False)
+    return metadata
 
 
 async def fetch_poster_metadata(
@@ -1147,6 +1395,41 @@ async def fetch_logo(
 
 
 _trending_inflight: dict[str, asyncio.Event] = {}
+_v2_trending_cache: dict[str, tuple[float, dict[str, int]]] = {}
+
+
+async def fetch_v2_trending_rank(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    tmdb_key: str,
+    media_type: str = "movie",
+    *,
+    cache_mode: Literal["read_write", "read_only", "off"] = "off",
+) -> int | None:
+    endpoint = "tv" if media_type in ("tv", "series") else "movie"
+    if cache_mode != "off":
+        cached = _v2_trending_cache.get(endpoint)
+        if cached and cached[0] > time.monotonic():
+            return cached[1].get(str(tmdb_id))
+        _v2_trending_cache.pop(endpoint, None)
+
+    async def fetch_page(page: int) -> list[dict]:
+        response = await client.get(
+            f"https://api.themoviedb.org/3/trending/{endpoint}/day",
+            params={"api_key": tmdb_key, "page": page},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("results", []) if isinstance(payload, dict) else []
+
+    pages = await asyncio.gather(*(fetch_page(page) for page in range(1, 6)))
+    rankings: dict[str, int] = {}
+    for item in (item for page in pages for item in page):
+        if isinstance(item, dict) and item.get("id") is not None:
+            rankings.setdefault(str(item["id"]), len(rankings) + 1)
+    if cache_mode == "read_write":
+        _v2_trending_cache[endpoint] = (time.monotonic() + 6 * 3600, rankings)
+    return rankings.get(str(tmdb_id))
 
 async def fetch_trending_rank(
     client: httpx.AsyncClient,
@@ -1556,8 +1839,10 @@ def _compute_movie_status_from_dates(
     digital_date: _date | None,
     physical_date: _date | None,
     tmdb_status: str | None,
+    *,
+    today: _date | None = None,
 ) -> str:
-    today = _date.today()
+    today = today or _date.today()
     has_physical = physical_date is not None and physical_date <= today
     has_digital = digital_date is not None and digital_date <= today
     has_theatrical = theatrical_date is not None and theatrical_date <= today
@@ -1579,6 +1864,87 @@ def _compute_movie_status_from_dates(
         return "Streaming"
     else:
         return "Production"
+
+
+_v2_release_cache: "OrderedDict[str, tuple[float, dict[str, str | None]]]" = OrderedDict()
+_V2_RELEASE_CACHE_MAX = 512
+
+
+async def fetch_v2_release_status(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    tmdb_key: str,
+    media_type: str,
+    tmdb_status: str | None,
+    *,
+    evaluated_at: datetime,
+    cache_mode: Literal["read_write", "read_only", "off"] = "off",
+) -> str | None:
+    """Resolve release status against an explicit date, never ambient today."""
+
+    if media_type in ("tv", "series"):
+        return {
+            "Returning Series": "Airing",
+            "In Production": "Production",
+            "Planned": "Production",
+            "Pilot": "Production",
+            "Ended": "Ended",
+            "Cancelled": "Cancelled",
+            "Canceled": "Cancelled",
+        }.get(tmdb_status or "")
+
+    if tmdb_status in {"In Production", "Post Production", "Planned", "Rumored"}:
+        return "Production"
+    if tmdb_status in {"Cancelled", "Canceled"}:
+        return "Cancelled"
+
+    cache_key = f"movie:{tmdb_id}"
+    raw: dict[str, str | None] | None = None
+    if cache_mode != "off":
+        cached = _v2_release_cache.get(cache_key)
+        if cached and cached[0] > time.monotonic():
+            raw = cached[1]
+            _v2_release_cache.move_to_end(cache_key)
+        else:
+            _v2_release_cache.pop(cache_key, None)
+    if raw is None:
+        response = await client.get(
+            f"https://api.themoviedb.org/3/movie/{tmdb_id}/release_dates",
+            params={"api_key": tmdb_key},
+        )
+        response.raise_for_status()
+        theatrical: _date | None = None
+        digital: _date | None = None
+        physical: _date | None = None
+        for entry in (response.json() or {}).get("results", []):
+            for release in entry.get("release_dates", []):
+                parsed = _parse_tmdb_date(release.get("release_date"))
+                if parsed is None:
+                    continue
+                kind = release.get("type")
+                if kind == 3 and (theatrical is None or parsed < theatrical):
+                    theatrical = parsed
+                elif kind in (4, 6) and (digital is None or parsed > digital):
+                    digital = parsed
+                elif kind == 5 and (physical is None or parsed > physical):
+                    physical = parsed
+        raw = {
+            "theatrical_date": theatrical.isoformat() if theatrical else None,
+            "digital_date": digital.isoformat() if digital else None,
+            "physical_date": physical.isoformat() if physical else None,
+        }
+        if cache_mode == "read_write":
+            _v2_release_cache[cache_key] = (time.monotonic() + 7 * 86400, raw)
+            _v2_release_cache.move_to_end(cache_key)
+            while len(_v2_release_cache) > _V2_RELEASE_CACHE_MAX:
+                _v2_release_cache.popitem(last=False)
+    return _compute_movie_status_from_dates(
+        _parse_tmdb_date(raw.get("theatrical_date")),
+        _parse_tmdb_date(raw.get("digital_date")),
+        _parse_tmdb_date(raw.get("physical_date")),
+        tmdb_status,
+        today=evaluated_at.astimezone(timezone.utc).date(),
+    )
 
 
 async def fetch_movie_release_info(

@@ -29,6 +29,15 @@ BINGECAT_POSTERSPLUS_CALLBACK_SECRET = os.environ.get(
 POSTERSPLUS_V2_NONCE_DB_PATH = os.environ.get(
     "POSTERSPLUS_V2_NONCE_DB_PATH", "/app/cache/postersplus_v2_nonces.db"
 ).strip()
+SOURCE_ART_CACHE_DIR = os.environ.get(
+    "SOURCE_ART_CACHE_DIR", "/app/cache/source_art"
+).strip()
+SOURCE_ART_LEDGER_PATH = os.environ.get(
+    "SOURCE_ART_LEDGER_PATH", "/app/cache/source_art.sqlite"
+).strip()
+POSTERSPLUS_INTEGRATION_STATELESS_METADATA = os.environ.get(
+    "POSTERSPLUS_INTEGRATION_STATELESS_METADATA", "true"
+).strip().lower() not in ("0", "false", "no", "off")
 
 # Quality source selection.
 # QUALITY_SOURCE: "aiostreams" (default) or "scraper".

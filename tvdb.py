@@ -22,6 +22,7 @@ in main.py and is added in later phases.
 import asyncio
 import io
 import logging
+import math
 
 import httpx
 from PIL import Image
@@ -43,6 +44,9 @@ from config import (
     TVDB_ARTWORK_CACHE_DURATION,
     TVDB_NEG_CACHE_DURATION,
     TVDB_TYPES_CACHE_DURATION,
+    TVDB_USE_BACKDROPS,
+    TVDB_USE_LOGOS,
+    TVDB_USE_POSTERS,
     POSTER_WIDTH,
     POSTER_HEIGHT,
 )
@@ -188,14 +192,18 @@ def _classify(slug: str, name: str) -> str | None:
     return None
 
 
-async def _type_map(client: httpx.AsyncClient) -> dict[str, dict[int, str]]:
+async def _type_map(
+    client: httpx.AsyncClient,
+    *,
+    cache_metadata: bool = True,
+) -> dict[str, dict[int, str]]:
     """Return ``{record_type: {type_id: category}}`` for movie/series artworks.
 
     ``category`` is one of 'logos' | 'backgrounds' | 'posters'. Cached long since
     the catalogue is effectively static; classification is keyword-based so a TVDB
     id renumbering can't break us as long as the slug/name still describes the art.
     """
-    cached = get_cached_tvdb_json(_TYPES_CACHE_KEY)
+    cached = get_cached_tvdb_json(_TYPES_CACHE_KEY) if cache_metadata else None
     if cached:
         # JSON keys are strings — restore the inner id keys to ints.
         return {
@@ -211,7 +219,7 @@ async def _type_map(client: httpx.AsyncClient) -> dict[str, dict[int, str]]:
             tid  = t.get("id")
             if rt in out and cat and isinstance(tid, int):
                 out[rt][tid] = cat
-    if out["movie"] or out["series"]:
+    if cache_metadata and (out["movie"] or out["series"]):
         set_cached_tvdb_json(
             _TYPES_CACHE_KEY,
             {rt: {str(k): v for k, v in inner.items()} for rt, inner in out.items()},
@@ -256,6 +264,7 @@ async def resolve_tvdb_id(
     tvdb_id_hint: int | str | None = None,
     imdb_id: str | None = None,
     tmdb_id: str | None = None,
+    cache_metadata: bool = True,
 ) -> int | None:
     """Resolve a TVDB numeric id for a title.
 
@@ -273,9 +282,10 @@ async def resolve_tvdb_id(
 
     want = _record_type(media_type)
     cache_key = f"id:{want}:{imdb_id or ''}:{tmdb_id or ''}"
-    cached = get_cached_tvdb_json(cache_key)
-    if cached is not None:
-        return cached.get("tvdb_id")  # may be None (negative cache)
+    if cache_metadata:
+        cached = get_cached_tvdb_json(cache_key)
+        if cached is not None:
+            return cached.get("tvdb_id")  # may be None (negative cache)
 
     resolved: int | None = None
     async with _get_semaphore():
@@ -300,11 +310,12 @@ async def resolve_tvdb_id(
         logger.info(f"TVDB id resolved: {want} imdb={imdb_id} tmdb={tmdb_id} -> {resolved}")
     else:
         logger.info(f"TVDB no match for {want} imdb={imdb_id} tmdb={tmdb_id}")
-    set_cached_tvdb_json(
-        cache_key,
-        {"tvdb_id": resolved},
-        (TVDB_ARTWORK_CACHE_DURATION if resolved else TVDB_NEG_CACHE_DURATION) * 86400,
-    )
+    if cache_metadata:
+        set_cached_tvdb_json(
+            cache_key,
+            {"tvdb_id": resolved},
+            (TVDB_ARTWORK_CACHE_DURATION if resolved else TVDB_NEG_CACHE_DURATION) * 86400,
+        )
     return resolved
 
 
@@ -313,7 +324,11 @@ async def resolve_tvdb_id(
 # ---------------------------------------------------------------------------
 
 async def fetch_tvdb_artworks(
-    client: httpx.AsyncClient, tvdb_id: int, media_type: str
+    client: httpx.AsyncClient,
+    tvdb_id: int,
+    media_type: str,
+    *,
+    cache_metadata: bool = True,
 ) -> dict[str, list[dict]]:
     """Return ``{'logos': [...], 'backgrounds': [...], 'posters': [...]}``.
 
@@ -327,13 +342,14 @@ async def fetch_tvdb_artworks(
 
     want = _record_type(media_type)
     cache_key = f"art:{want}:{tvdb_id}"
-    cached = get_cached_tvdb_json(cache_key)
-    if cached is not None:
-        return cached
+    if cache_metadata:
+        cached = get_cached_tvdb_json(cache_key)
+        if cached is not None:
+            return cached
 
     out: dict[str, list[dict]] = {"logos": [], "backgrounds": [], "posters": []}
     async with _get_semaphore():
-        type_map = await _type_map(client)
+        type_map = await _type_map(client, cache_metadata=cache_metadata)
         endpoint = "series" if want == "series" else "movies"
         # short=false guarantees the artworks array is included (short=true drops it).
         data = await _authed_get(
@@ -364,12 +380,88 @@ async def fetch_tvdb_artworks(
         f"logos={len(out['logos'])} backgrounds={len(out['backgrounds'])} "
         f"posters={len(out['posters'])}"
     )
-    set_cached_tvdb_json(
-        cache_key,
-        out,
-        (TVDB_ARTWORK_CACHE_DURATION if _has_any else TVDB_NEG_CACHE_DURATION) * 86400,
-    )
+    if cache_metadata:
+        set_cached_tvdb_json(
+            cache_key,
+            out,
+            (TVDB_ARTWORK_CACHE_DURATION if _has_any else TVDB_NEG_CACHE_DURATION) * 86400,
+        )
     return out
+
+
+async def fetch_v2_artwork_candidates(
+    client: httpx.AsyncClient,
+    *,
+    media_type: str,
+    imdb_id: str | None,
+    tmdb_id: str | None,
+    kinds: tuple[str, ...],
+    cache_metadata: bool,
+) -> tuple:
+    """Return locator-only TVDB fallbacks; image bytes use source_art's safe transport."""
+
+    if not tvdb_enabled() or not kinds:
+        return ()
+    enabled_kinds = {
+        kind
+        for kind, enabled in (
+            ("logo", TVDB_USE_LOGOS),
+            ("backdrop", TVDB_USE_BACKDROPS),
+            ("poster", TVDB_USE_POSTERS),
+        )
+        if enabled
+    }
+    kinds = tuple(kind for kind in kinds if kind in enabled_kinds)
+    if not kinds:
+        return ()
+    tvdb_id = await resolve_tvdb_id(
+        client,
+        media_type=media_type,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id,
+        cache_metadata=cache_metadata,
+    )
+    if not tvdb_id:
+        return ()
+    artworks = await fetch_tvdb_artworks(
+        client,
+        tvdb_id,
+        media_type,
+        cache_metadata=cache_metadata,
+    )
+    from integration_contract import ArtworkLocator
+    from tmdb import V2ArtworkCandidate
+
+    category_for = {"logo": "logos", "backdrop": "backgrounds", "poster": "posters"}
+    language_map = {value: key for key, value in _LANG_2_TO_3.items()}
+    out = []
+    for kind in kinds:
+        category = category_for.get(kind)
+        if category is None:
+            continue
+        for item in (artworks.get(category) or [])[:16]:
+            url = item.get("url") if isinstance(item, dict) else None
+            if not isinstance(url, str):
+                continue
+            raw_language = item.get("language")
+            locale = "neutral" if not raw_language else language_map.get(raw_language, str(raw_language).lower())
+            try:
+                locator = ArtworkLocator(provider="tvdb", url=url)
+                score = float(item.get("score") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(score):
+                score = 0.0
+            out.append(
+                V2ArtworkCandidate(
+                    kind=kind,
+                    locator=locator,
+                    locale=locale,
+                    vote_average=score,
+                    vote_count=0,
+                )
+            )
+    return tuple(out)
 
 
 def _select_by_language(items: list[dict], language: str | None) -> dict | None:

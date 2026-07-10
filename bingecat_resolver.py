@@ -367,3 +367,41 @@ async def resolve_poster_identity(
         media_type=normalised_type,
         source="tmdb_external_ids",
     )
+
+
+async def resolve_v2_identity(
+    *,
+    pool: Any | None,
+    client: httpx.AsyncClient,
+    tmdb_key: str | None,
+    imdb_id: object = None,
+    tmdb_id: object = None,
+    media_type: object = None,
+) -> ResolvedIdentity:
+    """Resolve only a missing side of an authenticated canonical identity.
+
+    BingeCat is authoritative for a supplied IMDb+TMDB pair.  Re-resolving an
+    already complete pair would add latency, spend TMDB quota, and could replace
+    a valid historical mapping with a newer provider interpretation.
+    """
+
+    normalised_imdb = normalise_imdb_id(imdb_id)
+    normalised_tmdb = normalise_tmdb_id(tmdb_id)
+    normalised_type = normalise_media_type(media_type)
+    if normalised_type is None:
+        raise IdentityResolutionError(400, "Invalid type")
+    if normalised_imdb is not None and normalised_tmdb is not None:
+        return ResolvedIdentity(
+            imdb_id=normalised_imdb,
+            tmdb_id=normalised_tmdb,
+            media_type=normalised_type,
+            source="authenticated_v2_input",
+        )
+    return await resolve_poster_identity(
+        pool=pool,
+        client=client,
+        tmdb_key=tmdb_key,
+        imdb_id=normalised_imdb,
+        tmdb_id=normalised_tmdb,
+        media_type=normalised_type,
+    )
