@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import threading
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -292,22 +292,38 @@ def test_sqlite_nonce_store_is_atomic_across_workers_and_retains_for_120_seconds
     nonce = uuid4()
     stores = [SQLiteNonceStore(path, clock=lambda: now[0]) for _ in range(8)]
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        accepted = list(
-            executor.map(
-                lambda store: store.record_once("bingecat", nonce, 120),
-                stores,
-            )
+    async def race_workers():
+        return await asyncio.gather(
+            *(store.record_once("bingecat", nonce, 120) for store in stores)
         )
+
+    accepted = asyncio.run(race_workers())
     assert accepted.count(True) == 1
     assert accepted.count(False) == 7
 
     now[0] += 119
-    assert stores[0].record_once("bingecat", nonce, 120) is False
+    assert asyncio.run(stores[0].record_once("bingecat", nonce, 120)) is False
     now[0] += 1
-    assert stores[1].record_once("bingecat", nonce, 120) is False
+    assert asyncio.run(stores[1].record_once("bingecat", nonce, 120)) is False
     now[0] += 1
-    assert stores[1].record_once("bingecat", nonce, 120) is True
+    assert asyncio.run(stores[1].record_once("bingecat", nonce, 120)) is True
+
+
+def test_sqlite_nonce_store_dispatches_blocking_io_off_event_loop(tmp_path):
+    store = SQLiteNonceStore(tmp_path / "service-auth.sqlite", clock=lambda: NOW)
+    event_loop_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    original = store._record_once_sync
+
+    def recording_sync(*args, **kwargs):
+        worker_threads.append(threading.get_ident())
+        return original(*args, **kwargs)
+
+    store._record_once_sync = recording_sync
+    accepted = asyncio.run(store.record_once("bingecat", uuid4(), 120))
+
+    assert accepted is True
+    assert worker_threads and worker_threads[0] != event_loop_thread
 
 
 def test_direction_and_audience_are_bound_into_signature():
@@ -407,6 +423,34 @@ def test_decoded_absolute_path_is_canonicalized_once():
                 "bingecat",
                 "postersplus",
             )
+
+
+def test_verifier_uses_asgi_decoded_path_without_decoding_it_twice():
+    request_id = uuid4()
+    body = b"{}"
+    headers = build_auth_headers(
+        method="POST",
+        path="/v2/%2565nrich",
+        body=body,
+        request_id=request_id,
+        timestamp=NOW,
+        secret=SECRET,
+        caller="bingecat",
+        audience="postersplus",
+    )
+    # ASGI servers decode the raw path once: %25 becomes a literal percent.
+    request = _request("POST", "/v2/%65nrich", headers=headers, body=body)
+    context = asyncio.run(
+        verify_request(
+            request,
+            SECRET,
+            "bingecat",
+            "postersplus",
+            MemoryNonceStore(),
+            now=NOW,
+        )
+    )
+    assert context.path == "/v2/%65nrich"
 
 
 def test_body_limit_rejects_header_and_stream_overflow():
@@ -526,6 +570,35 @@ def test_media_identity_and_required_contract_discriminators_are_strict():
     request = EnrichmentRequest.model_validate(_enrichment_payload())
     assert request.model_dump()["schema"] == CONTRACT_SCHEMA
     assert "schema_id" not in request.model_dump()
+
+
+def test_scalar_types_are_strict_but_json_wire_dates_and_arrays_remain_valid():
+    with pytest.raises(ValidationError):
+        MediaIdentity(media_type="movie", tmdb_id="11")
+    with pytest.raises(ValidationError):
+        _rating(vote_count="1000")
+
+    payload = _enrichment_payload()
+    payload["known_ratings"][0]["observed_at"] = "2026-07-10T00:00:00Z"
+    payload["known_ratings"][0]["checked_at"] = "2026-07-10T00:00:00Z"
+    payload["known_ratings"][0]["expires_at"] = "2026-07-17T00:00:00Z"
+    parsed = EnrichmentRequest.model_validate_json(json.dumps(payload, default=str))
+    assert parsed.locales == ("en", "nl")
+    assert parsed.known_ratings[0].observed_at.tzinfo is not None
+
+
+def test_provider_rating_accepts_normalized_only_and_enforces_raw_pair_and_time_order():
+    normalized_only = _rating(score=None, scale=None)
+    assert normalized_only.normalized_score == 84
+    with pytest.raises(ValidationError, match="score and scale"):
+        _rating(score=4.2, scale=None)
+    with pytest.raises(ValidationError, match="observed_at"):
+        _rating(
+            observed_at=datetime(2026, 7, 11, tzinfo=timezone.utc),
+            checked_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        )
+    with pytest.raises(ValidationError, match="expires_at"):
+        _rating(expires_at=datetime(2026, 7, 10, tzinfo=timezone.utc))
 
 
 def test_dtos_bound_strings_lists_and_nested_json():
@@ -660,8 +733,12 @@ def test_config_reads_directional_secrets_from_environment(monkeypatch):
     import importlib
     import config
 
-    monkeypatch.setenv("POSTERSPLUS_BINGECAT_REQUEST_SECRET", " request-secret ")
-    monkeypatch.setenv("BINGECAT_POSTERSPLUS_CALLBACK_SECRET", " callback-secret ")
-    reloaded = importlib.reload(config)
-    assert reloaded.POSTERSPLUS_BINGECAT_REQUEST_SECRET == "request-secret"
-    assert reloaded.BINGECAT_POSTERSPLUS_CALLBACK_SECRET == "callback-secret"
+    with monkeypatch.context() as scoped:
+        scoped.setenv("POSTERSPLUS_BINGECAT_REQUEST_SECRET", " request-secret ")
+        scoped.setenv("BINGECAT_POSTERSPLUS_CALLBACK_SECRET", " callback-secret ")
+        scoped.setenv("POSTERSPLUS_V2_NONCE_DB_PATH", "/tmp/v2-nonces.sqlite")
+        reloaded = importlib.reload(config)
+        assert reloaded.POSTERSPLUS_BINGECAT_REQUEST_SECRET == "request-secret"
+        assert reloaded.BINGECAT_POSTERSPLUS_CALLBACK_SECRET == "callback-secret"
+        assert reloaded.POSTERSPLUS_V2_NONCE_DB_PATH == "/tmp/v2-nonces.sqlite"
+    importlib.reload(config)

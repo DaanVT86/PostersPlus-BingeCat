@@ -157,7 +157,15 @@ class SQLiteNonceStore:
                 """
             )
 
-    def record_once(self, caller: str, request_id: UUID, ttl_seconds: int) -> bool:
+    async def record_once(self, caller: str, request_id: UUID, ttl_seconds: int) -> bool:
+        return await asyncio.to_thread(
+            self._record_once_sync,
+            caller,
+            request_id,
+            ttl_seconds,
+        )
+
+    def _record_once_sync(self, caller: str, request_id: UUID, ttl_seconds: int) -> bool:
         if ttl_seconds < NONCE_TTL_SECONDS:
             raise ValueError(f"nonce TTL must be at least {NONCE_TTL_SECONDS} seconds")
         _validate_token(caller, "caller")
@@ -215,13 +223,17 @@ def _decoded_absolute_path(path: str) -> str:
         decoded = unquote(path, encoding="utf-8", errors="strict")
     except (UnicodeDecodeError, ValueError) as exc:
         raise ValueError("path must be valid UTF-8") from exc
-    if not decoded.startswith("/") or decoded.startswith("//"):
+    return _validate_decoded_absolute_path(decoded)
+
+
+def _validate_decoded_absolute_path(path: str) -> str:
+    if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
         raise ValueError("path must be a decoded absolute path")
-    if "?" in decoded or "#" in decoded:
+    if "?" in path or "#" in path:
         raise ValueError("decoded path contains a query or fragment delimiter")
-    if any(character in decoded for character in ("\r", "\n", "\x00")):
+    if any(character in path for character in ("\r", "\n", "\x00")):
         raise ValueError("path contains forbidden control characters")
-    return decoded
+    return path
 
 
 def canonical_request_bytes(
@@ -242,6 +254,31 @@ def canonical_request_bytes(
     if not _METHOD.fullmatch(canonical_method):
         raise ValueError("invalid HTTP method")
     decoded_path = _decoded_absolute_path(path)
+    return _canonical_request_bytes_for_decoded_path(
+        method=canonical_method,
+        path=decoded_path,
+        body=body,
+        request_id=request_id,
+        timestamp=timestamp,
+        caller=caller,
+        audience=audience,
+    )
+
+
+def _canonical_request_bytes_for_decoded_path(
+    *,
+    method: str,
+    path: str,
+    body: bytes,
+    request_id: UUID,
+    timestamp: int,
+    caller: str,
+    audience: str,
+) -> bytes:
+    canonical_method = method.upper() if isinstance(method, str) else ""
+    if not _METHOD.fullmatch(canonical_method):
+        raise ValueError("invalid HTTP method")
+    decoded_path = _validate_decoded_absolute_path(path)
     nonce = _validate_request_id(request_id)
     unix_timestamp = _validate_timestamp(timestamp)
     canonical_caller = _validate_token(caller, "caller")
@@ -357,16 +394,12 @@ async def _bounded_body(request: Request) -> bytes:
 
 
 def _request_path(request: Request) -> str:
-    raw_path = request.scope.get("raw_path")
-    if isinstance(raw_path, bytes):
-        try:
-            path = raw_path.decode("ascii")
-        except UnicodeDecodeError as exc:
-            raise AuthError() from exc
-    else:
-        path = request.scope.get("path", "")
+    # ASGI defines scope['path'] as the already-decoded Unicode path.  Decoding
+    # raw_path again would collapse a literal percent escape and sign a
+    # different resource than the router sees.
+    path = request.scope.get("path", "")
     try:
-        return _decoded_absolute_path(path)
+        return _validate_decoded_absolute_path(path)
     except ValueError as exc:
         raise AuthError() from exc
 
@@ -423,16 +456,19 @@ async def verify_request(
     actual_digest = hashlib.sha256(body).hexdigest()
     path = _request_path(request)
     try:
-        expected_signature = sign_request(
-            request.method,
-            path,
-            body,
-            request_id,
-            timestamp,
+        expected_signature = hmac.new(
             secret,
-            expected_caller,
-            expected_audience,
-        )
+            _canonical_request_bytes_for_decoded_path(
+                method=request.method,
+                path=path,
+                body=body,
+                request_id=request_id,
+                timestamp=timestamp,
+                caller=expected_caller,
+                audience=expected_audience,
+            ),
+            hashlib.sha256,
+        ).hexdigest()
     except (TypeError, ValueError) as exc:
         raise AuthError() from exc
 

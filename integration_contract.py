@@ -18,6 +18,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StringConstraints,
     field_validator,
     model_validator,
@@ -164,7 +165,7 @@ class ContractDTO(StrictModel):
 
 class MediaIdentity(StrictModel):
     media_type: MediaType
-    tmdb_id: int | None = Field(default=None, ge=1, le=2_147_483_647)
+    tmdb_id: Annotated[int, Field(strict=True, ge=1, le=2_147_483_647)] | None = None
     imdb_id: Annotated[
         str,
         StringConstraints(pattern=r"^tt[0-9]{7,10}$", max_length=12),
@@ -183,21 +184,41 @@ class ProviderRating(StrictModel):
         StringConstraints(min_length=1, max_length=40, pattern=r"^[a-z0-9][a-z0-9._-]*$"),
     ]
     metric: ShortToken = "score"
-    score: float = Field(ge=0, le=1_000_000, allow_inf_nan=False)
-    scale: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
-    normalized_score: float = Field(ge=0, le=100, allow_inf_nan=False)
-    vote_count: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    score: Annotated[
+        float,
+        Field(strict=True, ge=0, le=1_000_000, allow_inf_nan=False),
+    ] | None = None
+    scale: Annotated[
+        float,
+        Field(strict=True, gt=0, le=1_000_000, allow_inf_nan=False),
+    ] | None = None
+    normalized_score: Annotated[
+        float,
+        Field(strict=True, ge=0, le=100, allow_inf_nan=False),
+    ]
+    vote_count: Annotated[
+        int,
+        Field(strict=True, ge=0, le=9_223_372_036_854_775_807),
+    ] | None = None
     source: ShortToken
     observed_at: AwareDatetime
     checked_at: AwareDatetime
-    expires_at: AwareDatetime | None = None
+    expires_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def _raw_pair_and_time_order(self):
+        if (self.score is None) != (self.scale is None):
+            raise ValueError("score and scale must either both be present or both be omitted")
+        if not self.observed_at <= self.checked_at < self.expires_at:
+            raise ValueError("timestamps must satisfy observed_at <= checked_at < expires_at")
+        return self
 
 
 class NormalizedFacts(StrictModel):
     """Render-ready provider facts; no unbounded raw provider payloads."""
 
     genre: Annotated[str, StringConstraints(max_length=120)] | None = None
-    release_year: int | None = Field(default=None, ge=1870, le=9999)
+    release_year: Annotated[int, Field(strict=True, ge=1870, le=9999)] | None = None
     release_date: date | None = None
     original_language: Annotated[
         str,
@@ -205,14 +226,14 @@ class NormalizedFacts(StrictModel):
     ] | None = None
     keywords: tuple[ShortToken, ...] | None = Field(default=None, max_length=64)
     certification: Annotated[str, StringConstraints(min_length=1, max_length=32)] | None = None
-    age_rating: int | None = Field(default=None, ge=0, le=21)
+    age_rating: Annotated[int, Field(strict=True, ge=0, le=21)] | None = None
     award_wins: tuple[Label, ...] | None = Field(default=None, max_length=32)
     award_nominations: tuple[Label, ...] | None = Field(default=None, max_length=32)
     festival_label: Label | None = None
     matched_studios: tuple[Label, ...] | None = Field(default=None, max_length=32)
     matched_directors: tuple[Label, ...] | None = Field(default=None, max_length=32)
     matched_cast: tuple[Label, ...] | None = Field(default=None, max_length=64)
-    trending_rank: int | None = Field(default=None, ge=1, le=1_000_000)
+    trending_rank: Annotated[int, Field(strict=True, ge=1, le=1_000_000)] | None = None
     release_status: Literal[
         "cinema",
         "streaming",
@@ -223,19 +244,19 @@ class NormalizedFacts(StrictModel):
         "cancelled",
         "airing",
     ] | None = None
-    is_short_film: bool | None = None
-    is_mini_series: bool | None = None
-    is_binge_ready: bool | None = None
-    is_new_release: bool | None = None
-    is_digital_release: bool | None = None
-    is_premiere: bool | None = None
-    is_just_added: bool | None = None
-    is_new_season: bool | None = None
-    is_returning: bool | None = None
-    is_season_finale: bool | None = None
-    is_cult: bool | None = None
-    is_true_story: bool | None = None
-    is_metacritic_must_see: bool | None = None
+    is_short_film: StrictBool | None = None
+    is_mini_series: StrictBool | None = None
+    is_binge_ready: StrictBool | None = None
+    is_new_release: StrictBool | None = None
+    is_digital_release: StrictBool | None = None
+    is_premiere: StrictBool | None = None
+    is_just_added: StrictBool | None = None
+    is_new_season: StrictBool | None = None
+    is_returning: StrictBool | None = None
+    is_season_finale: StrictBool | None = None
+    is_cult: StrictBool | None = None
+    is_true_story: StrictBool | None = None
+    is_metacritic_must_see: StrictBool | None = None
 
 
 class ArtworkLocator(StrictModel):
@@ -280,12 +301,12 @@ class SourceArtReference(StrictModel):
     ]
     kind: Literal["poster", "backdrop", "logo"]
     sha256: Sha256Hex
-    byte_size: int = Field(ge=1, le=25_000_000)
+    byte_size: Annotated[int, Field(strict=True, ge=1, le=25_000_000)]
     mime: Literal["image/jpeg", "image/png", "image/webp"]
-    recipe_version: int = Field(ge=1, le=65_535)
+    recipe_version: Annotated[int, Field(strict=True, ge=1, le=65_535)]
     locator: ArtworkLocator | None = None
     locale: SupportedLocale | Literal["neutral"] | None = None
-    reconstructable: bool
+    reconstructable: StrictBool
     observed_at: AwareDatetime
     checked_at: AwareDatetime
     expires_at: AwareDatetime
@@ -354,7 +375,7 @@ class EnrichmentResult(ContractDTO):
     facts: NormalizedFacts = Field(default_factory=NormalizedFacts)
     provider_statuses: tuple[ProviderResultStatus, ...] = Field(default=(), max_length=32)
     source_art: tuple[SourceArtReference, ...] = Field(default=(), max_length=24)
-    partial: bool = False
+    partial: StrictBool = False
     retry_at: AwareDatetime | None = None
 
     @field_validator("titles_by_locale")
@@ -411,7 +432,7 @@ class RenderResultMetadata(ContractDTO):
     config_sha256: Sha256Hex
     snapshot_sha256: Sha256Hex
     content_type: Literal["image/webp"] = "image/webp"
-    byte_size: int = Field(ge=1, le=25_000_000)
+    byte_size: Annotated[int, Field(strict=True, ge=1, le=25_000_000)]
 
 
 __all__ = [

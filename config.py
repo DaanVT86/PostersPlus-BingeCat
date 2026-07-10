@@ -26,6 +26,9 @@ POSTERSPLUS_BINGECAT_REQUEST_SECRET = os.environ.get(
 BINGECAT_POSTERSPLUS_CALLBACK_SECRET = os.environ.get(
     "BINGECAT_POSTERSPLUS_CALLBACK_SECRET", ""
 ).strip()
+POSTERSPLUS_V2_NONCE_DB_PATH = os.environ.get(
+    "POSTERSPLUS_V2_NONCE_DB_PATH", "/app/cache/postersplus_v2_nonces.db"
+).strip()
 
 # Quality source selection.
 # QUALITY_SOURCE: "aiostreams" (default) or "scraper".
