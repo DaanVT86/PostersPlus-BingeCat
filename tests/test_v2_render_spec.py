@@ -118,6 +118,25 @@ def test_requirements_are_gated_by_visible_features():
     assert compile_requirements(hidden).quality is False
 
 
+def test_requirements_distinguish_keyword_and_age_certification_facts():
+    spec = canonicalize_config(
+        {
+            "rating_display_mode": 0,
+            "badge_display_mode": 3,
+            "sash_priority": "cult,true_story,metacritic",
+            "use_original_art": True,
+        }
+    )
+
+    requirements = compile_requirements(spec)
+
+    assert requirements.ratings is False
+    assert requirements.keywords is True
+    assert requirements.certification is True
+    assert requirements.awards is False
+    assert requirements.quality is False
+
+
 def test_custom_configs_reject_out_of_scope_quality_badges():
     with pytest.raises(ValueError, match="badge_display_mode"):
         canonicalize_config({"badge_display_mode": 5})

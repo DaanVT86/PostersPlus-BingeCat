@@ -136,6 +136,8 @@ class CanonicalRenderSpec:
 class DataRequirements:
     ratings: bool
     awards: bool
+    keywords: bool
+    certification: bool
     trending: bool
     lifecycle: bool
     release: bool
@@ -344,6 +346,8 @@ def compile_requirements(spec: CanonicalRenderSpec) -> DataRequirements:
     return DataRequirements(
         ratings=ratings,
         awards=sash_visible and bool(slots & {"wins", "gg_wins", "festival", "pic_noms", "gg_noms"}),
+        keywords=sash_visible and bool(slots & {"cult", "true_story", "metacritic"}),
+        certification=spec.badge_display_mode == 3,
         trending=sash_visible and bool(slots & {"trending", "trending_broad"}),
         lifecycle=sash_visible and bool(slots & {"new_season", "returning", "premiere", "just_added", "season_finale", "cinema", "streaming", "physical", "production", "ended", "cancelled", "airing"}),
         release=sash_visible and bool(slots & {"new_release", "cinema", "streaming", "physical"}),
