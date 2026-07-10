@@ -75,21 +75,21 @@ assert spec.sha256() == hashlib.sha256(spec.canonical_json().encode()).hexdigest
 
 **Files:**
 - Create: `source_art.py`, `v2_enrich.py`
-- Modify: `tmdb.py`, `tvdb.py`, `bingecat_resolver.py`, `main.py`
+- Modify: `ratings.py`, `tmdb.py`, `tvdb.py`, `bingecat_resolver.py`, `main.py`
 - Test: `tests/test_v2_enrich_art.py`
 
 **Interfaces:**
-- `source_art.normalize_and_store(kind: Literal["poster", "backdrop", "logo"], raw: BinaryIO, recipe_version: str) -> SourceDerivative`.
+- `source_art.normalize_and_store(kind: Literal["poster", "backdrop", "logo"], raw: BinaryIO, recipe_version: int) -> SourceDerivative`.
 - `source_art.fetch_derivative(locator: AllowlistedLocator) -> SourceDerivative` (SSRF-safe and digest-checked).
 - `v2_enrich.enrich(request: EnrichmentRequest, now: datetime) -> EnrichmentResult`.
 - FastAPI handler `POST /v2/enrich` in `main.py` (authenticated, bounded partial result with retry/expiry metadata).
 
-- [ ] **Step 1: Write failing tests** for requirement-gated provider calls, trusted-fact merging, frozen lifecycle booleans, partial/missing statuses, derivative dimensions/MIME/hash, temporary raw deletion, source-digest mismatch, private/link-local DNS, redirect/size/pixel/MIME limits, and stateless metadata persistence.
+- [ ] **Step 1: Write failing tests** for requirement-gated provider calls, trusted-fact and known-source-art reuse, preserved rating scale/vote counts, frozen lifecycle booleans, partial/missing statuses, derivative dimensions/MIME/hash, temporary raw deletion, source-digest mismatch, private/link-local DNS, redirect/size/pixel/MIME limits, and stateless metadata persistence.
 - [ ] **Step 2: Run** `pytest tests/test_v2_enrich_art.py -q` (expected failures).
-- [ ] **Step 3: Implement** normalized derivative ledger (locator, hash, bytes, timestamps, pin/reconstructability), allowlisted fetch validation, and enrichment that calls only missing/expired requirements and omits raw payloads. Respect `POSTERSPLUS_INTEGRATION_STATELESS_METADATA`.
+- [ ] **Step 3: Implement** normalized derivative ledger (locator, hash, bytes, timestamps, pin/reconstructability), allowlisted fetch validation, and enrichment that calls only missing/expired requirements and omits raw payloads. Refactor `ratings.py` behind a detail adapter that retains provider score/scale/vote metadata while preserving the legacy dictionary projection. Reuse bounded `known_source_art` until its explicit expiry instead of resolving artwork on every unrelated fact refresh. Respect `POSTERSPLUS_INTEGRATION_STATELESS_METADATA`.
 - [ ] **Step 4: Run** the targeted test and require PASS.
 
-- [ ] **Step 5: Commit** — `git add source_art.py v2_enrich.py tmdb.py tvdb.py bingecat_resolver.py main.py tests/test_v2_enrich_art.py && git commit -m "feat: enrich deterministic PostersPlus inputs"`.
+- [ ] **Step 5: Commit** — `git add source_art.py v2_enrich.py ratings.py tmdb.py tvdb.py bingecat_resolver.py main.py tests/test_v2_enrich_art.py && git commit -m "feat: enrich deterministic PostersPlus inputs"`.
 
 ### Task 4: Pure render endpoint and deterministic WebP
 
