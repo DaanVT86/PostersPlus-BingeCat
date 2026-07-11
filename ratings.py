@@ -25,6 +25,7 @@ from config import (
     SCORE_GLOW_ALPHA,
     RATING_MIN_VOTES,
 )
+from integration_contract import DB_INTEGER_MAX
 
 
 _RATING_VOTE_KEYS = ("vote_count", "votes", "count", "rating_count", "ratings_count")
@@ -198,7 +199,10 @@ async def fetch_rating_details(
         # and last-provider-wins order) for legacy /poster callers.  The v2
         # contract below receives a separate bounded/sanitized representation.
         legacy_ratings.append((source, value))
-        if vote_count is not None and not 0 <= vote_count <= 9_223_372_036_854_775_807:
+        # The v2 boundary persists into BingeCat's signed 32-bit DB column.
+        # Reject oversized provider evidence before constructing the wire DTO;
+        # the legacy projection remains untouched above.
+        if vote_count is not None and not 0 <= vote_count <= DB_INTEGER_MAX:
             continue
         if source in seen_sources:
             continue

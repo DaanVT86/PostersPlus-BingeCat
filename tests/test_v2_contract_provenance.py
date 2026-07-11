@@ -14,6 +14,7 @@ from integration_contract import (
     FactProvenance,
     NormalizedFacts,
     NormalizedFactsEnvelope,
+    ProviderRating,
     SourceArtReference,
 )
 
@@ -214,6 +215,56 @@ def test_enrichment_request_fails_closed_for_unprovenanced_known_facts() -> None
     assert request.known_facts.values.genre == "Sci-Fi"
     with pytest.raises((TypeError, ValidationError)):
         request.known_facts.provenance[0].fields += ("release_year",)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ("mdblist:imdb", "imdb:title_metrics", "tmdb:volatile"),
+)
+def test_rating_source_accepts_bounded_namespaced_evidence(source: str) -> None:
+    rating = ProviderRating(
+        provider="imdb",
+        metric="score",
+        score=99_999.999,
+        scale=99_999.999,
+        normalized_score=100.0,
+        vote_count=2_147_483_647,
+        source=source,
+        observed_at=NOW - timedelta(hours=2),
+        checked_at=NOW - timedelta(hours=1),
+        expires_at=NOW + timedelta(days=7),
+    )
+    assert rating.source == source
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("score", 100_000.0),
+        ("scale", 100_000.0),
+        ("vote_count", 2_147_483_648),
+        ("source", "mdblist/imdb"),
+    ),
+)
+def test_rating_contract_rejects_values_beyond_bingecat_storage(
+    field: str,
+    value: object,
+) -> None:
+    payload = {
+        "provider": "imdb",
+        "metric": "score",
+        "score": 8.7,
+        "scale": 10.0,
+        "normalized_score": 87.0,
+        "vote_count": 2_000_000,
+        "source": "mdblist:imdb",
+        "observed_at": NOW - timedelta(hours=2),
+        "checked_at": NOW - timedelta(hours=1),
+        "expires_at": NOW + timedelta(days=7),
+    }
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        ProviderRating.model_validate(payload)
 
 
 def test_shared_provenance_fixture_pins_canonical_wire_bytes() -> None:

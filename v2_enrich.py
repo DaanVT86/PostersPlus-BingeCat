@@ -497,9 +497,53 @@ def _missing_mdblist_fields(
     required_fact_fields: frozenset[str],
     facts: dict,
     ratings: tuple,
+    *,
+    specs: tuple[CanonicalRenderSpec, ...],
+    media_type: str,
 ) -> tuple[str, ...]:
     missing: list[str] = []
-    if requirements.ratings and not ratings:
+    required_rating_providers: set[str] = set()
+    if requirements.ratings:
+        import config
+
+        is_series = media_type in {"series", "tv"}
+        defaults = config.TV_WEIGHTS if is_series else config.MOVIE_WEIGHTS
+        for spec in specs:
+            if not compile_requirements(spec).ratings:
+                continue
+            configured = spec.tv_weights if is_series else spec.movie_weights
+            weights = dict(configured or defaults)
+            positively_weighted = {
+                provider for provider, weight in weights.items() if weight > 0
+            }
+            if positively_weighted:
+                score_providers = positively_weighted
+            elif spec.fallback_to_imdb:
+                score_providers = {"imdb"}
+            else:
+                score_providers = set()
+            required_rating_providers.update(score_providers)
+            displays_metacritic = spec.rating_display_mode == 5 or (
+                bool(score_providers)
+                and (
+                    (
+                        spec.rating_display_mode == 3
+                        and spec.minimalist_append_mode == 3
+                    )
+                    or (
+                        spec.rating_display_mode == 4
+                        and spec.bar_append == "second_rating"
+                    )
+                )
+            )
+            if displays_metacritic:
+                required_rating_providers.add("metacritic")
+    available_rating_providers = {
+        rating.provider
+        for rating in ratings
+        if getattr(rating, "metric", None) == "score"
+    }
+    if required_rating_providers - available_rating_providers:
         missing.append("ratings")
     missing.extend(
         sorted((required_fact_fields & _MDBLIST_FACT_FIELDS) - facts.keys())
@@ -631,7 +675,12 @@ async def enrich(
     source_art = _dedupe_known_source_art(request.known_source_art, evaluated_at)
 
     mdblist_missing = _missing_mdblist_fields(
-        requirements, required_fact_fields, facts, ratings
+        requirements,
+        required_fact_fields,
+        facts,
+        ratings,
+        specs=specs,
+        media_type=provider_media_type,
     )
     if mdblist_missing and runtime.mdblist_key and imdb_id is None:
         resolved = await _maybe_await(
@@ -750,7 +799,12 @@ async def enrich(
                         expires_at=expires,
                     )
                     missing_fields = _missing_mdblist_fields(
-                        requirements, required_fact_fields, facts, ratings
+                        requirements,
+                        required_fact_fields,
+                        facts,
+                        ratings,
+                        specs=specs,
+                        media_type=provider_media_type,
                     )
                     statuses.append(
                         ProviderResultStatus(

@@ -28,6 +28,8 @@ from pydantic import (
 CONTRACT_SCHEMA = "bingecat_postersplus_v2"
 CONTRACT_VERSION = 1
 MAX_JSON_BODY_BYTES = 256 * 1024
+DB_INTEGER_MAX = 2_147_483_647
+DB_NUMERIC_8_3_MAX = 99_999.999
 
 SupportedLocale = Literal["en", "pt", "nl", "de", "es"]
 MediaType = Literal["movie", "series"]
@@ -42,6 +44,14 @@ Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 ShortToken = Annotated[
     str,
     StringConstraints(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9._-]*$"),
+]
+SourceToken = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[a-z0-9][a-z0-9._:-]*$",
+    ),
 ]
 Title = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 Label = Annotated[str, StringConstraints(min_length=1, max_length=160)]
@@ -227,11 +237,11 @@ class ProviderRating(StrictModel):
     metric: ShortToken = "score"
     score: Annotated[
         float,
-        Field(strict=True, ge=0, le=1_000_000, allow_inf_nan=False),
+        Field(strict=True, ge=0, le=DB_NUMERIC_8_3_MAX, allow_inf_nan=False),
     ] | None = None
     scale: Annotated[
         float,
-        Field(strict=True, gt=0, le=1_000_000, allow_inf_nan=False),
+        Field(strict=True, gt=0, le=DB_NUMERIC_8_3_MAX, allow_inf_nan=False),
     ] | None = None
     normalized_score: Annotated[
         float,
@@ -239,9 +249,9 @@ class ProviderRating(StrictModel):
     ]
     vote_count: Annotated[
         int,
-        Field(strict=True, ge=0, le=9_223_372_036_854_775_807),
+        Field(strict=True, ge=0, le=DB_INTEGER_MAX),
     ] | None = None
-    source: ShortToken
+    source: SourceToken
     observed_at: AwareDatetime
     checked_at: AwareDatetime
     expires_at: AwareDatetime

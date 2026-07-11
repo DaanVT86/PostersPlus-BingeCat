@@ -33,6 +33,7 @@ from integration_contract import (
     RenderInputBundle,
     SourceArtReference,
 )
+from preset_registry import get_preset
 from ratings import RatingDetail, RatingFetchDetails, fetch_rating, fetch_rating_details
 from render_spec import canonicalize_config
 from service_auth import MemoryNonceStore, build_auth_headers
@@ -144,13 +145,19 @@ def _installed_known_art(store: SourceArtStore) -> SourceArtReference:
     )
 
 
-def _rating(*, expires_at: datetime | None = None) -> ProviderRating:
+def _rating(
+    *,
+    provider: str = "letterboxd",
+    normalized_score: float = 84.0,
+    expires_at: datetime | None = None,
+) -> ProviderRating:
+    scale = 5.0 if provider == "letterboxd" else 10.0
     return ProviderRating(
-        provider="letterboxd",
+        provider=provider,
         metric="score",
-        score=4.2,
-        scale=5.0,
-        normalized_score=84.0,
+        score=normalized_score * scale / 100.0,
+        scale=scale,
+        normalized_score=normalized_score,
         vote_count=1234,
         source="mdblist",
         observed_at=NOW - timedelta(hours=1),
@@ -167,6 +174,7 @@ def _request(
     known_source_art=None,
     tmdb_id=11,
     imdb_id="tt0133093",
+    media_type="movie",
 ) -> EnrichmentRequest:
     fact_values = known_facts or {}
     fact_envelope = (
@@ -192,7 +200,7 @@ def _request(
             "schema": CONTRACT_SCHEMA,
             "version": CONTRACT_VERSION,
             "media": {
-                "media_type": "movie",
+                "media_type": media_type,
                 "tmdb_id": tmdb_id,
                 "imdb_id": imdb_id,
             },
@@ -229,6 +237,22 @@ def _all_fact_config() -> dict:
         "use_original_art": True,
         "textless": True,
     }
+
+
+def _preset_rating_only_config(preset_ref: str) -> dict:
+    config = json.loads(get_preset(preset_ref).config.canonical_json())
+    config.update(
+        show_award_sash=False,
+        sash_mode="hidden",
+        hide_genre=True,
+        use_original_art=True,
+        textless=True,
+    )
+    return json.loads(canonicalize_config(config).canonical_json())
+
+
+def _minimalist_rating_only_config() -> dict:
+    return _preset_rating_only_config("minimalist@1")
 
 
 def _tmdb_metadata(*candidates: V2ArtworkCandidate) -> V2TMDBMetadata:
@@ -307,6 +331,7 @@ def test_rating_details_preserve_scale_votes_and_legacy_projection(monkeypatch):
                     {"source": "imdb", "value": 8.7, "vote_count": 2_000_000},
                     {"source": "imdb", "value": -1, "votes": 1_000},
                     {"source": "imdb", "value": 9, "votes": 10**30},
+                    {"source": "trakt", "value": 80, "votes": 2_147_483_648},
                     None,
                 ],
             }
@@ -562,7 +587,13 @@ def test_year_render_requirement_fetches_tmdb_once_and_reuses_known_year():
     }
     result = asyncio.run(
         enrich(
-            _request(year_config, known_ratings=(_rating(),)),
+            _request(
+                year_config,
+                known_ratings=(
+                    _rating(),
+                    _rating(provider="tomatoes", normalized_score=82.0),
+                ),
+            ),
             NOW,
             runtime=_runtime(hooks),
         )
@@ -576,7 +607,10 @@ def test_year_render_requirement_fetches_tmdb_once_and_reuses_known_year():
         enrich(
             _request(
                 year_config,
-                known_ratings=(_rating(),),
+                known_ratings=(
+                    _rating(),
+                    _rating(provider="tomatoes", normalized_score=82.0),
+                ),
                 known_facts={"release_year": 1999, "genre": "Sci-Fi"},
             ),
             NOW,
@@ -822,6 +856,213 @@ def test_mdblist_fact_refresh_merges_instead_of_dropping_fresh_known_ratings():
         )
     )
     assert [item.provider for item in result.ratings] == ["imdb", "letterboxd"]
+
+
+def test_minimalist_movie_imdb_only_fetches_positive_weight_providers():
+    calls = Counter()
+
+    async def ratings(*_args, **_kwargs):
+        calls["mdblist"] += 1
+        return RatingFetchDetails(
+            ratings=(
+                RatingDetail("letterboxd", 4.2, 5.0, 84.0, 1_234),
+                RatingDetail("trakt", 81.0, 100.0, 81.0, 5_678),
+                RatingDetail("metacritic", 74.0, 100.0, 74.0, 2_345),
+            ),
+            genre="Unknown",
+            release_date=None,
+            keywords=(),
+            age_rating=None,
+        )
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("unneeded provider")
+
+    hooks = ProviderHooks(
+        resolve_identity=forbidden,
+        fetch_ratings=ratings,
+        fetch_tmdb=forbidden,
+        fetch_trending=forbidden,
+        fetch_release=forbidden,
+        fetch_tvdb=forbidden,
+        materialize_art=forbidden,
+    )
+    result = asyncio.run(
+        enrich(
+            _request(
+                _minimalist_rating_only_config(),
+                known_ratings=(
+                    _rating(provider="imdb", normalized_score=87.0),
+                ),
+            ),
+            NOW,
+            runtime=_runtime(hooks),
+        )
+    )
+    assert calls == Counter({"mdblist": 1})
+    assert {item.provider for item in result.ratings} == {
+        "imdb",
+        "letterboxd",
+        "metacritic",
+        "trakt",
+    }
+    status = next(item for item in result.provider_statuses if item.provider == "mdblist")
+    assert status.status == "complete"
+
+
+@pytest.mark.parametrize(
+    ("media_type", "providers"),
+    (
+        ("movie", ("letterboxd", "trakt", "metacritic")),
+        ("series", ("trakt", "tomatoes", "metacritic")),
+    ),
+)
+def test_minimalist_complete_weighted_provider_set_skips_mdblist(
+    media_type: str,
+    providers: tuple[str, ...],
+):
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("complete weighted ratings must prevent provider calls")
+
+    result = asyncio.run(
+        enrich(
+            _request(
+                _minimalist_rating_only_config(),
+                known_ratings=tuple(
+                    _rating(provider=provider, normalized_score=80.0 + index)
+                    for index, provider in enumerate(providers)
+                ),
+                media_type=media_type,
+            ),
+            NOW,
+            runtime=_runtime(ProviderHooks.all(forbidden)),
+        )
+    )
+    assert {item.provider for item in result.ratings} == set(providers)
+    assert result.provider_statuses == ()
+
+
+@pytest.mark.parametrize("preset_ref", ("clean-notch@1", "minimalist@1"))
+def test_separately_displayed_metacritic_is_required_at_zero_weight(preset_ref: str):
+    calls = Counter()
+
+    async def ratings(*_args, **_kwargs):
+        calls["mdblist"] += 1
+        return RatingFetchDetails(
+            ratings=(RatingDetail("metacritic", 74.0, 100.0, 74.0, 2_345),),
+            genre="Unknown",
+            release_date=None,
+            keywords=(),
+            age_rating=None,
+        )
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("unneeded provider")
+
+    hooks = ProviderHooks(
+        resolve_identity=forbidden,
+        fetch_ratings=ratings,
+        fetch_tmdb=forbidden,
+        fetch_trending=forbidden,
+        fetch_release=forbidden,
+        fetch_tvdb=forbidden,
+        materialize_art=forbidden,
+    )
+    result = asyncio.run(
+        enrich(
+            _request(
+                _preset_rating_only_config(preset_ref),
+                known_ratings=(
+                    _rating(provider="letterboxd", normalized_score=84.0),
+                    _rating(provider="trakt", normalized_score=81.0),
+                ),
+            ),
+            NOW,
+            runtime=_runtime(hooks),
+        )
+    )
+    assert calls == Counter({"mdblist": 1})
+    assert {item.provider for item in result.ratings} == {
+        "letterboxd",
+        "trakt",
+        "metacritic",
+    }
+    status = next(item for item in result.provider_statuses if item.provider == "mdblist")
+    assert status.status == "complete"
+
+
+def test_namespaced_bingecat_rating_sources_round_trip_through_enrichment():
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("fresh optional evidence must not call providers")
+
+    ratings = tuple(
+        _rating(provider=provider, normalized_score=80.0 + index).model_copy(
+            update={"source": source}
+        )
+        for index, (provider, source) in enumerate(
+            (
+                ("letterboxd", "mdblist:imdb"),
+                ("imdb", "imdb:title_metrics"),
+                ("tmdb", "tmdb:volatile"),
+            )
+        )
+    )
+    result = asyncio.run(
+        enrich(
+            _request(_art_only_config(), known_ratings=ratings),
+            NOW,
+            runtime=_runtime(ProviderHooks.all(forbidden)),
+        )
+    )
+    assert {item.source for item in result.ratings} == {
+        "imdb:title_metrics",
+        "mdblist:imdb",
+        "tmdb:volatile",
+    }
+    assert result.provider_statuses == ()
+
+
+@pytest.mark.parametrize(
+    "invalid_detail",
+    (
+        RatingDetail("letterboxd", 4.2, 5.0, 84.0, 2_147_483_648),
+        RatingDetail("letterboxd", 100_000.0, 100_000.0, 84.0, 100),
+    ),
+)
+def test_unpersistable_provider_rating_becomes_typed_error(invalid_detail):
+    async def ratings(*_args, **_kwargs):
+        return RatingFetchDetails(
+            ratings=(invalid_detail,),
+            genre="Unknown",
+            release_date=None,
+            keywords=(),
+            age_rating=None,
+        )
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("unneeded provider")
+
+    hooks = ProviderHooks(
+        resolve_identity=forbidden,
+        fetch_ratings=ratings,
+        fetch_tmdb=forbidden,
+        fetch_trending=forbidden,
+        fetch_release=forbidden,
+        fetch_tvdb=forbidden,
+        materialize_art=forbidden,
+    )
+    result = asyncio.run(
+        enrich(
+            _request(_minimalist_rating_only_config()),
+            NOW,
+            runtime=_runtime(hooks),
+        )
+    )
+    status = next(item for item in result.provider_statuses if item.provider == "mdblist")
+    assert status.status == "error"
+    assert status.retry_at == NOW + timedelta(minutes=5)
+    assert not result.ratings
+    assert result.partial is False
 
 
 def test_explicit_known_lifecycle_facts_skip_tmdb_and_release_calls():
