@@ -1,0 +1,219 @@
+import hashlib
+import json
+
+import pytest
+
+from render_spec import canonicalize_config, compile_requirements
+
+
+def test_canonical_spec_uses_the_v2_contract_schema_and_version():
+    spec = canonicalize_config({})
+
+    assert spec.schema == "bingecat_postersplus_v2"
+    assert spec.version == 1
+    assert json.loads(spec.canonical_json())["schema"] == "bingecat_postersplus_v2"
+    assert json.loads(spec.canonical_json())["version"] == 1
+
+
+def test_canonicalize_normalizes_legacy_aliases_and_values():
+    spec = canonicalize_config(
+        {
+            "rating_mode": "5",
+            "show_award_sash": "NO",
+            "top_vignette": "true",
+            "top_gradient_height": "0.2500",
+            "top_gradient_opacity": "128",
+            "rating_text_color": "#AbC",
+            "sash_priority": "trending,structural,-mini_series,wins,trending,unknown",
+        }
+    )
+
+    assert spec.rating_display_mode == 5
+    assert spec.show_award_sash is False
+    assert spec.top_gradient == "high"
+    assert spec.top_gradient_height == 0.25
+    assert spec.top_gradient_opacity == pytest.approx(128 / 255)
+    assert spec.rating_text_color == "#aabbcc"
+    assert spec.sash_priority == ("trending", "short_film", "binge_ready", "wins")
+
+
+def test_canonicalize_clamps_render_allocation_inputs():
+    spec = canonicalize_config(
+        {
+            "rating_display_mode": 5,
+            "top_gradient": "custom",
+            "top_gradient_height": 99999,
+            "top_gradient_opacity": -10,
+            "bottom_gradient": "custom",
+            "bottom_gradient_height": -9,
+            "bottom_gradient_opacity": 99999,
+        }
+    )
+
+    assert spec.rating_display_mode == 5
+    assert spec.top_gradient_height == 1.0
+    assert spec.top_gradient_opacity == 0.0
+    assert spec.bottom_gradient_height == 0.0
+    assert spec.bottom_gradient_opacity == 1.0
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    (("pt-BR", "pt"), ("NL_nl", "nl"), ("de-DE", "de"), ("es-419", "es"), ("fr", "en"), ("x" * 10_000, "en")),
+)
+def test_logo_language_is_limited_to_supported_locales_with_english_fallback(requested, expected):
+    assert canonicalize_config({"logo_language": requested}).logo_language == expected
+
+
+@pytest.mark.parametrize("non_finite", ("inf", "-inf", "nan"))
+def test_integer_normalizers_default_non_finite_spellings(non_finite):
+    spec = canonicalize_config(
+        {
+            "badge_height": non_finite,
+            "score_glow_alpha": non_finite,
+            "top_gradient_height": non_finite,
+            "bottom_gradient_opacity": non_finite,
+        }
+    )
+
+    assert spec.badge_height == 20
+    assert spec.score_glow_alpha == 40
+    assert spec.top_gradient_height == 0.0
+    assert spec.bottom_gradient_opacity == 0.0
+
+
+def test_canonical_identity_ignores_unknown_and_secret_fields():
+    base = canonicalize_config({"rating_display_mode": 5, "top_gradient_height": 0.4})
+    noisy = canonicalize_config(
+        {
+            "rating_display_mode": 5,
+            "top_gradient_height": 0.4,
+            "unknown": "ignored",
+            "tmdb_key": "secret",
+            "mdblist_key": "secret",
+            "access_key": "secret",
+        }
+    )
+
+    assert noisy == base
+    assert noisy.canonical_json() == base.canonical_json()
+    assert noisy.sha256() == hashlib.sha256(noisy.canonical_json().encode()).hexdigest()
+    assert "secret" not in noisy.canonical_json()
+
+
+def test_requirements_are_gated_by_visible_features():
+    hidden = canonicalize_config(
+        {
+            "rating_display_mode": 0,
+            "sash_mode": "hidden",
+            "use_original_art": True,
+            "badge_display_mode": 0,
+        }
+    )
+    assert compile_requirements(hidden).ratings is False
+    assert compile_requirements(hidden).awards is False
+    assert compile_requirements(hidden).logo is False
+    assert compile_requirements(hidden).ocr is False
+    assert compile_requirements(hidden).fallback_art is False
+    assert compile_requirements(hidden).quality is False
+
+
+def test_requirements_distinguish_keyword_and_age_certification_facts():
+    spec = canonicalize_config(
+        {
+            "rating_display_mode": 0,
+            "badge_display_mode": 3,
+            "sash_priority": "cult,true_story,metacritic",
+            "use_original_art": True,
+        }
+    )
+
+    requirements = compile_requirements(spec)
+
+    assert requirements.ratings is False
+    assert requirements.keywords is True
+    assert requirements.certification is True
+    assert requirements.awards is False
+    assert requirements.quality is False
+
+
+@pytest.mark.parametrize("slot", ("short_film", "mini_series", "binge_ready"))
+def test_structural_sash_slots_require_lifecycle_facts(slot):
+    requirements = compile_requirements(
+        canonicalize_config(
+            {
+                "rating_display_mode": 0,
+                "sash_priority": slot,
+                "use_original_art": True,
+            }
+        )
+    )
+
+    assert requirements.lifecycle is True
+
+
+@pytest.mark.parametrize(
+    "config",
+    (
+        {"rating_display_mode": 1, "accent_bar_append_mode": 0},
+        {"rating_display_mode": 1, "accent_bar_append_mode": 2},
+        {"rating_display_mode": 3, "minimalist_append_mode": 0},
+        {"rating_display_mode": 3, "minimalist_append_mode": 2},
+        {"rating_display_mode": 4},  # Default bar_append is rating_year.
+        {"rating_display_mode": 4, "bar_append": "year"},
+    ),
+)
+def test_year_rendering_modes_require_release_year(config):
+    assert compile_requirements(canonicalize_config(config)).release_year is True
+
+
+@pytest.mark.parametrize(
+    "config",
+    (
+        {"rating_display_mode": 0},
+        {"rating_display_mode": 1, "accent_bar_append_mode": 1},
+        {"rating_display_mode": 2},
+        {"rating_display_mode": 3, "minimalist_append_mode": 1},
+        {"rating_display_mode": 3, "minimalist_append_mode": 3},
+        {"rating_display_mode": 4, "bar_append": "rating"},
+        {"rating_display_mode": 4, "bar_append": "sash"},
+        {"rating_display_mode": 4, "bar_append": "second_rating"},
+        {"rating_display_mode": 5},
+    ),
+)
+def test_non_year_rendering_modes_do_not_require_release_year(config):
+    assert compile_requirements(canonicalize_config(config)).release_year is False
+
+
+def test_textless_output_suppresses_logo_and_ocr_work_but_keeps_art_fallback():
+    suppressed = compile_requirements(
+        canonicalize_config(
+            {
+                "rating_display_mode": 0,
+                "sash_mode": "hidden",
+                "textless": True,
+                "use_original_art": False,
+            }
+        )
+    )
+    composited = compile_requirements(
+        canonicalize_config(
+            {
+                "rating_display_mode": 0,
+                "sash_mode": "hidden",
+                "textless": False,
+                "use_original_art": False,
+            }
+        )
+    )
+
+    assert suppressed.logo is False
+    assert suppressed.ocr is False
+    assert suppressed.fallback_art is True
+    assert composited.logo is True
+    assert composited.ocr is True
+
+
+def test_custom_configs_reject_out_of_scope_quality_badges():
+    with pytest.raises(ValueError, match="badge_display_mode"):
+        canonicalize_config({"badge_display_mode": 5})

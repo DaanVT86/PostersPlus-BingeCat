@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import hmac
 import io
+import json
 import logging
 import os
 import re
@@ -13,12 +14,13 @@ from datetime import datetime, timedelta, timezone
 import zoneinfo
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from urllib.parse import parse_qsl, urlencode
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from pydantic import ValidationError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -615,6 +617,34 @@ from ratings import (
 )
 from tmdb import composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_trending_candidates, fetch_popular_candidates, fetch_supplemental_candidates, fetch_catalog_candidates, fetch_release_status, fetch_recent_movie_digital_release_date, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, _fetch_metahub_logo, LOGO_ABS_MAX_H
 import tvdb
+from integration_contract import (
+    CONTRACT_SCHEMA,
+    CONTRACT_VERSION,
+    EnrichmentRequest,
+    RenderInputBundle,
+)
+from preset_registry import get_preset, list_public_presets
+from service_auth import AuthError as V2AuthError, SQLiteNonceStore, verify_request as verify_v2_request
+from source_art import SourceArtStore
+from cache_policy import FileLeaderLock, get_usage as get_cache_usage, prune_to_targets
+from v2_enrich import (
+    SourceArtUnavailable as V2SourceArtUnavailable,
+    UnsupportedPresetVersion,
+    build_runtime as build_v2_enrichment_runtime,
+    enrich as enrich_v2,
+)
+from v2_render import (
+    RENDERER_REVISION,
+    RenderError as V2RenderError,
+    render as render_v2_bundle,
+    requirements_metadata,
+    requirements_sha256,
+)
+from render_spec import compile_requirements
+from bingecat_handoff import (
+    apply_security_headers as apply_bingecat_configurator_security_headers,
+    router as bingecat_configurator_router,
+)
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -631,6 +661,9 @@ import tvdb
 
 _HTTP_CLIENT: httpx.AsyncClient | None = None
 _BINGECAT_POOL = None
+_V2_NONCE_STORE: SQLiteNonceStore | None = None
+_V2_SOURCE_STORE: SourceArtStore | None = None
+_BACKGROUND_LEADER: FileLeaderLock | None = None
 
 def _make_http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
@@ -1110,6 +1143,95 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.sash_text_color      = _parse_hex_color(params.get("sash_text_color"))
 
     return cfg
+
+
+def _canonical_legacy_render_identity(config: RequestConfig) -> str:
+    """Stable cache identity for the visual values the legacy parser consumed.
+
+    Unknown query parameters never reach ``RequestConfig`` and equivalent raw
+    values have already been clamped/normalised, preventing unbounded cache-key
+    fragmentation without changing public rendering behaviour.
+    """
+
+    payload = asdict(config)
+    # Legacy parser-only alias; rendering consumes sash_mode exclusively.
+    payload.pop("sash_badge", None)
+    # Explicit default weights and omitted weights produce identical scores.
+    payload["movie_weights"] = {
+        name: float(value)
+        for name, value in sorted((config.movie_weights or _cfg.MOVIE_WEIGHTS).items())
+    }
+    payload["tv_weights"] = {
+        name: float(value)
+        for name, value in sorted((config.tv_weights or _cfg.TV_WEIGHTS).items())
+    }
+    if config.top_gradient != "custom":
+        payload["top_gradient_opacity"] = None
+        payload["top_gradient_height"] = None
+    if config.bottom_gradient != "custom":
+        payload["bottom_gradient_opacity"] = None
+        payload["bottom_gradient_height"] = None
+    if config.score_color_mode != 3 and config.bar_accent != "palette_custom":
+        payload["score_custom_palette"] = None
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+@dataclass(frozen=True)
+class LegacyProviderRequirements:
+    mdblist: bool
+    quality: bool
+    trending: bool
+    release_status: bool
+    recent_digital_release: bool
+
+
+def _legacy_provider_requirements(config: RequestConfig) -> LegacyProviderRequirements:
+    """Derive outbound provider needs before any optional call is scheduled."""
+
+    sash_visible = config.show_award_sash and config.sash_mode != "hidden"
+    slots = set(config.sash_priority) if sash_visible else set()
+    rating_visible = config.rating_display_mode in {1, 2, 3, 5} or (
+        config.rating_display_mode == 4
+        and config.bar_append in {"rating", "rating_year", "second_rating"}
+    )
+    mdblist_sashes = {
+        "wins",
+        "gg_wins",
+        "festival",
+        "pic_noms",
+        "gg_noms",
+        "cult",
+        "true_story",
+        "metacritic",
+        "new_release",
+    }
+    release_slots = {
+        "release_status",
+        "cinema",
+        "streaming",
+        "physical",
+        "production",
+        "ended",
+        "cancelled",
+        "airing",
+    }
+    return LegacyProviderRequirements(
+        mdblist=(
+            rating_visible
+            or config.badge_display_mode == 3
+            or bool(slots & mdblist_sashes)
+        ),
+        quality=config.badge_display_mode in {1, 2, 4, 5},
+        trending=bool(slots & {"trending", "trending_broad"}),
+        release_status=bool(slots & release_slots),
+        recent_digital_release="just_added" in slots,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2649,6 +2771,7 @@ async def _cache_warm_loop(digital_release_ready: asyncio.Event | None = None) -
 async def lifespan(app: FastAPI):
     global _HTTP_CLIENT, _BINGECAT_POOL, _configurator_html, _render_assets_signature
     global _background_detection_queue, _background_detection_task
+    global _BACKGROUND_LEADER
     init_db()
     logger.info(f"Cache initialised (composite TTL {_cfg.COMPOSITE_CACHE_TTL}s / "
                 f"{_cfg.COMPOSITE_CACHE_TTL / 86400:.1f}d)")
@@ -2722,27 +2845,33 @@ async def lifespan(app: FastAPI):
         logger.warning(f"TVDB status check failed: {exc}")
 
     _digital_release_ready = asyncio.Event()
-    prune_task   = asyncio.create_task(_cache_prune_loop())
-    digital_task = asyncio.create_task(digital_release_poll_loop(_HTTP_CLIENT, _digital_release_ready))
-    cache_warm_task = asyncio.create_task(_cache_warm_loop(_digital_release_ready))
-    trending_task = asyncio.create_task(_trending_fetch_loop())
+    # Uvicorn/Gunicorn may run several worker processes.  Provider polling,
+    # cache warming, trending replay and pruning are process-global jobs, so a
+    # short non-blocking filesystem lock elects exactly one worker.  Request
+    # handling remains enabled in every worker when another worker owns it.
+    _BACKGROUND_LEADER = FileLeaderLock(_cfg.CACHE_LEADER_LOCK_PATH)
+    _is_background_leader = await asyncio.to_thread(_BACKGROUND_LEADER.acquire)
+    if _is_background_leader:
+        logger.info("Background cache leader acquired (%s)", _cfg.CACHE_LEADER_LOCK_PATH)
+        prune_task   = asyncio.create_task(_cache_prune_loop())
+        digital_task = asyncio.create_task(digital_release_poll_loop(_HTTP_CLIENT, _digital_release_ready))
+        cache_warm_task = asyncio.create_task(_cache_warm_loop(_digital_release_ready))
+        trending_task = asyncio.create_task(_trending_fetch_loop())
+    else:
+        logger.info("Background cache leader is another worker; local provider loops disabled")
+        prune_task = digital_task = cache_warm_task = trending_task = None
     yield
-    prune_task.cancel()
-    digital_task.cancel()
-    cache_warm_task.cancel()
-    trending_task.cancel()
+    for _task in (prune_task, digital_task, cache_warm_task, trending_task):
+        if _task is not None:
+            _task.cancel()
     if _background_detection_task is not None:
         _background_detection_task.cancel()
     # Await the cancelled tasks so their finally: blocks finish unwinding
     # before we close the HTTP client they may still be using.
-    with suppress(asyncio.CancelledError):
-        await prune_task
-    with suppress(asyncio.CancelledError):
-        await digital_task
-    with suppress(asyncio.CancelledError):
-        await cache_warm_task
-    with suppress(asyncio.CancelledError):
-        await trending_task
+    for _task in (prune_task, digital_task, cache_warm_task, trending_task):
+        if _task is not None:
+            with suppress(asyncio.CancelledError):
+                await _task
     if _background_detection_task is not None:
         with suppress(asyncio.CancelledError):
             await _background_detection_task
@@ -2753,10 +2882,38 @@ async def lifespan(app: FastAPI):
     await close_bingecat_pool(_BINGECAT_POOL)
     _BINGECAT_POOL = None
     await _HTTP_CLIENT.aclose()
+    if _BACKGROUND_LEADER is not None:
+        await asyncio.to_thread(_BACKGROUND_LEADER.release)
+        _BACKGROUND_LEADER = None
     logger.info("HTTP client closed")
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(bingecat_configurator_router)
+
+
+@app.middleware("http")
+async def secure_bingecat_configurator_responses(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/bingecat/configurator" or request.url.path.startswith(
+        "/bingecat/configurator/"
+    ):
+        apply_bingecat_configurator_security_headers(response)
+    return response
+
+
+@app.middleware("http")
+async def hide_disabled_v2_prefix(request: Request, call_next):
+    """Do not disclose integration routes at all until their secret exists."""
+
+    if (
+        request.url.path.startswith("/v2/")
+        and not _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    ):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return await call_next(request)
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _FONTS_DIR = os.path.join(BASE_DIR, "fonts")
 
@@ -2987,6 +3144,232 @@ def _load_configurator_html() -> str:
     except FileNotFoundError:
         _configurator_etag = '"missing"'
         return "<h1>Configurator not found</h1><p>Place configurator.html alongside main.py</p>"
+
+
+async def _get_v2_nonce_store():
+    global _V2_NONCE_STORE
+    if _V2_NONCE_STORE is None:
+        _V2_NONCE_STORE = await asyncio.to_thread(
+            SQLiteNonceStore,
+            _cfg.POSTERSPLUS_V2_NONCE_DB_PATH,
+        )
+    return _V2_NONCE_STORE
+
+
+async def _get_v2_source_store():
+    global _V2_SOURCE_STORE
+    if _V2_SOURCE_STORE is None:
+        _V2_SOURCE_STORE = await asyncio.to_thread(SourceArtStore.from_config)
+    return _V2_SOURCE_STORE
+
+
+async def _verify_v2_cache_request(request: Request) -> None:
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+
+
+@app.get("/v2/cache/usage")
+async def v2_cache_usage_endpoint(request: Request):
+    """Authenticated, bounded cache accounting for the operator plane."""
+    await _verify_v2_cache_request(request)
+    usage = await asyncio.to_thread(get_cache_usage)
+    return JSONResponse(
+        content=usage.to_dict(),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/v2/cache/prune")
+async def v2_cache_prune_endpoint(request: Request):
+    """Run one bounded eviction pass; no provider calls are made."""
+    await _verify_v2_cache_request(request)
+    raw = await request.body()
+    max_items = None
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="invalid_prune_payload") from None
+        if not isinstance(payload, dict) or set(payload) - {"max_items"}:
+            raise HTTPException(status_code=422, detail="invalid_prune_payload")
+        value = payload.get("max_items")
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000:
+            raise HTTPException(status_code=422, detail="invalid_max_items")
+        max_items = value
+    result = await asyncio.to_thread(prune_to_targets, max_items=max_items)
+    return JSONResponse(
+        content=result.to_dict(),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/v2/presets")
+async def v2_presets_endpoint(request: Request):
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+
+    presets = []
+    for metadata in list_public_presets():
+        preset = get_preset(metadata.ref)
+        # The authenticated catalog is the single source of truth for the
+        # usage-scoped snapshot hash.  BingeCat receives the complete safe,
+        # canonical visual config instead of reimplementing Core's preset
+        # definitions; credentials are rejected by the registry validator.
+        if preset.config.sha256() != metadata.config_sha256:
+            raise HTTPException(status_code=503, detail="preset_catalog_unavailable")
+        requirements = compile_requirements(preset.config)
+        presets.append(
+            {
+                **metadata.to_dict(),
+                "canonical_config": json.loads(preset.config.canonical_json()),
+                "requirements": requirements_metadata(requirements),
+                "requirements_sha256": requirements_sha256(requirements),
+            }
+        )
+    return JSONResponse(
+        content={
+            "schema": CONTRACT_SCHEMA,
+            "version": CONTRACT_VERSION,
+            "renderer_revision": RENDERER_REVISION,
+            "presets": presets,
+        }
+    )
+
+
+@app.post("/v2/render")
+async def v2_render_endpoint(request: Request):
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    try:
+        contract = RenderInputBundle.model_validate_json(await request.body())
+    except ValidationError as exc:
+        details = [
+            {
+                "loc": list(item.get("loc", ()))[:8],
+                "type": str(item.get("type", "validation_error"))[:80],
+                "msg": str(item.get("msg", "invalid value"))[:200],
+            }
+            for item in exc.errors(include_url=False, include_input=False)[:20]
+        ]
+        return JSONResponse(status_code=422, content={"detail": details})
+    try:
+        source_store = (
+            await _get_v2_source_store()
+            if contract.snapshot.source_art
+            else None
+        )
+        payload, metadata = await asyncio.to_thread(
+            render_v2_bundle,
+            contract,
+            source_store=source_store,
+        )
+    except V2RenderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    except Exception as exc:
+        logger.warning(f"v2 rendering failed: {type(exc).__name__}")
+        raise HTTPException(status_code=503, detail="render_unavailable") from None
+    return Response(
+        content=payload,
+        media_type=metadata.content_type,
+        headers={
+            "ETag": f'"{metadata.content_sha256}"',
+            "X-PostersPlus-Content-SHA256": metadata.content_sha256,
+            "X-PostersPlus-Renderer-Revision": metadata.renderer_revision,
+            "X-PostersPlus-Config-SHA256": metadata.config_sha256,
+            "X-PostersPlus-Snapshot-SHA256": metadata.snapshot_sha256,
+        },
+    )
+
+
+@app.post("/v2/enrich")
+async def v2_enrich_endpoint(request: Request):
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    try:
+        contract = EnrichmentRequest.model_validate_json(await request.body())
+    except ValidationError as exc:
+        details = [
+            {
+                "loc": list(item.get("loc", ()))[:8],
+                "type": str(item.get("type", "validation_error"))[:80],
+                "msg": str(item.get("msg", "invalid value"))[:200],
+            }
+            for item in exc.errors(include_url=False, include_input=False)[:20]
+        ]
+        return JSONResponse(status_code=422, content={"detail": details})
+    if _HTTP_CLIENT is None:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    runtime = build_v2_enrichment_runtime(
+        _HTTP_CLIENT,
+        _BINGECAT_POOL,
+        tmdb_key=_cfg.SERVER_TMDB_KEY,
+        mdblist_key=(
+            _cfg.SERVER_MDBLIST_KEYS[_mdblist_active_key_idx % len(_cfg.SERVER_MDBLIST_KEYS)]
+            if _cfg.SERVER_MDBLIST_KEYS else ""
+        ),
+        stateless_metadata=_cfg.POSTERSPLUS_INTEGRATION_STATELESS_METADATA,
+        source_store=await _get_v2_source_store(),
+    )
+    try:
+        result = await enrich_v2(
+            contract,
+            datetime.now(timezone.utc),
+            runtime=runtime,
+        )
+    except UnsupportedPresetVersion:
+        raise HTTPException(status_code=409, detail="unsupported_preset_version") from None
+    except V2SourceArtUnavailable as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)[:200]) from None
+    except Exception as exc:
+        logger.warning(f"v2 enrichment failed: {type(exc).__name__}")
+        raise HTTPException(status_code=503, detail="Enrichment unavailable") from None
+    return JSONResponse(content=result.model_dump(mode="json"))
 
 
 @app.get("/health")
@@ -3433,6 +3816,7 @@ async def get_poster(
         )
     }
     rcfg = build_request_config(raw_params)
+    provider_requirements = _legacy_provider_requirements(rcfg)
 
     # Operator force-refresh: ?nocache=1 skips the composite cache READ so a fresh
     # render is produced (and re-cached), letting an operator invalidate a single
@@ -3469,9 +3853,15 @@ async def get_poster(
             f"{int(rcfg.fallback_to_imdb)}"
         )
         _server_sig = "|server=" + _server_render_signature()
+        try:
+            _visual_identity = _canonical_legacy_render_identity(rcfg)
+        except (TypeError, ValueError):
+            # Defensive fallback for an unforeseen non-finite legacy value.
+            # It remains bounded and ignores unknown query parameters.
+            _visual_identity = repr(rcfg)
         _params_hash = hashlib.sha256(
             (
-                "&".join(f"{k}={v}" for k, v in sorted(raw_params.items()))
+                _visual_identity
                 + _detect_sig
                 + _poster_selection_sig
                 + _rating_policy_sig
@@ -3484,7 +3874,7 @@ async def get_poster(
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")
         if cached_jpeg is not None:
             logger.info(f"Final poster cache hit for {final_cache_key}")
-            etag = f'"{final_cache_key}"'
+            etag = f'"{hashlib.sha256(cached_jpeg).hexdigest()}"'
             if request.headers.get("if-none-match") == etag:
                 return _with_identity_headers(
                     Response(status_code=304, headers={"ETag": etag})
@@ -3512,7 +3902,7 @@ async def get_poster(
             logger.info(f"Coalescing request for {final_cache_key}")
             try:
                 _coal_resp = Response(content=await _existing_fut, media_type=f"image/{_cfg.IMAGE_FORMAT}")
-                _coal_resp.headers["ETag"] = f'"{final_cache_key}"'
+                _coal_resp.headers["ETag"] = f'"{hashlib.sha256(_coal_resp.body).hexdigest()}"'
                 # Coalescing only happens when caching is on (final_cache_key set),
                 # so no-store can't apply here — CDN TTL only.
                 if _cfg.CDN_CACHE_TTL > 0:
@@ -3583,6 +3973,10 @@ async def get_poster(
     _rating_event_to_set: asyncio.Event | None = None
     _rating_backoff_active = False  # set when backoff nullifies the key; used to suppress final-poster caching
     _mdblist_unavailable_reason = "no API key configured"
+
+    if not provider_requirements.mdblist:
+        effective_mdblist_key = None
+        _mdblist_unavailable_reason = "not required by visual configuration"
 
     if not rating_already_cached and effective_mdblist_key:
         _loop_now = asyncio.get_running_loop().time()
@@ -3665,9 +4059,12 @@ async def get_poster(
     if quality:
         quality_tokens = parse_quality(quality)
         cached_tokens  = None
-    else:
+    elif provider_requirements.quality:
         cached_tokens  = get_cached_quality(imdb_id, release_date_for_quality_ttl)
         quality_tokens = cached_tokens or []
+    else:
+        cached_tokens = []
+        quality_tokens = []
 
     # A quality source is available when the server has AIOStreams configured,
     # or QUALITY_SOURCE=scraper with a valid SCRAPER_URL.
@@ -3677,7 +4074,7 @@ async def get_poster(
     )
     _quality_cooldown_active = _has_quality_source and _quality_backoff_remaining() > 0
     quality_needs_fetch = (
-        rcfg.badge_display_mode in (1, 2, 4, 5)
+        provider_requirements.quality
         and not quality
         and cached_tokens is None
         and _has_quality_source
@@ -3702,7 +4099,11 @@ async def get_poster(
         quality_needs_fetch = False
         quality_pending = True
 
-    if not rating_already_cached and not effective_mdblist_key:
+    if (
+        provider_requirements.mdblist
+        and not rating_already_cached
+        and not effective_mdblist_key
+    ):
         logger.warning(
             f"MDBList unavailable for {imdb_id}: {_mdblist_unavailable_reason} — "
             "poster will be served without rating/award data."
@@ -4127,7 +4528,11 @@ async def get_poster(
             _image_coro,
             _resolve_logo() if (is_textless and not is_no_poster) else _resolved(None),
             rating_coro,
-            fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
+            (
+                fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type)
+                if provider_requirements.trending
+                else _resolved(None)
+            ),
         )
 
         rating_key_used, rating_result = rating_fetch_result
@@ -4347,8 +4752,7 @@ async def get_poster(
         # ------------------------------------------------------------------
         _release_status: str | None = None
         _recent_digital_release_date: str | None = None
-        _rs_slots = {"release_status", "cinema", "streaming", "physical", "production", "ended", "cancelled", "airing"}
-        if any(s in rcfg.sash_priority for s in _rs_slots):
+        if provider_requirements.release_status:
             _fetch_rs = True
             
             import datetime
@@ -4384,7 +4788,7 @@ async def get_poster(
             if rcfg.release_status_cinema_only and _release_status not in ("Cinema", "Production"):
                 _release_status = None
 
-        if type not in ("tv", "series") and "just_added" in rcfg.sash_priority:
+        if type not in ("tv", "series") and provider_requirements.recent_digital_release:
             _recent_digital_release_date = await fetch_recent_movie_digital_release_date(
                 client, tmdb_id, effective_tmdb_key,
                 tmdb_data.get("tmdb_status"),
@@ -4558,7 +4962,7 @@ async def get_poster(
 
         response = Response(content=img_bytes, media_type=f"image/{_cfg.IMAGE_FORMAT}")
         if final_cache_key is not None:
-            response.headers["ETag"] = f'"{final_cache_key}"'
+            response.headers["ETag"] = f'"{hashlib.sha256(img_bytes).hexdigest()}"'
         if _cfg.DISABLE_COMPOSITE_CACHE:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             response.headers["Pragma"] = "no-cache"

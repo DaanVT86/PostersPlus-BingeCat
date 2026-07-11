@@ -1,8 +1,10 @@
 #ratings.py
 import logging
 import math
+from dataclasses import dataclass
 import httpx
 import numpy as np
+from integration_contract import DB_INTEGER_MAX
 
 logger = logging.getLogger(__name__)
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
@@ -46,7 +48,43 @@ def _rating_vote_count(raw: dict) -> int | None:
 # Fetch
 # ---------------------------------------------------------------------------
 
-async def fetch_rating(
+
+@dataclass(frozen=True)
+class RatingDetail:
+    provider: str
+    score: float
+    scale: float
+    normalized_score: float
+    vote_count: int | None
+
+
+@dataclass(frozen=True)
+class RatingFetchDetails:
+    ratings: tuple[RatingDetail, ...]
+    genre: str
+    release_date: str | None
+    keywords: tuple[dict, ...]
+    age_rating: int | None
+    legacy_ratings: tuple[tuple[str, object], ...] = ()
+    legacy_keywords: tuple[object, ...] | None = None
+    legacy_age_rating: int | None = None
+
+
+_RATING_SCALES: dict[str, float] = {
+    "imdb": 10.0,
+    "letterboxd": 5.0,
+    "trakt": 100.0,
+    "tomatoes": 100.0,
+    "popcorn": 100.0,
+    "metacritic": 100.0,
+    "metacriticuser": 10.0,
+    "tmdb": 100.0,
+    "rogerebert": 4.0,
+    "myanimelist": 10.0,
+}
+
+
+async def fetch_rating_details(
     client: httpx.AsyncClient,
     imdb_id: str,
     mdblist_key: str,
@@ -55,10 +93,12 @@ async def fetch_rating(
     *,
     movie_weights: dict | None = None,
     tv_weights: dict | None = None,
-) -> "tuple[dict | str, str, str | None, list[dict], int | None] | _FetchFailed | _RateLimited":
+) -> "RatingFetchDetails | _FetchFailed | _RateLimited":
     """
-    Returns ``(ratings_dict, genre, release_date, keywords, age_rating)`` on
-    success, or ``FETCH_FAILED`` on a network / API error.
+    Fetch one MDBList detail payload while retaining raw score scale and votes.
+
+    The legacy ``fetch_rating`` adapter below projects this richer result back
+    to its historical tuple/dictionary contract without another HTTP call.
     """
 
     genre = "Unknown"
@@ -100,26 +140,50 @@ async def fetch_rating(
 
     if resp.status_code == 404:
         logger.info(f"MDblist 404 for {imdb_id} — title not found, returning empty result")
-        return {}, genre, None, [], None
+        return RatingFetchDetails((), genre, None, (), None)
 
     if resp.status_code != 200:
         logger.warning(f"MDblist error {resp.status_code} for {imdb_id}")
         return FETCH_FAILED
 
-    data         = resp.json()
+    try:
+        data = resp.json()
+    except Exception as exc:
+        logger.warning(f"MDblist returned invalid JSON for {imdb_id}: {type(exc).__name__}")
+        return FETCH_FAILED
+    if not isinstance(data, dict):
+        logger.warning(f"MDblist returned a non-object payload for {imdb_id}")
+        return FETCH_FAILED
     release_date = data.get("released")
-    keywords: list[dict] = data.get("keywords") or []
+    raw_keywords = data.get("keywords")
+    keywords = (
+        [item for item in raw_keywords[:64] if isinstance(item, dict)]
+        if isinstance(raw_keywords, list)
+        else []
+    )
 
-    age_rating: int | None = data.get("age_rating") or None
-    if age_rating is not None:
+    parsed_age_rating: int | None = data.get("age_rating") or None
+    if parsed_age_rating is not None:
         try:
-            age_rating = int(age_rating)
+            parsed_age_rating = int(parsed_age_rating)
         except (ValueError, TypeError):
-            age_rating = None
+            parsed_age_rating = None
+    age_rating = (
+        parsed_age_rating
+        if parsed_age_rating is not None and 0 <= parsed_age_rating <= 21
+        else None
+    )
 
-    ratings_dict: dict[str, float] = {}
-    for r in data.get("ratings", []):
-        source = (r.get("source") or "").lower()
+    ratings: list[RatingDetail] = []
+    legacy_ratings: list[tuple[str, object]] = []
+    seen_sources: set[str] = set()
+    raw_ratings = data.get("ratings")
+    if not isinstance(raw_ratings, list):
+        raw_ratings = []
+    for r in raw_ratings[:64]:
+        if not isinstance(r, dict):
+            continue
+        source = str(r.get("source") or "").lower()
         value  = r.get("value")
         if source not in SCORE_NORMALISERS or value is None:
             continue
@@ -131,10 +195,93 @@ async def fetch_rating(
                 f"vote_count={vote_count} < {RATING_MIN_VOTES}"
             )
             continue
+        # Preserve the exact historical projection (including raw numeric type
+        # and last-provider-wins order) for legacy /poster callers.  The v2
+        # contract below receives a separate bounded/sanitized representation.
+        legacy_ratings.append((source, value))
+        # The v2 boundary persists into BingeCat's signed 32-bit DB column.
+        # Reject oversized provider evidence before constructing the wire DTO;
+        # the legacy projection remains untouched above.
+        if vote_count is not None and not 0 <= vote_count <= DB_INTEGER_MAX:
+            continue
+        if source in seen_sources:
+            continue
 
-        ratings_dict[source] = value
+        try:
+            numeric_value = float(value)
+            normalized = float(SCORE_NORMALISERS[source](numeric_value))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        scale = _RATING_SCALES[source]
+        if (
+            not math.isfinite(numeric_value)
+            or not math.isfinite(normalized)
+            or not 0.0 <= numeric_value <= scale
+        ):
+            continue
+        seen_sources.add(source)
+        ratings.append(
+            RatingDetail(
+                provider=source,
+                score=numeric_value,
+                scale=scale,
+                normalized_score=max(0.0, min(100.0, normalized)),
+                vote_count=vote_count,
+            )
+        )
 
-    return ratings_dict, genre, release_date, keywords, age_rating
+    return RatingFetchDetails(
+        ratings=tuple(ratings),
+        genre=genre,
+        release_date=release_date,
+        keywords=tuple(keywords),
+        age_rating=age_rating,
+        legacy_ratings=tuple(legacy_ratings),
+        legacy_keywords=tuple(raw_keywords) if isinstance(raw_keywords, list) else (),
+        legacy_age_rating=parsed_age_rating,
+    )
+
+
+async def fetch_rating(
+    client: httpx.AsyncClient,
+    imdb_id: str,
+    mdblist_key: str,
+    genre_ids: list[int],
+    media_type: str = "movie",
+    *,
+    movie_weights: dict | None = None,
+    tv_weights: dict | None = None,
+) -> "tuple[dict | str, str, str | None, list[dict], int | None] | _FetchFailed | _RateLimited":
+    """Legacy rating projection. Its public return shape is unchanged."""
+
+    details = await fetch_rating_details(
+        client,
+        imdb_id,
+        mdblist_key,
+        genre_ids,
+        media_type,
+        movie_weights=movie_weights,
+        tv_weights=tv_weights,
+    )
+    if details is FETCH_FAILED or isinstance(details, _RateLimited):
+        return details
+
+    legacy_projection = (
+        dict(details.legacy_ratings)
+        if details.legacy_keywords is not None
+        else {rating.provider: rating.score for rating in details.ratings}
+    )
+    return (
+        legacy_projection,
+        details.genre,
+        details.release_date,
+        (
+            list(details.legacy_keywords)
+            if details.legacy_keywords is not None
+            else list(details.keywords)
+        ),
+        details.legacy_age_rating if details.legacy_keywords is not None else details.age_rating,
+    )
 
 
 # ---------------------------------------------------------------------------

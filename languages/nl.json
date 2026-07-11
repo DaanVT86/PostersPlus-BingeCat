@@ -1,0 +1,9 @@
+{
+  "code": "nl",
+  "genreLabels": {
+    "Unknown": "Onbekend", "Action": "Actie", "Adventure": "Avontuur", "Animation": "Animatie", "Comedy": "Komedie", "Crime": "Misdaad", "Documentary": "Documentaire", "Drama": "Drama", "Family": "Familie", "Fantasy": "Fantasy", "History": "Geschiedenis", "Horror": "Horror", "Music": "Muziek", "Mystery": "Mysterie", "Romance": "Romantiek", "Sci-Fi": "Sciencefiction", "Thriller": "Thriller", "War": "Oorlog", "Western": "Western", "Kids": "Kinderen", "News": "Nieuws", "Reality": "Reality", "Soap": "Soap", "Talk": "Praatprogramma"
+  },
+  "sashLabels": {
+    "trendingToday": "#{rank} Vandaag", "New Season": "Nieuw seizoen", "Returning": "Keert terug", "Premiere": "Première", "Just Added": "Zojuist toegevoegd", "Season Finale": "Seizoensfinale", "New": "Nieuw", "Must-See": "Een aanrader", "Cult Classic": "Cultklassieker", "True Story": "Waargebeurd", "Short Film": "Korte film", "Mini Series": "Miniserie", "Binge Ready": "Klaar om te bingen", "Foreign": "Buitenlands", "French": "Frans", "German": "Duits", "Spanish": "Spaans", "Italian": "Italiaans", "Portuguese": "Portugees", "Japanese": "Japans", "Korean": "Koreaans", "Chinese": "Chinees", "Danish": "Deens", "Swedish": "Zweeds", "Norwegian": "Noors", "Finnish": "Fins", "Dutch": "Nederlands", "Polish": "Pools", "Russian": "Russisch", "Turkish": "Turks", "Arabic": "Arabisch", "Hindi": "Hindi", "Persian": "Perzisch", "Romanian": "Roemeens", "Hungarian": "Hongaars", "Czech": "Tsjechisch", "Hebrew": "Hebreeuws", "Greek": "Grieks", "Oscar Winner": "Oscarwinnaar", "Oscar Nominee": "Oscargenomineerde", "Emmy Winner": "Emmywinnaar", "Emmy Nominee": "Emmygenomineerde", "Globe Winner": "Golden Globe-winnaar", "Globe Nominee": "Golden Globe-genomineerde"
+  }
+}
