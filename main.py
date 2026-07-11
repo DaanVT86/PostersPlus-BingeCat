@@ -640,6 +640,10 @@ from v2_render import (
     requirements_sha256,
 )
 from render_spec import compile_requirements
+from bingecat_handoff import (
+    apply_security_headers as apply_bingecat_configurator_security_headers,
+    router as bingecat_configurator_router,
+)
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -2884,6 +2888,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(bingecat_configurator_router)
+
+
+@app.middleware("http")
+async def secure_bingecat_configurator_responses(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/bingecat/configurator" or request.url.path.startswith(
+        "/bingecat/configurator/"
+    ):
+        apply_bingecat_configurator_security_headers(response)
+    return response
 
 
 @app.middleware("http")
