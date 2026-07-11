@@ -391,7 +391,12 @@ _SLOT_FACT_FIELDS = {
     "season_finale": "is_season_finale",
     "cult": "is_cult",
     "foreign": "original_language",
-    "new_release": "is_new_release",
+    # The legacy ``new_release`` sash is a combined signal.  The standalone
+    # digital-release poller may only populate ``is_digital_release`` while
+    # the release-date path may only populate ``is_new_release``; both inputs
+    # therefore belong to the selected sash's immutable identity and
+    # freshness validation.
+    "new_release": ("is_new_release", "is_digital_release"),
     "metacritic": "is_metacritic_must_see",
     "true_story": "is_true_story",
     "short_film": "is_short_film",
@@ -410,7 +415,7 @@ _SLOT_FACT_FIELDS = {
 def _selected_sash_fact(
     spec: CanonicalRenderSpec,
     snapshot: ImmutableRenderSnapshot,
-) -> str | None:
+) -> tuple[str, ...] | None:
     import config
 
     facts = snapshot.facts.values
@@ -470,7 +475,9 @@ def _selected_sash_fact(
         elif slot == "foreign":
             matched = bool(facts.original_language and facts.original_language != "en")
         elif slot == "new_release":
-            matched = bool(facts.is_new_release)
+            # Keep this in lockstep with discovery.pick_sash(): ``new_release``
+            # is the legacy combined release-date/digital-release signal.
+            matched = bool(facts.is_new_release or facts.is_digital_release)
         elif slot == "metacritic":
             matched = bool(facts.is_metacritic_must_see)
         elif slot == "true_story":
@@ -498,7 +505,12 @@ def _selected_sash_fact(
                 continue
             matched = facts.release_status == slot
         if matched:
-            return _SLOT_FACT_FIELDS.get(slot)
+            fields = _SLOT_FACT_FIELDS.get(slot)
+            if fields is None:
+                return None
+            if isinstance(fields, str):
+                return (fields,)
+            return tuple(fields)
     return None
 
 
@@ -597,7 +609,7 @@ def _used_fact_fields(
     if spec.show_award_sash and spec.sash_mode != "hidden":
         selected_sash_fact = _selected_sash_fact(spec, snapshot)
         if selected_sash_fact is not None:
-            used.add(selected_sash_fact)
+            used.update(selected_sash_fact)
         release_status_is_requested = any(
             _SLOT_FACT_FIELDS.get(slot) == "release_status"
             and (

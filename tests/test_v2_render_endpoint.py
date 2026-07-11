@@ -993,6 +993,134 @@ def test_lower_priority_stale_sash_fact_is_not_consumed(tmp_path):
     assert first_bytes == absent_bytes
 
 
+def test_new_release_sash_combines_release_and_digital_signals_deterministically(tmp_path):
+    """The legacy ``new_release`` slot is the OR of both normalized inputs."""
+
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    art = _install_art(store)
+    config = _canonical_config(
+        use_original_art=True,
+        hide_genre=True,
+        show_award_sash=True,
+        sash_mode="sash",
+        sash_priority="new_release,cult",
+    )
+
+    def release_facts(*, is_new: bool, is_digital: bool, reverse: bool = False):
+        values = NormalizedFacts(
+            is_new_release=is_new,
+            is_digital_release=is_digital,
+        )
+        provenance = [
+            FactProvenance(
+                fields=("is_new_release",),
+                source="release-calendar",
+                observed_at=NOW - timedelta(hours=2),
+                checked_at=NOW - timedelta(hours=1),
+                expires_at=NOW + timedelta(days=1),
+            ),
+            FactProvenance(
+                fields=("is_digital_release",),
+                source="digital-poller",
+                observed_at=NOW - timedelta(hours=2),
+                checked_at=NOW - timedelta(hours=1),
+                expires_at=NOW + timedelta(days=1),
+            ),
+        ]
+        if reverse:
+            provenance.reverse()
+        return NormalizedFactsEnvelope(values=values, provenance=tuple(provenance))
+
+    digital_only = _snapshot(
+        facts=release_facts(is_new=False, is_digital=True),
+        source_art=(art,),
+    )
+    release_only = _snapshot(
+        facts=release_facts(is_new=True, is_digital=False),
+        source_art=(art,),
+    )
+    both_sources = _snapshot(
+        facts=release_facts(is_new=True, is_digital=True),
+        source_art=(art,),
+    )
+    reversed_sources = _snapshot(
+        facts=release_facts(is_new=True, is_digital=True, reverse=True),
+        source_art=(art,),
+    )
+
+    spec = canonicalize_config(config)
+    requirements = render_module.compile_requirements(spec)
+    used = render_module._used_fact_fields(
+        spec,
+        requirements,
+        digital_only,
+        base_reference=art,
+        logo_reference=None,
+    )
+    assert {"is_new_release", "is_digital_release"} <= used
+
+    # Reversing the two independent provenance records must not alter the
+    # selected sash, projection, or immutable bytes.
+    both_bundle = _bundle(config, both_sources)
+    reversed_bundle = _bundle(config, reversed_sources)
+    assert both_bundle.snapshot_sha256 == reversed_bundle.snapshot_sha256
+    assert snapshot_visual_projection(
+        both_sources,
+        media=both_bundle.media,
+        spec=spec,
+        locale="en",
+    ) == snapshot_visual_projection(
+        reversed_sources,
+        media=reversed_bundle.media,
+        spec=spec,
+        locale="en",
+    )
+
+    digital_bytes, _ = render(_bundle(config, digital_only), source_store=store)
+    release_bytes, _ = render(_bundle(config, release_only), source_store=store)
+    both_bytes, _ = render(both_bundle, source_store=store)
+    reversed_bytes, _ = render(reversed_bundle, source_store=store)
+    assert digital_bytes == release_bytes == both_bytes == reversed_bytes
+
+
+def test_logo_language_selects_artwork_while_bundle_locale_selects_labels(tmp_path):
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    en_logo = _install_logo(store)
+    nl_derivative = store.install(
+        kind="logo",
+        recipe_version=1,
+        payload=_png_logo_payload(color=(200, 240, 200, 255)),
+        mime="image/png",
+        width=240,
+        height=80,
+        locator=None,
+        now=NOW,
+        pinned=True,
+        reconstructable=False,
+    )
+    nl_logo = SourceArtReference(
+        **{
+            **en_logo.model_dump(mode="python"),
+            "source_art_id": nl_derivative.source_art_id,
+            "policy_key": "logo.native_original.nl",
+            "sha256": nl_derivative.sha256,
+            "byte_size": nl_derivative.byte_size,
+            "mime": nl_derivative.mime,
+            "locale": "nl",
+        }
+    )
+    snapshot = _snapshot(source_art=(en_logo, nl_logo))
+    spec = canonicalize_config(
+        _canonical_config(use_original_art=False, logo_language="nl")
+    )
+    selected = render_module._select_logo_reference(spec, snapshot)
+    assert selected is not None
+    assert selected.sha256 == nl_logo.sha256
+    engine = render_module._composition_engine()
+    adapted = render_module._request_config(engine, spec, "pt")
+    assert adapted.logo_language == "pt"
+
+
 def test_cinema_only_policy_does_not_consume_stale_streaming_status(tmp_path):
     store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
     art = _install_art(store)
