@@ -1,7 +1,7 @@
 # BingeCat v2 Render Contract Design
 
-Date: 2026-07-10  
-Base: `origin/dev` at `2b44e8fd70f635e9f7360e2348915d334a909afc`  
+Date: 2026-07-10
+Base: `origin/dev` at `2b44e8fd70f635e9f7360e2348915d334a909afc`
 Feature branch: `codex/bingecat-v2-integration`
 
 ## Goal
