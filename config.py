@@ -15,6 +15,41 @@ BADGE_DIR             = "/app/badges"
 TMDB_POSTER_CACHE_DIR = "/app/cache/tmdb_posters" # base posters from TMDB
 TMDB_LOGO_CACHE_DIR   = "/app/cache/tmdb_logos" # base logos from TMDB
 
+# Cache budgets.  The defaults are the BingeCat allocation; standalone
+# deployments can lower them without changing the rendering contract.  Values
+# are bytes (rather than decimal strings) so comparisons never depend on the
+# host's locale or filesystem block size.
+def _bytes_env(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+SOURCE_CACHE_MAX_BYTES = _bytes_env("SOURCE_CACHE_MAX_BYTES", 15 * 1024**3)
+SOURCE_CACHE_HIGH_WATERMARK_BYTES = _bytes_env(
+    "SOURCE_CACHE_HIGH_WATERMARK_BYTES", int(13.5 * 1024**3)
+)
+SOURCE_CACHE_TARGET_BYTES = _bytes_env("SOURCE_CACHE_TARGET_BYTES", 12 * 1024**3)
+LEGACY_CACHE_MAX_BYTES = _bytes_env("LEGACY_CACHE_MAX_BYTES", 5 * 1024**3)
+LEGACY_CACHE_HIGH_WATERMARK_BYTES = _bytes_env(
+    "LEGACY_CACHE_HIGH_WATERMARK_BYTES", int(4.5 * 1024**3)
+)
+LEGACY_CACHE_TARGET_BYTES = _bytes_env("LEGACY_CACHE_TARGET_BYTES", 4 * 1024**3)
+SOURCE_CACHE_RAW_MAX_AGE_SECONDS = _bytes_env(
+    "SOURCE_CACHE_RAW_MAX_AGE_SECONDS", 24 * 3600
+)
+CACHE_PRUNE_MAX_ITEMS = max(1, int(os.environ.get("CACHE_PRUNE_MAX_ITEMS", "1000")))
+CACHE_LEADER_LOCK_PATH = os.environ.get(
+    "CACHE_LEADER_LOCK_PATH", "/app/cache/postersplus-background.lock"
+).strip() or "/app/cache/postersplus-background.lock"
+WORKERS = max(1, int(os.environ.get("WORKERS", "1")))
+# Keep operator-provided watermarks monotonic; a malformed ordering must never
+# make pruning oscillate or disable the hard cap.
+SOURCE_CACHE_HIGH_WATERMARK_BYTES = min(SOURCE_CACHE_MAX_BYTES, SOURCE_CACHE_HIGH_WATERMARK_BYTES)
+SOURCE_CACHE_TARGET_BYTES = min(SOURCE_CACHE_HIGH_WATERMARK_BYTES, SOURCE_CACHE_TARGET_BYTES)
+LEGACY_CACHE_HIGH_WATERMARK_BYTES = min(LEGACY_CACHE_MAX_BYTES, LEGACY_CACHE_HIGH_WATERMARK_BYTES)
+LEGACY_CACHE_TARGET_BYTES = min(LEGACY_CACHE_HIGH_WATERMARK_BYTES, LEGACY_CACHE_TARGET_BYTES)
+
 # Environment
 
 ACCESS_KEY            = os.environ.get("ACCESS_KEY")
@@ -285,6 +320,9 @@ COMPOSITE_MAX_ENTRIES      = int(os.environ.get("COMPOSITE_MAX_ENTRIES", "0"))
 # OS page cache.  Each entry is roughly 100-300 KB; 500 entries ≈ 50-150 MB.
 # Set to 0 to disable L1 entirely (fall through to SQLite for every request).
 COMPOSITE_MEM_ENTRIES      = int(os.environ.get("COMPOSITE_MEM_ENTRIES", "500"))
+# Optional byte cap for the in-process L1.  Zero preserves the historical
+# entry-count-only behaviour.
+COMPOSITE_MEM_MAX_BYTES     = _bytes_env("COMPOSITE_MEM_MAX_BYTES", 0)
 # Set to any truthy value (1, true, yes) to skip composite cache reads and writes
 # entirely. Every request re-renders from scratch. Useful during development when
 # iterating on rendering changes and you don't want stale renders served.

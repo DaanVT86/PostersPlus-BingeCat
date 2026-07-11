@@ -626,6 +626,7 @@ from integration_contract import (
 from preset_registry import get_preset, list_public_presets
 from service_auth import AuthError as V2AuthError, SQLiteNonceStore, verify_request as verify_v2_request
 from source_art import SourceArtStore
+from cache_policy import FileLeaderLock, get_usage as get_cache_usage, prune_to_targets
 from v2_enrich import (
     UnsupportedPresetVersion,
     build_runtime as build_v2_enrichment_runtime,
@@ -657,6 +658,7 @@ _HTTP_CLIENT: httpx.AsyncClient | None = None
 _BINGECAT_POOL = None
 _V2_NONCE_STORE: SQLiteNonceStore | None = None
 _V2_SOURCE_STORE: SourceArtStore | None = None
+_BACKGROUND_LEADER: FileLeaderLock | None = None
 
 def _make_http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
@@ -2675,6 +2677,7 @@ async def _cache_warm_loop(digital_release_ready: asyncio.Event | None = None) -
 async def lifespan(app: FastAPI):
     global _HTTP_CLIENT, _BINGECAT_POOL, _configurator_html, _render_assets_signature
     global _background_detection_queue, _background_detection_task
+    global _BACKGROUND_LEADER
     init_db()
     logger.info(f"Cache initialised (composite TTL {_cfg.COMPOSITE_CACHE_TTL}s / "
                 f"{_cfg.COMPOSITE_CACHE_TTL / 86400:.1f}d)")
@@ -2748,27 +2751,33 @@ async def lifespan(app: FastAPI):
         logger.warning(f"TVDB status check failed: {exc}")
 
     _digital_release_ready = asyncio.Event()
-    prune_task   = asyncio.create_task(_cache_prune_loop())
-    digital_task = asyncio.create_task(digital_release_poll_loop(_HTTP_CLIENT, _digital_release_ready))
-    cache_warm_task = asyncio.create_task(_cache_warm_loop(_digital_release_ready))
-    trending_task = asyncio.create_task(_trending_fetch_loop())
+    # Uvicorn/Gunicorn may run several worker processes.  Provider polling,
+    # cache warming, trending replay and pruning are process-global jobs, so a
+    # short non-blocking filesystem lock elects exactly one worker.  Request
+    # handling remains enabled in every worker when another worker owns it.
+    _BACKGROUND_LEADER = FileLeaderLock(_cfg.CACHE_LEADER_LOCK_PATH)
+    _is_background_leader = await asyncio.to_thread(_BACKGROUND_LEADER.acquire)
+    if _is_background_leader:
+        logger.info("Background cache leader acquired (%s)", _cfg.CACHE_LEADER_LOCK_PATH)
+        prune_task   = asyncio.create_task(_cache_prune_loop())
+        digital_task = asyncio.create_task(digital_release_poll_loop(_HTTP_CLIENT, _digital_release_ready))
+        cache_warm_task = asyncio.create_task(_cache_warm_loop(_digital_release_ready))
+        trending_task = asyncio.create_task(_trending_fetch_loop())
+    else:
+        logger.info("Background cache leader is another worker; local provider loops disabled")
+        prune_task = digital_task = cache_warm_task = trending_task = None
     yield
-    prune_task.cancel()
-    digital_task.cancel()
-    cache_warm_task.cancel()
-    trending_task.cancel()
+    for _task in (prune_task, digital_task, cache_warm_task, trending_task):
+        if _task is not None:
+            _task.cancel()
     if _background_detection_task is not None:
         _background_detection_task.cancel()
     # Await the cancelled tasks so their finally: blocks finish unwinding
     # before we close the HTTP client they may still be using.
-    with suppress(asyncio.CancelledError):
-        await prune_task
-    with suppress(asyncio.CancelledError):
-        await digital_task
-    with suppress(asyncio.CancelledError):
-        await cache_warm_task
-    with suppress(asyncio.CancelledError):
-        await trending_task
+    for _task in (prune_task, digital_task, cache_warm_task, trending_task):
+        if _task is not None:
+            with suppress(asyncio.CancelledError):
+                await _task
     if _background_detection_task is not None:
         with suppress(asyncio.CancelledError):
             await _background_detection_task
@@ -2779,6 +2788,9 @@ async def lifespan(app: FastAPI):
     await close_bingecat_pool(_BINGECAT_POOL)
     _BINGECAT_POOL = None
     await _HTTP_CLIENT.aclose()
+    if _BACKGROUND_LEADER is not None:
+        await asyncio.to_thread(_BACKGROUND_LEADER.release)
+        _BACKGROUND_LEADER = None
     logger.info("HTTP client closed")
 
 
@@ -3044,6 +3056,56 @@ async def _get_v2_source_store():
     if _V2_SOURCE_STORE is None:
         _V2_SOURCE_STORE = await asyncio.to_thread(SourceArtStore.from_config)
     return _V2_SOURCE_STORE
+
+
+async def _verify_v2_cache_request(request: Request) -> None:
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+
+
+@app.get("/v2/cache/usage")
+async def v2_cache_usage_endpoint(request: Request):
+    """Authenticated, bounded cache accounting for the operator plane."""
+    await _verify_v2_cache_request(request)
+    return JSONResponse(
+        content=get_cache_usage().to_dict(),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/v2/cache/prune")
+async def v2_cache_prune_endpoint(request: Request):
+    """Run one bounded eviction pass; no provider calls are made."""
+    await _verify_v2_cache_request(request)
+    raw = await request.body()
+    max_items = None
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="invalid_prune_payload") from None
+        if not isinstance(payload, dict) or set(payload) - {"max_items"}:
+            raise HTTPException(status_code=422, detail="invalid_prune_payload")
+        value = payload.get("max_items")
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000:
+            raise HTTPException(status_code=422, detail="invalid_max_items")
+        max_items = value
+    result = await asyncio.to_thread(prune_to_targets, max_items=max_items)
+    return JSONResponse(
+        content=result.to_dict(),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/v2/presets")
@@ -3697,7 +3759,7 @@ async def get_poster(
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")
         if cached_jpeg is not None:
             logger.info(f"Final poster cache hit for {final_cache_key}")
-            etag = f'"{final_cache_key}"'
+            etag = f'"{hashlib.sha256(cached_jpeg).hexdigest()}"'
             if request.headers.get("if-none-match") == etag:
                 return _with_identity_headers(
                     Response(status_code=304, headers={"ETag": etag})
@@ -3725,7 +3787,7 @@ async def get_poster(
             logger.info(f"Coalescing request for {final_cache_key}")
             try:
                 _coal_resp = Response(content=await _existing_fut, media_type=f"image/{_cfg.IMAGE_FORMAT}")
-                _coal_resp.headers["ETag"] = f'"{final_cache_key}"'
+                _coal_resp.headers["ETag"] = f'"{hashlib.sha256(_coal_resp.body).hexdigest()}"'
                 # Coalescing only happens when caching is on (final_cache_key set),
                 # so no-store can't apply here — CDN TTL only.
                 if _cfg.CDN_CACHE_TTL > 0:
@@ -4771,7 +4833,7 @@ async def get_poster(
 
         response = Response(content=img_bytes, media_type=f"image/{_cfg.IMAGE_FORMAT}")
         if final_cache_key is not None:
-            response.headers["ETag"] = f'"{final_cache_key}"'
+            response.headers["ETag"] = f'"{hashlib.sha256(img_bytes).hexdigest()}"'
         if _cfg.DISABLE_COMPOSITE_CACHE:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             response.headers["Pragma"] = "no-cache"
