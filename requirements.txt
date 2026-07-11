@@ -3,6 +3,7 @@
 # the oldest version known to support the APIs we use (FastAPI lifespan,
 # Pillow's Resampling.LANCZOS, the httpx 0.25 AsyncClient surface).
 fastapi>=0.100,<1.0
+pydantic>=2.12,<3
 uvicorn>=0.20,<1.0
 Pillow>=10.0,<12
 httpx>=0.25,<1.0
