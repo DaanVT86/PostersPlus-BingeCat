@@ -108,6 +108,8 @@ def test_l1_enforces_real_byte_cap_ttl_and_digest() -> None:
 def test_usage_has_exact_pools_and_never_double_counts_sqlite_blobs(tmp_path: Path) -> None:
     db_path = tmp_path / "cache.db"
     ledger_path = tmp_path / "source.sqlite"
+    nonce_path = tmp_path / "nonces.sqlite"
+    session_path = tmp_path / "sessions.sqlite"
     source_root = tmp_path / "source"
     source_file = source_root / "poster" / "aa" / "asset.jpg"
     source_file.parent.mkdir(parents=True)
@@ -124,11 +126,20 @@ def test_usage_has_exact_pools_and_never_double_counts_sqlite_blobs(tmp_path: Pa
             "INSERT INTO source_art_ledger VALUES (?, ?, ?)",
             (str(source_file), source_file.stat().st_size, time.time()),
         )
+    nonce_path.write_bytes(b"shared-security-db")
+    os.link(nonce_path, session_path)
+    Path(f"{session_path}-wal").write_bytes(b"session-wal")
 
     with (
         patch.object(cache_policy.config, "DB_PATH", str(db_path)),
         patch.object(cache_policy.config, "SOURCE_ART_CACHE_DIR", str(source_root)),
         patch.object(cache_policy.config, "SOURCE_ART_LEDGER_PATH", str(ledger_path)),
+        patch.object(cache_policy.config, "POSTERSPLUS_V2_NONCE_DB_PATH", str(nonce_path)),
+        patch.object(
+            cache_policy.config,
+            "POSTERSPLUS_CONFIGURATOR_SESSION_DB_PATH",
+            str(session_path),
+        ),
     ):
         usage = cache_policy.get_usage().to_dict()
 
@@ -143,10 +154,19 @@ def test_usage_has_exact_pools_and_never_double_counts_sqlite_blobs(tmp_path: Pa
         assert all(isinstance(value, int) for value in pool.values())
     assert usage["pools"]["source_derivatives"]["bytes"] == len(b"source-derivative")
     assert usage["pools"]["legacy_composites"]["bytes"] == len(blob)
-    expected_sqlite = max(db_path.stat().st_size - len(blob), 0) + ledger_path.stat().st_size
+    expected_sqlite = (
+        max(db_path.stat().st_size - len(blob), 0)
+        + ledger_path.stat().st_size
+        + nonce_path.stat().st_size
+    )
     assert usage["pools"]["sqlite"]["bytes"] == expected_sqlite
+    assert usage["pools"]["sqlite_wal"]["bytes"] == len(b"session-wal")
     assert usage["total_bytes"] == (
-        source_file.stat().st_size + db_path.stat().st_size + ledger_path.stat().st_size
+        source_file.stat().st_size
+        + db_path.stat().st_size
+        + ledger_path.stat().st_size
+        + nonce_path.stat().st_size
+        + len(b"session-wal")
     )
     legacy_names = ("legacy_composites", "sqlite", "sqlite_wal", "temp")
     legacy_total = sum(usage["pools"][name]["bytes"] for name in legacy_names)

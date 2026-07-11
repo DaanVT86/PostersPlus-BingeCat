@@ -457,6 +457,7 @@ def get_cached_final_poster(cache_key: str) -> bytes | None:
 
 def _cache_file_bytes() -> int:
     total = 0
+    seen: set[tuple[int, int]] = set()
     for path in (
         runtime_config.DB_PATH,
         f"{runtime_config.DB_PATH}-wal",
@@ -464,10 +465,18 @@ def _cache_file_bytes() -> int:
         runtime_config.SOURCE_ART_LEDGER_PATH,
         f"{runtime_config.SOURCE_ART_LEDGER_PATH}-wal",
         f"{runtime_config.SOURCE_ART_LEDGER_PATH}-shm",
+        runtime_config.POSTERSPLUS_V2_NONCE_DB_PATH,
+        f"{runtime_config.POSTERSPLUS_V2_NONCE_DB_PATH}-wal",
+        f"{runtime_config.POSTERSPLUS_V2_NONCE_DB_PATH}-shm",
+        runtime_config.POSTERSPLUS_CONFIGURATOR_SESSION_DB_PATH,
+        f"{runtime_config.POSTERSPLUS_CONFIGURATOR_SESSION_DB_PATH}-wal",
+        f"{runtime_config.POSTERSPLUS_CONFIGURATOR_SESSION_DB_PATH}-shm",
     ):
         try:
             info = os.stat(path, follow_symlinks=False)
-            if os.path.isfile(path):
+            identity = (int(info.st_dev), int(info.st_ino))
+            if os.path.isfile(path) and identity not in seen:
+                seen.add(identity)
                 total += max(0, int(info.st_size))
         except OSError:
             continue

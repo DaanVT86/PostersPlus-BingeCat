@@ -61,6 +61,30 @@ POSTERSPLUS_BINGECAT_REQUEST_SECRET = os.environ.get(
 BINGECAT_POSTERSPLUS_CALLBACK_SECRET = os.environ.get(
     "BINGECAT_POSTERSPLUS_CALLBACK_SECRET", ""
 ).strip()
+BINGECAT_POSTERSPLUS_CALLBACK_BASE_URL = os.environ.get(
+    "BINGECAT_POSTERSPLUS_CALLBACK_BASE_URL", ""
+).strip()
+POSTERSPLUS_CONFIGURATOR_RETURN_URLS = os.environ.get(
+    "POSTERSPLUS_CONFIGURATOR_RETURN_URLS", ""
+).strip()
+POSTERSPLUS_CONFIGURATOR_SESSION_DB_PATH = os.environ.get(
+    "POSTERSPLUS_CONFIGURATOR_SESSION_DB_PATH",
+    "/app/cache/postersplus_configurator_sessions.db",
+).strip()
+try:
+    POSTERSPLUS_CONFIGURATOR_CALLBACK_TIMEOUT_SECONDS = max(
+        0.5,
+        min(
+            10.0,
+            float(
+                os.environ.get(
+                    "POSTERSPLUS_CONFIGURATOR_CALLBACK_TIMEOUT_SECONDS", "5"
+                )
+            ),
+        ),
+    )
+except (TypeError, ValueError):
+    POSTERSPLUS_CONFIGURATOR_CALLBACK_TIMEOUT_SECONDS = 5.0
 POSTERSPLUS_V2_NONCE_DB_PATH = os.environ.get(
     "POSTERSPLUS_V2_NONCE_DB_PATH", "/app/cache/postersplus_v2_nonces.db"
 ).strip()

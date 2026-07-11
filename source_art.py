@@ -701,7 +701,7 @@ class SourceArtStore:
                     linked_new = True
                 except FileExistsError:
                     try:
-                        info = destination.stat(follow_symlinks=False)
+                        destination.stat(follow_symlinks=False)
                     except OSError as exc:
                         raise SourceDigestMismatch(
                             "content-addressed destination is unavailable"

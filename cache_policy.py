@@ -129,6 +129,22 @@ def _file_size(path: str | os.PathLike[str]) -> int:
     return max(0, int(info.st_size)) if stat.S_ISREG(info.st_mode) else 0
 
 
+def _unique_file_size(
+    path: str | os.PathLike[str], seen: set[tuple[int, int]]
+) -> int:
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return 0
+    if not stat.S_ISREG(info.st_mode):
+        return 0
+    identity = (int(info.st_dev), int(info.st_ino))
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    return max(0, int(info.st_size))
+
+
 def _bounded_files(
     root: str | os.PathLike[str],
     *,
@@ -320,18 +336,27 @@ def _temp_bytes() -> tuple[int, bool]:
 def get_usage() -> CacheUsage:
     source = _source_derivative_bytes()
     composites = _composite_bytes()
-    cache_db_size = _file_size(config.DB_PATH)
-    ledger_db_size = _file_size(config.SOURCE_ART_LEDGER_PATH)
-    # BLOB bytes live inside cache.db.  Only the remainder is SQLite overhead.
-    sqlite_overhead = max(cache_db_size - composites, 0) + ledger_db_size
-    wal = sum(
-        _file_size(path)
+    seen_inodes: set[tuple[int, int]] = set()
+    cache_db_size = _unique_file_size(config.DB_PATH, seen_inodes)
+    other_sqlite_size = sum(
+        _unique_file_size(path, seen_inodes)
         for path in (
-            f"{config.DB_PATH}-wal",
-            f"{config.DB_PATH}-shm",
-            f"{config.SOURCE_ART_LEDGER_PATH}-wal",
-            f"{config.SOURCE_ART_LEDGER_PATH}-shm",
+            config.SOURCE_ART_LEDGER_PATH,
+            config.POSTERSPLUS_V2_NONCE_DB_PATH,
+            config.POSTERSPLUS_CONFIGURATOR_SESSION_DB_PATH,
         )
+    )
+    # BLOB bytes live inside cache.db.  Only the remainder is SQLite overhead.
+    sqlite_overhead = max(cache_db_size - composites, 0) + other_sqlite_size
+    wal = sum(
+        _unique_file_size(path, seen_inodes)
+        for base in (
+            config.DB_PATH,
+            config.SOURCE_ART_LEDGER_PATH,
+            config.POSTERSPLUS_V2_NONCE_DB_PATH,
+            config.POSTERSPLUS_CONFIGURATOR_SESSION_DB_PATH,
+        )
+        for path in (f"{base}-wal", f"{base}-shm")
     )
     temp, _temp_incomplete = _temp_bytes()
     source_limits = (
