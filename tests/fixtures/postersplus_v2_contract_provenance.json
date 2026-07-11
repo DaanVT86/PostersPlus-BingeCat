@@ -1,0 +1,46 @@
+{
+  "facts_envelope": {
+    "values": {
+      "genre": "Sci-Fi",
+      "release_year": 1999,
+      "is_cult": false
+    },
+    "provenance": [
+      {
+        "fields": [
+          "genre",
+          "is_cult",
+          "release_year"
+        ],
+        "source": "bingecat",
+        "observed_at": "2026-07-11T10:00:00Z",
+        "checked_at": "2026-07-11T11:00:00Z",
+        "expires_at": "2026-07-18T11:00:00Z"
+      }
+    ]
+  },
+  "source_art": {
+    "source_art_id": "poster-textless-a",
+    "kind": "poster",
+    "role": "textless_poster",
+    "policy_key": "fallback.textless",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "byte_size": 1024,
+    "mime": "image/jpeg",
+    "recipe_version": 1,
+    "locator": {
+      "provider": "tmdb",
+      "url": "https://image.tmdb.org/t/p/original/poster.jpg"
+    },
+    "locale": "neutral",
+    "reconstructable": true,
+    "observed_at": "2026-07-11T10:00:00Z",
+    "checked_at": "2026-07-11T11:00:00Z",
+    "expires_at": "2026-08-11T11:00:00Z",
+    "textless_verified": true,
+    "verification_recipe": "ppocr.textless.v1",
+    "verified_at": "2026-07-11T10:30:00Z",
+    "verification_source_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "canonical_sha256": "0bcac54586ff50d29ed8e5869849d5316bcaba2c6115c1276999347a8795e108"
+}

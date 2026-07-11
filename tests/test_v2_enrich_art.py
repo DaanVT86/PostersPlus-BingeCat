@@ -80,10 +80,18 @@ def _locator(provider="tmdb", url="https://image.tmdb.org/t/p/w500/poster.jpg"):
     return ArtworkLocator(provider=provider, url=url)
 
 
-def _known_art(*, expires_at: datetime | None = None) -> SourceArtReference:
+def _known_art(
+    *,
+    expires_at: datetime | None = None,
+    role: str = "primary",
+    policy_key: str = "original.primary",
+) -> SourceArtReference:
+    verified = role == "textless_poster"
     return SourceArtReference(
         source_art_id="poster-known-1",
         kind="poster",
+        role=role,
+        policy_key=policy_key,
         sha256="a" * 64,
         byte_size=12_345,
         mime="image/jpeg",
@@ -94,6 +102,10 @@ def _known_art(*, expires_at: datetime | None = None) -> SourceArtReference:
         observed_at=NOW - timedelta(days=1),
         checked_at=NOW - timedelta(days=1),
         expires_at=expires_at or NOW + timedelta(days=7),
+        textless_verified=True if verified else None,
+        verification_recipe="ppocr.textless.v1" if verified else None,
+        verified_at=NOW - timedelta(days=1) if verified else None,
+        verification_source_digest="a" * 64 if verified else None,
     )
 
 
@@ -121,6 +133,25 @@ def _request(
     tmdb_id=11,
     imdb_id="tt0133093",
 ) -> EnrichmentRequest:
+    fact_values = known_facts or {}
+    fact_envelope = (
+        fact_values
+        if "values" in fact_values or "provenance" in fact_values
+        else {
+            "values": fact_values,
+            "provenance": [
+                {
+                    "fields": sorted(fact_values),
+                    "source": "bingecat",
+                    "observed_at": (NOW - timedelta(days=1)).isoformat(),
+                    "checked_at": (NOW - timedelta(hours=1)).isoformat(),
+                    "expires_at": (NOW + timedelta(days=7)).isoformat(),
+                }
+            ]
+            if fact_values
+            else [],
+        }
+    )
     return EnrichmentRequest.model_validate(
         {
             "schema": CONTRACT_SCHEMA,
@@ -134,7 +165,7 @@ def _request(
             "titles_by_locale": {"en": "The Matrix", "nl": "The Matrix"},
             "canonical_configs": config if isinstance(config, list) else [config],
             "known_ratings": [item.model_dump(mode="json") for item in known_ratings],
-            "known_facts": known_facts or {},
+            "known_facts": fact_envelope,
             "known_source_art": [
                 item.model_dump(mode="json")
                 for item in (known_source_art if known_source_art is not None else [_known_art()])
@@ -468,8 +499,8 @@ def test_year_render_requirement_fetches_tmdb_once_and_reuses_known_year():
         )
     )
     assert calls == Counter({"tmdb": 1})
-    assert result.facts.release_year == 1999
-    assert result.facts.genre == "Sci-Fi"
+    assert result.facts.values.release_year == 1999
+    assert result.facts.values.genre == "Sci-Fi"
 
     no_calls = ProviderHooks.all(forbidden)
     known = asyncio.run(
@@ -483,7 +514,7 @@ def test_year_render_requirement_fetches_tmdb_once_and_reuses_known_year():
             runtime=_runtime(no_calls),
         )
     )
-    assert known.facts.release_year == 1999
+    assert known.facts.values.release_year == 1999
     assert known.provider_statuses == ()
 
 
@@ -519,7 +550,7 @@ def test_genre_only_frosted_bar_still_requires_tmdb_genre_fact():
         )
     )
     assert calls == Counter({"tmdb": 1})
-    assert result.facts.genre == "Sci-Fi"
+    assert result.facts.values.genre == "Sci-Fi"
 
 
 def test_enrichment_unions_requirements_and_gates_combined_provider_calls():
@@ -556,10 +587,10 @@ def test_enrichment_unions_requirements_and_gates_combined_provider_calls():
     assert calls == Counter({"mdblist": 1, "trending": 1})
     assert result.ratings[0].scale == 5.0
     assert result.ratings[0].vote_count == 1234
-    assert result.facts.award_wins == ("Oscar Winner",)
-    assert result.facts.is_cult is True
-    assert result.facts.age_rating == 16
-    assert result.facts.trending_rank == 7
+    assert result.facts.values.award_wins == ("Oscar Winner",)
+    assert result.facts.values.is_cult is True
+    assert result.facts.values.age_rating == 16
+    assert result.facts.values.trending_rank == 7
     assert all(status.provider != "quality" for status in result.provider_statuses)
 
 
@@ -591,8 +622,62 @@ def test_nonexpired_known_values_prevent_all_provider_calls_and_preserve_false()
         )
     )
     assert result.ratings == (_rating(),)
-    assert result.facts.is_cult is False
+    assert result.facts.values.is_cult is False
     assert result.source_art == (_known_art(),)
+
+
+def test_expired_known_fact_group_is_ignored_and_refreshed_once() -> None:
+    calls = Counter()
+
+    async def tmdb(*_args, **_kwargs):
+        calls["tmdb"] += 1
+        return _tmdb_metadata()
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("unneeded provider")
+
+    hooks = ProviderHooks(
+        resolve_identity=forbidden,
+        fetch_ratings=forbidden,
+        fetch_tmdb=tmdb,
+        fetch_trending=forbidden,
+        fetch_release=forbidden,
+        fetch_tvdb=forbidden,
+        materialize_art=forbidden,
+    )
+    config = {
+        **_art_only_config(),
+        "rating_display_mode": 1,
+        "accent_bar_append_mode": 0,
+    }
+    expired = {
+        "values": {"genre": "Wrong", "release_year": 1980},
+        "provenance": [
+            {
+                "fields": ["genre", "release_year"],
+                "source": "bingecat",
+                "observed_at": (NOW - timedelta(days=3)).isoformat(),
+                "checked_at": (NOW - timedelta(days=2)).isoformat(),
+                "expires_at": (NOW - timedelta(seconds=1)).isoformat(),
+            }
+        ],
+    }
+    result = asyncio.run(
+        enrich(
+            _request(
+                config,
+                known_ratings=(_rating(),),
+                known_facts=expired,
+            ),
+            NOW,
+            runtime=_runtime(hooks),
+        )
+    )
+
+    assert calls == Counter({"tmdb": 1})
+    assert result.facts.values.release_year == 1999
+    assert result.facts.values.genre == "Sci-Fi"
+    assert {group.source for group in result.facts.provenance} == {"tmdb"}
 
 
 def test_only_facts_for_visible_sash_slots_are_required_from_mdblist():
@@ -615,8 +700,8 @@ def test_only_facts_for_visible_sash_slots_are_required_from_mdblist():
             runtime=_runtime(ProviderHooks.all(forbidden)),
         )
     )
-    assert result.facts.award_wins == ()
-    assert result.facts.is_cult is False
+    assert result.facts.values.award_wins == ()
+    assert result.facts.values.is_cult is False
     assert result.provider_statuses == ()
 
 
@@ -724,12 +809,15 @@ def test_fallback_enabled_config_materializes_poster_backdrop_and_logo():
     async def tmdb(*_args, **_kwargs):
         return _tmdb_metadata(*candidates)
 
-    async def materialize(candidate, evaluated_at, *_args):
-        assert _args[0].require_ocr is True
+    async def materialize(candidate, evaluated_at, runtime):
+        assert runtime.require_ocr is (candidate.kind == "poster")
         materialized.append(candidate.kind)
+        verified = candidate.kind == "poster"
         return SourceArtReference(
             source_art_id=f"{candidate.kind}-source",
             kind=candidate.kind,
+            role=runtime.art_role,
+            policy_key=runtime.art_policy_key,
             sha256=hashlib.sha256(candidate.kind.encode()).hexdigest(),
             byte_size=100,
             mime="image/png" if candidate.kind == "logo" else "image/jpeg",
@@ -740,6 +828,12 @@ def test_fallback_enabled_config_materializes_poster_backdrop_and_logo():
             observed_at=evaluated_at,
             checked_at=evaluated_at,
             expires_at=evaluated_at + timedelta(days=30),
+            textless_verified=True if verified else None,
+            verification_recipe="ppocr.textless.v1" if verified else None,
+            verified_at=evaluated_at if verified else None,
+            verification_source_digest=(
+                hashlib.sha256(candidate.kind.encode()).hexdigest() if verified else None
+            ),
         )
 
     async def forbidden(*_args, **_kwargs):
@@ -760,13 +854,11 @@ def test_fallback_enabled_config_materializes_poster_backdrop_and_logo():
     result = asyncio.run(
         enrich(_request(config, known_source_art=[]), NOW, runtime=_runtime(hooks))
     )
-    assert materialized == ["backdrop", "poster", "logo"]
+    assert materialized == ["poster", "backdrop", "logo"]
     assert {item.kind for item in result.source_art} == {"poster", "backdrop", "logo"}
-    provenance = next(
-        item for item in result.provider_statuses if item.provider == "contract_provenance"
+    assert all(
+        item.provider != "contract_provenance" for item in result.provider_statuses
     )
-    assert provenance.status == "partial"
-    assert provenance.missing_fields == ("textless_provenance",)
 
 
 def test_logo_art_is_resolved_per_configured_language_not_only_by_kind():
@@ -785,11 +877,13 @@ def test_logo_art_is_resolved_per_configured_language_not_only_by_kind():
         return _tmdb_metadata(*candidates)
 
     async def materialize(candidate, evaluated_at, runtime):
-        assert runtime.require_ocr is True
+        assert runtime.require_ocr is False
         materialized.append(candidate.locale)
         return SourceArtReference(
             source_art_id=f"logo-{candidate.locale}",
             kind="logo",
+            role=runtime.art_role,
+            policy_key=runtime.art_policy_key,
             sha256=hashlib.sha256(candidate.locale.encode()).hexdigest(),
             byte_size=100,
             mime="image/png",
@@ -821,24 +915,35 @@ def test_logo_art_is_resolved_per_configured_language_not_only_by_kind():
         "use_original_art": False,
         "textless": False,
     }
-    known_poster = _known_art()
+    known_poster = _known_art(
+        role="textless_poster",
+        policy_key="fallback.textless",
+    )
     known_backdrop = _known_art().model_copy(
         update={
-            "source_art_id": "backdrop-known",
-            "kind": "backdrop",
-            "recipe_version": 5,
+                "source_art_id": "backdrop-known",
+                "kind": "backdrop",
+                "role": "fallback_backdrop",
+                "policy_key": "fallback.backdrop",
+                "recipe_version": 5,
             "locator": _locator(url="https://image.tmdb.org/t/p/w1280/backdrop.jpg"),
         }
     )
     known_english_logo = _known_art().model_copy(
         update={
-            "source_art_id": "logo-en-known",
-            "kind": "logo",
-            "mime": "image/png",
-            "locale": "en",
-            "locator": _locator(url="https://image.tmdb.org/t/p/original/en.png"),
-        }
-    )
+                "source_art_id": "logo-en-known",
+                "kind": "logo",
+                "role": "logo",
+                "policy_key": "logo.native_original.en",
+                "mime": "image/png",
+                "locale": "en",
+                "locator": _locator(url="https://image.tmdb.org/t/p/original/en.png"),
+                "textless_verified": None,
+                "verification_recipe": None,
+                "verified_at": None,
+                "verification_source_digest": None,
+            }
+        )
     result = asyncio.run(
         enrich(
             _request(
@@ -1131,7 +1236,7 @@ def test_release_status_slots_are_resolved_even_without_new_release_slot():
     }
     result = asyncio.run(enrich(_request(config), NOW, runtime=_runtime(hooks)))
     assert calls == Counter({"tmdb": 1, "release": 1})
-    assert result.facts.release_status == "production"
+    assert result.facts.values.release_status == "production"
 
 
 def test_structural_sash_fetches_and_freezes_only_tmdb_metadata():
@@ -1166,8 +1271,8 @@ def test_structural_sash_fetches_and_freezes_only_tmdb_metadata():
     }
     result = asyncio.run(enrich(_request(config), NOW, runtime=_runtime(hooks)))
     assert calls == Counter({"tmdb": 1})
-    assert result.facts.is_short_film is True
-    assert result.facts.is_just_added is None
+    assert result.facts.values.is_short_film is True
+    assert result.facts.values.is_just_added is None
     assert result.partial is False
 
 

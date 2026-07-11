@@ -529,6 +529,23 @@ def _rating(**overrides) -> ProviderRating:
     return ProviderRating.model_validate(values)
 
 
+def _facts_envelope(values: dict, *, source: str = "bingecat") -> dict:
+    return {
+        "values": values,
+        "provenance": [
+            {
+                "fields": sorted(values),
+                "source": source,
+                "observed_at": "2026-07-10T00:00:00Z",
+                "checked_at": "2026-07-10T00:00:00Z",
+                "expires_at": "2026-07-17T00:00:00Z",
+            }
+        ]
+        if values
+        else [],
+    }
+
+
 def _enrichment_payload(**overrides):
     values = {
         "schema": CONTRACT_SCHEMA,
@@ -538,7 +555,7 @@ def _enrichment_payload(**overrides):
         "titles_by_locale": {"en": "The Matrix", "nl": "The Matrix"},
         "preset_refs": ["minimalist@1"],
         "known_ratings": [_rating().model_dump()],
-        "known_facts": {"release_status": "streaming"},
+        "known_facts": _facts_envelope({"release_status": "streaming"}),
     }
     values.update(overrides)
     return values
@@ -624,6 +641,8 @@ def test_known_source_art_uses_provider_bound_allowlisted_locators():
     source = {
         "source_art_id": "poster-11-en",
         "kind": "poster",
+        "role": "primary",
+        "policy_key": "original.primary",
         "sha256": "c" * 64,
         "byte_size": 12345,
         "mime": "image/jpeg",
@@ -676,16 +695,18 @@ def test_partial_known_facts_distinguish_omitted_from_explicit_false_and_empty()
     omitted = EnrichmentRequest.model_validate(_enrichment_payload(known_facts={}))
     explicit = EnrichmentRequest.model_validate(
         _enrichment_payload(
-            known_facts={"is_cult": False, "keywords": [], "matched_cast": []}
+            known_facts=_facts_envelope(
+                {"is_cult": False, "keywords": [], "matched_cast": []}
+            )
         )
     )
 
-    assert omitted.known_facts.is_cult is None
-    assert omitted.known_facts.keywords is None
-    assert omitted.known_facts.matched_cast is None
-    assert explicit.known_facts.is_cult is False
-    assert explicit.known_facts.keywords == ()
-    assert explicit.known_facts.matched_cast == ()
+    assert omitted.known_facts.values.is_cult is None
+    assert omitted.known_facts.values.keywords is None
+    assert omitted.known_facts.values.matched_cast is None
+    assert explicit.known_facts.values.is_cult is False
+    assert explicit.known_facts.values.keywords == ()
+    assert explicit.known_facts.values.matched_cast == ()
 
 
 def test_render_bundle_requires_exactly_one_bounded_configuration_source():

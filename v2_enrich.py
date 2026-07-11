@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import math
 import re
@@ -21,8 +22,10 @@ from integration_contract import (
     CONTRACT_VERSION,
     EnrichmentRequest,
     EnrichmentResult,
+    FactProvenance,
     MediaIdentity,
     NormalizedFacts,
+    NormalizedFactsEnvelope,
     ProviderRating,
     ProviderResultStatus,
     SourceArtReference,
@@ -79,6 +82,8 @@ class EnrichmentRuntime:
     source_store: SourceArtStore | None = None
     require_ocr: bool = False
     ocr_titles: tuple[str, ...] = ()
+    art_role: str | None = None
+    art_policy_key: str | None = None
 
 
 async def _maybe_await(value):
@@ -106,6 +111,8 @@ async def _default_materialize_art(
     evaluated_at: datetime,
     runtime: EnrichmentRuntime,
 ) -> SourceArtReference:
+    if runtime.art_role is None or runtime.art_policy_key is None:
+        raise SourceArtError("source art materialization requires a pinned selection policy")
     recipe = {"poster": 1, "backdrop": 5, "logo": 1}[candidate.kind]
     derivative = await fetch_derivative(
         candidate.locator,
@@ -114,6 +121,7 @@ async def _default_materialize_art(
         store=runtime.source_store,
         now=evaluated_at,
     )
+    textless_verified: bool | None = None
     if runtime.require_ocr and derivative.kind in {"poster", "backdrop"}:
         from PIL import Image
         from text_detect import poster_has_burned_in_text
@@ -130,9 +138,12 @@ async def _default_materialize_art(
         if text_result is not False:
             reason = "contains text" if text_result else "could not be verified textless"
             raise SourceArtError(f"source {derivative.kind} {reason}")
+        textless_verified = True
     return SourceArtReference(
         source_art_id=derivative.source_art_id,
         kind=derivative.kind,
+        role=runtime.art_role,
+        policy_key=runtime.art_policy_key,
         sha256=derivative.sha256,
         byte_size=derivative.byte_size,
         mime=derivative.mime,
@@ -143,6 +154,10 @@ async def _default_materialize_art(
         observed_at=evaluated_at,
         checked_at=evaluated_at,
         expires_at=evaluated_at + timedelta(days=30),
+        textless_verified=textless_verified,
+        verification_recipe="ppocr.textless.v1" if textless_verified else None,
+        verified_at=evaluated_at if textless_verified else None,
+        verification_source_digest=derivative.sha256 if textless_verified else None,
     )
 
 
@@ -279,17 +294,69 @@ def _derive_keyword_facts(facts: dict[str, Any]) -> None:
         facts.setdefault("festival_label", festival)
 
 
+def _record_fact_evidence(
+    evidence: dict[str, FactProvenance],
+    fields_added: set[str],
+    *,
+    source: str,
+    observed_at: datetime,
+    checked_at: datetime,
+    expires_at: datetime,
+) -> None:
+    if not fields_added:
+        return
+    group = FactProvenance(
+        fields=tuple(sorted(fields_added)),
+        source=source,
+        observed_at=observed_at,
+        checked_at=checked_at,
+        expires_at=expires_at,
+    )
+    for field_name in group.fields:
+        evidence[field_name] = group
+
+
+def _fact_envelope(
+    facts: dict[str, Any],
+    evidence: dict[str, FactProvenance],
+) -> NormalizedFactsEnvelope:
+    buckets: dict[tuple[str, datetime, datetime, datetime], list[str]] = {}
+    for field_name in facts:
+        group = evidence.get(field_name)
+        if group is None:
+            raise ValueError(f"normalized fact {field_name} has no provenance")
+        key = (group.source, group.observed_at, group.checked_at, group.expires_at)
+        buckets.setdefault(key, []).append(field_name)
+    provenance = tuple(
+        FactProvenance(
+            fields=tuple(sorted(field_names)),
+            source=key[0],
+            observed_at=key[1],
+            checked_at=key[2],
+            expires_at=key[3],
+        )
+        for key, field_names in sorted(
+            buckets.items(),
+            key=lambda item: (tuple(sorted(item[1])), item[0]),
+        )
+    )
+    return NormalizedFactsEnvelope(
+        values=NormalizedFacts.model_validate(facts),
+        provenance=provenance,
+    )
+
+
 def _dedupe_known_source_art(
     items: tuple[SourceArtReference, ...],
     evaluated_at: datetime,
 ) -> list[SourceArtReference]:
-    selected: dict[tuple[str, str], SourceArtReference] = {}
+    selected: dict[tuple[str, str, str], SourceArtReference] = {}
     for art in items:
         if art.expires_at <= evaluated_at:
             continue
         if art.recipe_version != RECIPE_VERSIONS[art.kind]:
             continue
-        key = (art.kind, art.locale or "neutral")
+        key = (art.role, art.policy_key, art.locale or "neutral")
         current = selected.get(key)
         if current is None or (art.checked_at, art.expires_at, art.source_art_id) > (
             current.checked_at,
@@ -510,8 +577,22 @@ async def enrich(
     tmdb_id = str(request.media.tmdb_id) if request.media.tmdb_id is not None else None
     provider_media_type = "tv" if request.media.media_type == "series" else "movie"
 
-    facts = request.known_facts.model_dump(mode="python", exclude_none=True)
+    active_fact_groups = request.known_facts.active_provenance(evaluated_at)
+    facts = request.known_facts.active_values(evaluated_at).model_dump(
+        mode="python",
+        exclude_none=True,
+    )
+    fact_evidence = {
+        field_name: group
+        for group in active_fact_groups
+        for field_name in group.fields
+    }
+    before_derived = set(facts)
     _derive_keyword_facts(facts)
+    keyword_evidence = fact_evidence.get("keywords")
+    if keyword_evidence is not None:
+        for field_name in set(facts) - before_derived:
+            fact_evidence[field_name] = keyword_evidence
     ratings = tuple(rating for rating in request.known_ratings if rating.expires_at > evaluated_at)
     source_art = _dedupe_known_source_art(request.known_source_art, evaluated_at)
 
@@ -573,6 +654,7 @@ async def enrich(
                     )
                 elif isinstance(detail, RatingFetchDetails):
                     expires = evaluated_at + timedelta(days=7)
+                    facts_before_mdblist = set(facts)
                     refreshed_ratings = tuple(
                         ProviderRating(
                             provider=item.provider,
@@ -622,6 +704,14 @@ async def enrich(
                     if detail.age_rating is not None:
                         facts.setdefault("age_rating", detail.age_rating)
                         facts.setdefault("certification", str(detail.age_rating))
+                    _record_fact_evidence(
+                        fact_evidence,
+                        set(facts) - facts_before_mdblist,
+                        source="mdblist",
+                        observed_at=evaluated_at,
+                        checked_at=evaluated_at,
+                        expires_at=expires,
+                    )
                     missing_fields = _missing_mdblist_fields(
                         requirements, required_fact_fields, facts, ratings
                     )
@@ -651,25 +741,44 @@ async def enrich(
                     )
                 )
 
-    fresh_kinds = {art.kind for art in source_art}
-    missing_art_kinds = {"poster"} - fresh_kinds
+    poster_needs = tuple(
+        dict.fromkeys(
+            (
+                (
+                    spec.original_art_source,
+                    f"original.{spec.original_art_source}",
+                )
+                if spec.use_original_art
+                else ("textless_poster", "fallback.textless")
+            )
+            for spec in specs
+        )
+    )
+    fresh_selection_policies = {(art.role, art.policy_key) for art in source_art}
+    missing_poster_needs = [
+        need for need in poster_needs if need not in fresh_selection_policies
+    ]
+    missing_art_kinds: set[str] = {"poster"} if missing_poster_needs else set()
     logo_specs = tuple(
         spec for spec in specs if compile_requirements(spec).logo
     )
-    fresh_logo_locales = {
-        art.locale or "neutral" for art in source_art if art.kind == "logo"
-    }
     missing_logo_specs = tuple(
         {
             (spec.logo_language, spec.logo_priority): spec
             for spec in logo_specs
-            if spec.logo_language not in fresh_logo_locales
-            and "neutral" not in fresh_logo_locales
+            if (
+                "logo",
+                f"logo.{spec.logo_priority}.{spec.logo_language}",
+            )
+            not in fresh_selection_policies
         }.values()
     )
     if missing_logo_specs:
         missing_art_kinds.add("logo")
-    if requirements.fallback_art and "backdrop" not in fresh_kinds:
+    if requirements.fallback_art and (
+        "fallback_backdrop",
+        "fallback.backdrop",
+    ) not in fresh_selection_policies:
         missing_art_kinds.add("backdrop")
     tmdb_fact_fields = required_fact_fields & _TMDB_DERIVED_FACTS
     # ``just_added`` is a BingeCat catalogue observation and cannot truthfully
@@ -763,6 +872,7 @@ async def enrich(
             )
 
     if metadata is not None:
+        facts_before_tmdb = set(facts)
         if genre_missing:
             genre = next(
                 (
@@ -815,6 +925,14 @@ async def enrich(
             )
             for key in sorted(tmdb_fact_fields & frozen.keys()):
                 facts.setdefault(key, frozen[key])
+        _record_fact_evidence(
+            fact_evidence,
+            set(facts) - facts_before_tmdb,
+            source="tmdb",
+            observed_at=evaluated_at,
+            checked_at=evaluated_at,
+            expires_at=evaluated_at + timedelta(days=7),
+        )
 
     if requirements.trending and "trending_rank" not in facts and not runtime.tmdb_key:
         statuses.append(
@@ -836,6 +954,14 @@ async def enrich(
             )
             if rank is not None:
                 facts["trending_rank"] = int(rank)
+                _record_fact_evidence(
+                    fact_evidence,
+                    {"trending_rank"},
+                    source="tmdb_trending",
+                    observed_at=evaluated_at,
+                    checked_at=evaluated_at,
+                    expires_at=evaluated_at + timedelta(hours=6),
+                )
             statuses.append(
                 ProviderResultStatus(
                     provider="tmdb_trending", status="complete" if rank is not None else "missing",
@@ -878,6 +1004,14 @@ async def enrich(
             )
             if status:
                 facts["release_status"] = str(status).lower()
+                _record_fact_evidence(
+                    fact_evidence,
+                    {"release_status"},
+                    source="tmdb_release",
+                    observed_at=evaluated_at,
+                    checked_at=evaluated_at,
+                    expires_at=evaluated_at + timedelta(days=7),
+                )
             statuses.append(
                 ProviderResultStatus(
                     provider="tmdb_release", status="complete" if status else "missing",
@@ -899,21 +1033,40 @@ async def enrich(
 
     candidates = list(metadata.candidates if metadata else ())
 
-    installed_locator_urls = {
-        art.locator.url for art in source_art if art.locator is not None
+    installed_locator_policies = {
+        (art.locator.url, art.role, art.policy_key)
+        for art in source_art
+        if art.locator is not None
     }
 
-    async def install_first(kind: str, options: list[V2ArtworkCandidate]):
+    async def install_first(
+        options: list[V2ArtworkCandidate],
+        *,
+        role: str,
+        policy_key: str,
+    ) -> bool:
         for candidate in options:
-            if candidate.locator.url in installed_locator_urls:
+            locator_policy = (candidate.locator.url, role, policy_key)
+            if locator_policy in installed_locator_policies:
                 return True
             try:
                 installed = await _maybe_await(
-                    hooks.materialize_art(candidate, evaluated_at, art_runtime)
+                    hooks.materialize_art(
+                        candidate,
+                        evaluated_at,
+                        replace(
+                            art_runtime,
+                            art_role=role,
+                            art_policy_key=policy_key,
+                            require_ocr=role == "textless_poster",
+                        ),
+                    )
                 )
                 if not isinstance(installed, SourceArtReference):
                     raise SourceArtError("art materializer returned an invalid reference")
-                installed_locator_urls.add(candidate.locator.url)
+                if (installed.role, installed.policy_key) != (role, policy_key):
+                    raise SourceArtError("art materializer returned the wrong selection policy")
+                installed_locator_policies.add(locator_policy)
                 source_art.append(installed)
                 return True
             except SourceArtError:
@@ -922,20 +1075,47 @@ async def enrich(
                 continue
         return False
 
-    unresolved: set[str] = set()
+    unresolved_poster_needs: list[tuple[str, str]] = []
+    unresolved_backdrop = False
     pending_logo_specs = list(missing_logo_specs)
-    for kind in sorted(missing_art_kinds - {"logo"}):
-        primary = sorted(
+
+    tmdb_posters = [
+        candidate
+        for candidate in candidates
+        if candidate.kind == "poster" and candidate.locator.provider == "tmdb"
+    ]
+    for role, policy_key in missing_poster_needs:
+        if role == "top_rated":
+            options = sorted(
+                tmdb_posters,
+                key=lambda candidate: (
+                    -candidate.vote_average,
+                    -candidate.vote_count,
+                    candidate.locator.url,
+                ),
+            )[:3]
+        else:
+            options = sorted(
+                tmdb_posters,
+                key=lambda candidate: _candidate_order(candidate, request.locales),
+            )[:3]
+        if not await install_first(options, role=role, policy_key=policy_key):
+            unresolved_poster_needs.append((role, policy_key))
+
+    if "backdrop" in missing_art_kinds:
+        options = sorted(
             (
                 candidate
                 for candidate in candidates
-                if candidate.kind == kind and candidate.locator.provider == "tmdb"
+                if candidate.kind == "backdrop" and candidate.locator.provider == "tmdb"
             ),
             key=lambda candidate: _candidate_order(candidate, request.locales),
         )[:3]
-        installed = await install_first(kind, primary)
-        if not installed:
-            unresolved.add(kind)
+        unresolved_backdrop = not await install_first(
+            options,
+            role="fallback_backdrop",
+            policy_key="fallback.backdrop",
+        )
 
     if "logo" in missing_art_kinds:
         if metadata is not None:
@@ -946,14 +1126,21 @@ async def enrich(
                     metadata.original_language,
                     candidates,
                 )
-                if not await install_first("logo", options):
+                if not await install_first(
+                    options,
+                    role="logo",
+                    policy_key=f"logo.{spec.logo_priority}.{spec.logo_language}",
+                ):
                     still_missing.append(spec)
             pending_logo_specs = still_missing
-        if pending_logo_specs:
-            unresolved.add("logo")
 
     tvdb_candidates: list[V2ArtworkCandidate] = []
-    if unresolved:
+    unresolved_kinds = {
+        *({"poster"} if unresolved_poster_needs else set()),
+        *({"backdrop"} if unresolved_backdrop else set()),
+        *({"logo"} if pending_logo_specs else set()),
+    }
+    if unresolved_kinds:
         try:
             fallbacks = await _maybe_await(
                 hooks.fetch_tvdb(
@@ -961,7 +1148,7 @@ async def enrich(
                     media_type=provider_media_type,
                     imdb_id=imdb_id,
                     tmdb_id=tmdb_id,
-                    kinds=tuple(sorted(unresolved)),
+                    kinds=tuple(sorted(unresolved_kinds)),
                     cache_metadata=not runtime.stateless_metadata,
                 )
             )
@@ -974,29 +1161,54 @@ async def enrich(
                 )
             )
 
-    for kind in sorted(tuple(unresolved)):
-        if kind == "logo":
-            still_missing = []
-            for spec in pending_logo_specs:
-                options = _logo_options(
-                    spec,
-                    metadata.original_language if metadata else None,
-                    tvdb_candidates,
-                )
-                if not await install_first(kind, options):
-                    still_missing.append(spec)
-            pending_logo_specs = still_missing
-            if not pending_logo_specs:
-                unresolved.discard(kind)
-            continue
+    still_missing_posters: list[tuple[str, str]] = []
+    tvdb_posters = [candidate for candidate in tvdb_candidates if candidate.kind == "poster"]
+    for role, policy_key in unresolved_poster_needs:
+        if role == "top_rated":
+            options = sorted(
+                tvdb_posters,
+                key=lambda candidate: (
+                    -candidate.vote_average,
+                    -candidate.vote_count,
+                    candidate.locator.url,
+                ),
+            )[:3]
+        else:
+            options = sorted(
+                tvdb_posters,
+                key=lambda candidate: _candidate_order(candidate, request.locales),
+            )[:3]
+        if not await install_first(options, role=role, policy_key=policy_key):
+            still_missing_posters.append((role, policy_key))
+    unresolved_poster_needs = still_missing_posters
+
+    if unresolved_backdrop:
         options = sorted(
-            (candidate for candidate in tvdb_candidates if candidate.kind == kind),
+            (candidate for candidate in tvdb_candidates if candidate.kind == "backdrop"),
             key=lambda candidate: _candidate_order(candidate, request.locales),
         )[:3]
-        if await install_first(kind, options):
-            unresolved.discard(kind)
+        unresolved_backdrop = not await install_first(
+            options,
+            role="fallback_backdrop",
+            policy_key="fallback.backdrop",
+        )
 
-    if "logo" in unresolved and imdb_id:
+    still_missing_logos = []
+    for spec in pending_logo_specs:
+        options = _logo_options(
+            spec,
+            metadata.original_language if metadata else None,
+            tvdb_candidates,
+        )
+        if not await install_first(
+            options,
+            role="logo",
+            policy_key=f"logo.{spec.logo_priority}.{spec.logo_language}",
+        ):
+            still_missing_logos.append(spec)
+    pending_logo_specs = still_missing_logos
+
+    if pending_logo_specs and imdb_id:
         from integration_contract import ArtworkLocator
 
         metahub = [
@@ -1010,38 +1222,26 @@ async def enrich(
             )
             for size in ("medium", "large", "small")
         ]
-        installed = await install_first("logo", metahub)
-        if installed:
-            pending_logo_specs.clear()
-            unresolved.discard("logo")
+        still_missing_logos = []
+        for spec in pending_logo_specs:
+            if not await install_first(
+                metahub,
+                role="logo",
+                policy_key=f"logo.{spec.logo_priority}.{spec.logo_language}",
+            ):
+                still_missing_logos.append(spec)
+        pending_logo_specs = still_missing_logos
 
+    unresolved = {
+        *({"poster"} if unresolved_poster_needs else set()),
+        *({"backdrop"} if unresolved_backdrop else set()),
+        *({"logo"} if pending_logo_specs else set()),
+    }
     for kind in sorted(unresolved):
         statuses.append(
             ProviderResultStatus(
                 provider="source_art", status="missing", observed_at=evaluated_at,
                 missing_fields=(kind,), expires_at=evaluated_at + timedelta(hours=6),
-            )
-        )
-
-    contract_provenance_missing: list[str] = []
-    if requirements.ocr:
-        # The current v1 SourceArtReference cannot carry the OCR recipe/result
-        # into BingeCat's next immutable snapshot.  New materializations are
-        # verified above, but remain explicitly partial until the synchronized
-        # contract follow-up adds durable verification provenance.
-        contract_provenance_missing.append("textless_provenance")
-    if any(
-        spec.use_original_art and spec.original_art_source == "top_rated"
-        for spec in specs
-    ):
-        contract_provenance_missing.append("art_role")
-    if contract_provenance_missing:
-        statuses.append(
-            ProviderResultStatus(
-                provider="contract_provenance",
-                status="partial",
-                observed_at=evaluated_at,
-                missing_fields=tuple(contract_provenance_missing),
             )
         )
 
@@ -1064,7 +1264,7 @@ async def enrich(
             )
         )
 
-    normalized_facts = NormalizedFacts.model_validate(facts)
+    normalized_facts = _fact_envelope(facts, fact_evidence)
     partial = any(status.status in {"partial", "missing", "rate_limited", "error"} for status in statuses)
     retries.extend(status.retry_at for status in statuses if status.retry_at is not None)
     retry_at = min(retries) if retries else None

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import date
-from typing import Annotated, Any, Literal
+from datetime import date, datetime, timezone
+from typing import Annotated, Any, Literal, Mapping
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -31,6 +31,13 @@ MAX_JSON_BODY_BYTES = 256 * 1024
 
 SupportedLocale = Literal["en", "pt", "nl", "de", "es"]
 MediaType = Literal["movie", "series"]
+ArtRole = Literal["primary", "top_rated", "textless_poster", "fallback_backdrop", "logo"]
+LogoPriority = Literal[
+    "native_original",
+    "original_native",
+    "native_if_original_english",
+    "native_text",
+]
 Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 ShortToken = Annotated[
     str,
@@ -41,6 +48,40 @@ Label = Annotated[str, StringConstraints(min_length=1, max_length=160)]
 PresetReference = Annotated[
     str,
     StringConstraints(min_length=3, max_length=96, pattern=r"^[a-z0-9][a-z0-9-]*@[1-9][0-9]*$"),
+]
+PolicyKey = Annotated[
+    str,
+    StringConstraints(min_length=8, max_length=96, pattern=r"^[a-z0-9][a-z0-9._-]*$"),
+]
+FactField = Literal[
+    "genre",
+    "release_year",
+    "release_date",
+    "original_language",
+    "keywords",
+    "certification",
+    "age_rating",
+    "award_wins",
+    "award_nominations",
+    "festival_label",
+    "matched_studios",
+    "matched_directors",
+    "matched_cast",
+    "trending_rank",
+    "release_status",
+    "is_short_film",
+    "is_mini_series",
+    "is_binge_ready",
+    "is_new_release",
+    "is_digital_release",
+    "is_premiere",
+    "is_just_added",
+    "is_new_season",
+    "is_returning",
+    "is_season_finale",
+    "is_cult",
+    "is_true_story",
+    "is_metacritic_must_see",
 ]
 
 
@@ -259,6 +300,117 @@ class NormalizedFacts(StrictModel):
     is_metacritic_must_see: StrictBool | None = None
 
 
+class FactProvenance(StrictModel):
+    """Freshness and source evidence shared by one or more normalized fields."""
+
+    fields: tuple[FactField, ...] = Field(min_length=1, max_length=32)
+    source: ShortToken
+    observed_at: AwareDatetime
+    checked_at: AwareDatetime
+    expires_at: AwareDatetime
+
+    @field_validator("fields")
+    @classmethod
+    def _unique_canonical_fields(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("duplicate field in fact provenance group")
+        return tuple(sorted(value))
+
+    @field_validator("observed_at", "checked_at", "expires_at")
+    @classmethod
+    def _normalize_utc(cls, value: datetime) -> datetime:
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def _ordered_timestamps(self):
+        if not self.observed_at <= self.checked_at < self.expires_at:
+            raise ValueError(
+                "fact provenance timestamps must satisfy observed_at <= checked_at < expires_at"
+            )
+        return self
+
+
+class NormalizedFactsEnvelope(StrictModel):
+    """Normalized render facts with complete, grouped per-field provenance."""
+
+    values: NormalizedFacts = Field(default_factory=NormalizedFacts)
+    provenance: tuple[FactProvenance, ...] = Field(default=(), max_length=32)
+
+    @field_validator("provenance")
+    @classmethod
+    def _canonical_groups(
+        cls,
+        value: tuple[FactProvenance, ...],
+    ) -> tuple[FactProvenance, ...]:
+        return tuple(
+            sorted(
+                value,
+                key=lambda group: (
+                    group.fields,
+                    group.source,
+                    group.observed_at,
+                    group.checked_at,
+                    group.expires_at,
+                ),
+            )
+        )
+
+    @model_validator(mode="after")
+    def _every_value_has_exactly_one_source(self):
+        populated = set(self.values.model_dump(mode="python", exclude_none=True))
+        covered: set[str] = set()
+        for group in self.provenance:
+            overlap = covered.intersection(group.fields)
+            if overlap:
+                raise ValueError(
+                    "duplicate fact provenance for " + ", ".join(sorted(overlap))
+                )
+            absent = set(group.fields) - populated
+            if absent:
+                raise ValueError(
+                    "fact provenance references absent fact " + ", ".join(sorted(absent))
+                )
+            covered.update(group.fields)
+        missing = populated - covered
+        if missing:
+            raise ValueError("missing provenance for " + ", ".join(sorted(missing)))
+        return self
+
+    @staticmethod
+    def _aware_instant(value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("fact freshness instant must be timezone-aware")
+        return value
+
+    def active_provenance(self, at: datetime) -> tuple[FactProvenance, ...]:
+        instant = self._aware_instant(at)
+        return tuple(group for group in self.provenance if group.expires_at > instant)
+
+    def active_values(self, at: datetime) -> NormalizedFacts:
+        active_fields = {
+            field_name
+            for group in self.active_provenance(at)
+            for field_name in group.fields
+        }
+        payload = self.values.model_dump(
+            mode="python",
+            include=active_fields,
+            exclude_none=True,
+        )
+        return NormalizedFacts.model_validate(payload)
+
+    def visual_projection(self) -> dict[str, Any]:
+        sources = {
+            field_name: group.source
+            for group in self.provenance
+            for field_name in group.fields
+        }
+        return {
+            "sources": dict(sorted(sources.items())),
+            "values": self.values.model_dump(mode="json", exclude_none=True),
+        }
+
+
 class ArtworkLocator(StrictModel):
     provider: Literal["tmdb", "tvdb", "metahub"]
     url: Annotated[str, StringConstraints(min_length=10, max_length=2048)]
@@ -300,6 +452,8 @@ class SourceArtReference(StrictModel):
         ),
     ]
     kind: Literal["poster", "backdrop", "logo"]
+    role: ArtRole
+    policy_key: PolicyKey
     sha256: Sha256Hex
     byte_size: Annotated[int, Field(strict=True, ge=1, le=25_000_000)]
     mime: Literal["image/jpeg", "image/png", "image/webp"]
@@ -310,14 +464,150 @@ class SourceArtReference(StrictModel):
     observed_at: AwareDatetime
     checked_at: AwareDatetime
     expires_at: AwareDatetime
+    textless_verified: StrictBool | None = None
+    verification_recipe: ShortToken | None = None
+    verified_at: AwareDatetime | None = None
+    verification_source_digest: Sha256Hex | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_only_unambiguous_legacy_references(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        migrated = dict(value)
+        kind = migrated.get("kind")
+        role = migrated.get("role")
+        if role is None:
+            if kind == "backdrop":
+                role = "fallback_backdrop"
+                migrated["role"] = role
+            elif kind in {"poster", "logo"}:
+                raise ValueError(
+                    "ambiguous legacy source art requires explicit role and policy_key"
+                )
+        if migrated.get("policy_key") is None:
+            deterministic = {
+                "primary": "original.primary",
+                "top_rated": "original.top_rated",
+                "textless_poster": "fallback.textless",
+                "fallback_backdrop": "fallback.backdrop",
+            }.get(role)
+            if deterministic is None and role == "logo":
+                raise ValueError(
+                    "ambiguous legacy source art requires explicit role and policy_key"
+                )
+            if deterministic is not None:
+                migrated["policy_key"] = deterministic
+        return migrated
+
+    @field_validator("observed_at", "checked_at", "expires_at", "verified_at")
+    @classmethod
+    def _normalize_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return value.astimezone(timezone.utc)
 
     @model_validator(mode="after")
-    def _expiry_follows_observation(self):
+    def _coherent_selection_and_verification(self):
         if self.checked_at < self.observed_at or self.expires_at <= self.checked_at:
             raise ValueError("source art timestamps must satisfy observed_at <= checked_at < expires_at")
         if self.reconstructable and self.locator is None:
             raise ValueError("reconstructable source art requires locator")
+
+        expected_kind = {
+            "primary": "poster",
+            "top_rated": "poster",
+            "textless_poster": "poster",
+            "fallback_backdrop": "backdrop",
+            "logo": "logo",
+        }[self.role]
+        if self.kind != expected_kind:
+            raise ValueError(f"source art role {self.role} requires kind {expected_kind}")
+
+        expected_policy = {
+            "primary": "original.primary",
+            "top_rated": "original.top_rated",
+            "textless_poster": "fallback.textless",
+            "fallback_backdrop": "fallback.backdrop",
+        }.get(self.role)
+        if expected_policy is not None and self.policy_key != expected_policy:
+            raise ValueError(f"policy_key for {self.role} must be {expected_policy}")
+        if self.role == "logo":
+            parts = self.policy_key.split(".")
+            priorities = {
+                "native_original",
+                "original_native",
+                "native_if_original_english",
+                "native_text",
+            }
+            if (
+                len(parts) != 3
+                or parts[0] != "logo"
+                or parts[1] not in priorities
+                or parts[2] not in {"en", "pt", "nl", "de", "es"}
+            ):
+                raise ValueError(
+                    "logo policy_key must pin an allowed priority and supported requested language"
+                )
+
+        verification_evidence = (
+            self.verification_recipe,
+            self.verified_at,
+            self.verification_source_digest,
+        )
+        if self.textless_verified is None:
+            if any(item is not None for item in verification_evidence):
+                raise ValueError(
+                    "textless verification evidence requires textless_verified"
+                )
+        else:
+            if any(item is None for item in verification_evidence):
+                raise ValueError(
+                    "textless_verified requires recipe, verified_at, and source digest"
+                )
+            if self.verification_source_digest != self.sha256:
+                raise ValueError("verification_source_digest must equal source sha256")
+            if not self.observed_at <= self.verified_at <= self.checked_at:
+                raise ValueError(
+                    "verified_at must satisfy observed_at <= verified_at <= checked_at"
+                )
+        if self.role == "textless_poster" and self.textless_verified is not True:
+            raise ValueError("textless_poster role requires textless_verified=true")
+        if self.role == "logo" and self.textless_verified is not None:
+            raise ValueError("logo source art cannot carry textless verification")
         return self
+
+    def visual_projection(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "locale": self.locale,
+            "policy_key": self.policy_key,
+            "recipe_version": self.recipe_version,
+            "role": self.role,
+            "sha256": self.sha256,
+            "textless_verified": self.textless_verified,
+            "verification_recipe": self.verification_recipe,
+            "verification_source_digest": self.verification_source_digest,
+        }
+
+
+def _canonical_source_art(
+    value: tuple[SourceArtReference, ...],
+) -> tuple[SourceArtReference, ...]:
+    source_ids = [item.source_art_id for item in value]
+    if len(set(source_ids)) != len(source_ids):
+        raise ValueError("duplicate source_art_id")
+    return tuple(
+        sorted(
+            value,
+            key=lambda item: (
+                item.role,
+                item.policy_key,
+                item.locale or "neutral",
+                item.source_art_id,
+            ),
+        )
+    )
 
 
 class ProviderResultStatus(StrictModel):
@@ -336,7 +626,7 @@ class EnrichmentRequest(ContractDTO):
     preset_refs: tuple[PresetReference, ...] = Field(default=(), max_length=16)
     canonical_configs: tuple[dict[str, Any], ...] = Field(default=(), max_length=8)
     known_ratings: tuple[ProviderRating, ...] = Field(default=(), max_length=64)
-    known_facts: NormalizedFacts = Field(default_factory=NormalizedFacts)
+    known_facts: NormalizedFactsEnvelope = Field(default_factory=NormalizedFactsEnvelope)
     known_source_art: tuple[SourceArtReference, ...] = Field(default=(), max_length=24)
 
     @field_validator("locales")
@@ -360,6 +650,14 @@ class EnrichmentRequest(ContractDTO):
             _validate_bounded_json(config, max_bytes=64 * 1024, field_name="canonical_config")
         return tuple(_deep_freeze_json(config) for config in value)
 
+    @field_validator("known_source_art")
+    @classmethod
+    def _unique_known_source_art(
+        cls,
+        value: tuple[SourceArtReference, ...],
+    ) -> tuple[SourceArtReference, ...]:
+        return _canonical_source_art(value)
+
     @model_validator(mode="after")
     def _has_render_target(self):
         if not self.preset_refs and not self.canonical_configs:
@@ -372,7 +670,7 @@ class EnrichmentResult(ContractDTO):
     evaluated_at: AwareDatetime
     titles_by_locale: dict[SupportedLocale, Title] = Field(min_length=1, max_length=5)
     ratings: tuple[ProviderRating, ...] = Field(default=(), max_length=64)
-    facts: NormalizedFacts = Field(default_factory=NormalizedFacts)
+    facts: NormalizedFactsEnvelope = Field(default_factory=NormalizedFactsEnvelope)
     provider_statuses: tuple[ProviderResultStatus, ...] = Field(default=(), max_length=32)
     source_art: tuple[SourceArtReference, ...] = Field(default=(), max_length=24)
     partial: StrictBool = False
@@ -385,12 +683,20 @@ class EnrichmentResult(ContractDTO):
             raise ValueError("titles_by_locale must include en")
         return FrozenDict(value)
 
+    @field_validator("source_art")
+    @classmethod
+    def _unique_source_art(
+        cls,
+        value: tuple[SourceArtReference, ...],
+    ) -> tuple[SourceArtReference, ...]:
+        return _canonical_source_art(value)
+
 
 class ImmutableRenderSnapshot(StrictModel):
     evaluated_at: AwareDatetime
     titles_by_locale: dict[SupportedLocale, Title] = Field(min_length=1, max_length=5)
     ratings: tuple[ProviderRating, ...] = Field(default=(), max_length=64)
-    facts: NormalizedFacts = Field(default_factory=NormalizedFacts)
+    facts: NormalizedFactsEnvelope = Field(default_factory=NormalizedFactsEnvelope)
     source_art: tuple[SourceArtReference, ...] = Field(default=(), max_length=24)
 
     @field_validator("titles_by_locale")
@@ -399,6 +705,14 @@ class ImmutableRenderSnapshot(StrictModel):
         if "en" not in value:
             raise ValueError("titles_by_locale must include en")
         return FrozenDict(value)
+
+    @field_validator("source_art")
+    @classmethod
+    def _unique_source_art(
+        cls,
+        value: tuple[SourceArtReference, ...],
+    ) -> tuple[SourceArtReference, ...]:
+        return _canonical_source_art(value)
 
 
 class RenderInputBundle(ContractDTO):
@@ -436,16 +750,20 @@ class RenderResultMetadata(ContractDTO):
 
 
 __all__ = [
+    "ArtRole",
     "ArtworkLocator",
     "CONTRACT_SCHEMA",
     "CONTRACT_VERSION",
     "MAX_JSON_BODY_BYTES",
     "EnrichmentRequest",
     "EnrichmentResult",
+    "FactField",
+    "FactProvenance",
     "FrozenDict",
     "ImmutableRenderSnapshot",
     "MediaIdentity",
     "NormalizedFacts",
+    "NormalizedFactsEnvelope",
     "ProviderRating",
     "ProviderResultStatus",
     "RenderInputBundle",
