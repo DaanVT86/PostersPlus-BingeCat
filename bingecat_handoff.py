@@ -46,6 +46,7 @@ COOKIE_PATH = "/bingecat/configurator"
 SESSION_TTL_SECONDS = 300
 MAX_FORM_BODY_BYTES = 64 * 1024
 MAX_CALLBACK_RESPONSE_BYTES = 64 * 1024
+MAX_CALLBACK_RETRY_AFTER_SECONDS = 300
 MAX_HANDOFF_TOKEN_BYTES = 512
 MAX_CANONICAL_CONFIG_BYTES = 48 * 1024
 CONSUME_PATH = "/api/internal/posterplus/v2/handoffs/consume"
@@ -59,10 +60,70 @@ _HEX_32 = re.compile(r"^[0-9a-f]{32}$")
 class HandoffError(RuntimeError):
     """Bounded failure safe to map to a generic browser response."""
 
-    def __init__(self, code: str, status_code: int = 503) -> None:
+    def __init__(
+        self,
+        code: str,
+        status_code: int = 503,
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        if retry_after_seconds is not None and (
+            code != "save_in_progress"
+            or status_code != 409
+            or isinstance(retry_after_seconds, bool)
+            or not 1 <= retry_after_seconds <= MAX_CALLBACK_RETRY_AFTER_SECONDS
+        ):
+            raise ValueError("invalid retryable handoff error")
         super().__init__(code)
         self.code = code
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _parse_save_in_progress_error(
+    raw: bytes,
+    retry_after_headers: list[str],
+) -> HandoffError:
+    """Accept only BingeCat's exact, bounded retryable save conflict."""
+
+    if len(retry_after_headers) != 1:
+        raise HandoffError("callback_unavailable", 503)
+    retry_after = retry_after_headers[0]
+    if (
+        not retry_after.isascii()
+        or not retry_after.isdigit()
+        or retry_after.startswith("0")
+    ):
+        raise HandoffError("callback_unavailable", 503)
+    seconds = int(retry_after)
+    if not 1 <= seconds <= MAX_CALLBACK_RETRY_AFTER_SECONDS:
+        raise HandoffError("callback_unavailable", 503)
+
+    def exact_object(pairs):
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if not isinstance(key, str) or key in value:
+                raise ValueError("duplicate or invalid callback key")
+            value[key] = item
+        return value
+
+    try:
+        value = json.loads(raw, object_pairs_hook=exact_object)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise HandoffError("callback_unavailable", 503) from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"success", "error_code", "error"}
+        or value.get("success") is not False
+        or value.get("error_code") != "save_in_progress"
+        or value.get("error") != "Handoff unavailable."
+    ):
+        raise HandoffError("callback_unavailable", 503)
+    return HandoffError(
+        "save_in_progress",
+        409,
+        retry_after_seconds=seconds,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -518,6 +579,11 @@ class BingeCatCallbackClient:
                     raw = b"".join(chunks)
                     if declared_length is not None and declared_length != len(raw):
                         raise HandoffError("invalid_callback", 503)
+                    if response.status_code == 409 and path == SAVE_PATH:
+                        raise _parse_save_in_progress_error(
+                            raw,
+                            response.headers.get_list("retry-after"),
+                        )
                     if response.status_code == 410:
                         raise HandoffError("handoff_unavailable", 410)
                     if response.status_code != 200:
@@ -828,7 +894,10 @@ def _failure(exc: HandoffError) -> Response:
         503: "BingeCat is tijdelijk niet bereikbaar.",
     }
     body = f"<!doctype html><meta charset=utf-8><title>PostersPlus</title><p>{labels.get(exc.status_code, labels[503])}</p>"
-    return apply_security_headers(HTMLResponse(body, status_code=exc.status_code))
+    response = HTMLResponse(body, status_code=exc.status_code)
+    if exc.retry_after_seconds is not None:
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+    return apply_security_headers(response)
 
 
 def _cookie(request: Request) -> str | None:

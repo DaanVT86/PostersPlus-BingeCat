@@ -38,7 +38,13 @@ from render_spec import (
     canonicalize_config,
     compile_requirements,
 )
-from source_art import RECIPE_VERSIONS, SourceArtError, SourceArtStore, fetch_derivative
+from source_art import (
+    RECIPE_VERSIONS,
+    SourceArtError,
+    SourceArtStore,
+    SourceDerivative,
+    fetch_derivative,
+)
 from tmdb import (
     V2ArtworkCandidate,
     V2TMDBMetadata,
@@ -56,6 +62,21 @@ CONFIGURATION_MISSING_TTL = timedelta(hours=6)
 
 class UnsupportedPresetVersion(RuntimeError):
     pass
+
+
+class SourceArtUnavailable(RuntimeError):
+    """A fresh snapshot reference cannot be backed by exact local bytes.
+
+    The code is deliberately fixed and contains no provider, locator, or
+    filesystem detail.  The private endpoint can therefore expose it as a
+    typed retryable failure without leaking service internals.
+    """
+
+    code = "source_art_unavailable"
+    status_code = 503
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
 
 
 @dataclass(frozen=True)
@@ -369,6 +390,65 @@ def _dedupe_known_source_art(
     return [selected[key] for key in sorted(selected)]
 
 
+def _derivative_matches_reference(
+    derivative: SourceDerivative,
+    reference: SourceArtReference,
+) -> bool:
+    return (
+        derivative.source_art_id == reference.source_art_id
+        and derivative.kind == reference.kind
+        and derivative.sha256 == reference.sha256
+        and derivative.byte_size == reference.byte_size
+        and derivative.mime == reference.mime
+        and derivative.recipe_version == reference.recipe_version
+    )
+
+
+async def _ensure_known_source_art(
+    items: list[SourceArtReference],
+    evaluated_at: datetime,
+    store: SourceArtStore | None,
+) -> list[SourceArtReference]:
+    """Verify fresh references and reconstruct pruned bytes by exact digest.
+
+    Enrichment runtimes built by the service always provide a store.  A
+    ``None`` store remains supported for pure provider-hook unit runtimes,
+    which never publish through the HTTP endpoint.  Reconstruction is not a
+    pin: the derivative stays evictable and its bounded locator recipe remains
+    the recovery mechanism after a later prune.
+    """
+
+    if store is None or not items:
+        return items
+    for reference in items:
+        try:
+            derivative = await asyncio.to_thread(
+                store.get,
+                reference.sha256,
+                reference.kind,
+                reference.recipe_version,
+                now=evaluated_at,
+            )
+            if derivative is None:
+                if not reference.reconstructable or reference.locator is None:
+                    raise SourceArtUnavailable()
+                derivative = await fetch_derivative(
+                    reference.locator,
+                    kind=reference.kind,
+                    recipe_version=reference.recipe_version,
+                    expected_sha256=reference.sha256,
+                    store=store,
+                    now=evaluated_at,
+                )
+            if not _derivative_matches_reference(derivative, reference):
+                raise SourceArtUnavailable()
+        except SourceArtUnavailable:
+            raise
+        except Exception as exc:
+            raise SourceArtUnavailable() from exc
+    return items
+
+
 def _parse_date(value: str | date | None) -> date | None:
     if isinstance(value, date):
         return value
@@ -672,7 +752,11 @@ async def enrich(
         for field_name in set(facts) - before_derived:
             fact_evidence[field_name] = keyword_evidence
     ratings = tuple(rating for rating in request.known_ratings if rating.expires_at > evaluated_at)
-    source_art = _dedupe_known_source_art(request.known_source_art, evaluated_at)
+    source_art = await _ensure_known_source_art(
+        _dedupe_known_source_art(request.known_source_art, evaluated_at),
+        evaluated_at,
+        runtime.source_store,
+    )
 
     mdblist_missing = _missing_mdblist_fields(
         requirements,
@@ -1400,6 +1484,7 @@ __all__ = [
     "DEFAULT_HOOKS",
     "EnrichmentRuntime",
     "ProviderHooks",
+    "SourceArtUnavailable",
     "UnsupportedPresetVersion",
     "build_runtime",
     "enrich",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -44,6 +45,7 @@ class FakeCallback:
         self.save_calls: list[dict] = []
         self.consumed_tokens: set[str] = set()
         self.fail_save_once = False
+        self.save_in_progress_once = False
         self.return_url = RETURN_URL
         self.canonical_config = _canonical()
 
@@ -69,6 +71,13 @@ class FakeCallback:
         if self.fail_save_once:
             self.fail_save_once = False
             raise handoff.HandoffError("callback_unavailable", 503)
+        if self.save_in_progress_once:
+            self.save_in_progress_once = False
+            raise handoff.HandoffError(
+                "save_in_progress",
+                409,
+                retry_after_seconds=30,
+            )
         return {
             "schema": CONTRACT_SCHEMA,
             "version": CONTRACT_VERSION,
@@ -338,6 +347,33 @@ def test_callback_failure_releases_claim_for_retry(configured_handoff) -> None:
     assert len(fake.save_calls) == 2
 
 
+def test_remote_save_in_progress_preserves_browser_conflict_and_retry_after(
+    configured_handoff,
+) -> None:
+    client, fake, _store = configured_handoff
+    fake.save_in_progress_once = True
+    assert _start(client).status_code == 303
+    csrf = _csrf(client.get("/bingecat/configurator").text)
+
+    pending = client.post(
+        "/bingecat/configurator/save",
+        data={"csrf_token": csrf, "badge_display_mode": "0"},
+        follow_redirects=False,
+    )
+
+    assert pending.status_code == 409
+    assert pending.headers["retry-after"] == "30"
+    _assert_security_headers(pending)
+    retry_csrf = _csrf(client.get("/bingecat/configurator").text)
+    saved = client.post(
+        "/bingecat/configurator/save",
+        data={"csrf_token": retry_csrf, "badge_display_mode": "0"},
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    assert len(fake.save_calls) == 2
+
+
 def test_remote_save_survives_local_cleanup_failure(
     configured_handoff, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -405,8 +441,7 @@ def test_callback_return_url_must_match_exact_allowlist(configured_handoff) -> N
     assert "pp_bc_session=" not in response.headers.get("set-cookie", "")
 
 
-@pytest.mark.asyncio
-async def test_callback_client_signs_fixed_path_and_rejects_redirect_timeout_and_headers():
+async def _callback_client_signing_scenario():
     secret = b"callback-secret"
     seen: list[httpx.Request] = []
 
@@ -483,6 +518,108 @@ async def test_callback_client_signs_fixed_path_and_rejects_redirect_timeout_and
     )
     with pytest.raises(handoff.HandoffError, match="callback_unavailable"):
         await timed.consume("opaque-token")
+
+
+def test_callback_client_signs_fixed_path_and_rejects_redirect_timeout_and_headers():
+    asyncio.run(_callback_client_signing_scenario())
+
+
+async def _save_in_progress_contract_scenario():
+    exact_body = {
+        "success": False,
+        "error_code": "save_in_progress",
+        "error": "Handoff unavailable.",
+    }
+    exact = handoff.BingeCatCallbackClient(
+        "https://bingecat.internal",
+        "callback-secret",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                409,
+                json=exact_body,
+                headers={"Retry-After": "30"},
+            )
+        ),
+    )
+    with pytest.raises(handoff.HandoffError) as captured:
+        await exact.save({})
+    assert captured.value.code == "save_in_progress"
+    assert captured.value.status_code == 409
+    assert captured.value.retry_after_seconds == 30
+
+    invalid_responses = (
+        httpx.Response(409, json=exact_body),
+        httpx.Response(409, json=exact_body, headers={"Retry-After": "0"}),
+        httpx.Response(409, json=exact_body, headers={"Retry-After": "301"}),
+        httpx.Response(409, json=exact_body, headers={"Retry-After": "30.0"}),
+        httpx.Response(
+            409,
+            content=json.dumps(exact_body).encode(),
+            headers=[
+                ("Content-Type", "application/json"),
+                ("Retry-After", "30"),
+                ("Retry-After", "30"),
+            ],
+        ),
+        httpx.Response(
+            409,
+            json={**exact_body, "extra": True},
+            headers={"Retry-After": "30"},
+        ),
+        httpx.Response(
+            409,
+            json={**exact_body, "success": 0},
+            headers={"Retry-After": "30"},
+        ),
+        httpx.Response(
+            409,
+            content=(
+                b'{"success":false,"error_code":"save_in_progress",'
+                b'"error_code":"save_in_progress","error":"Handoff unavailable."}'
+            ),
+            headers={"Content-Type": "application/json", "Retry-After": "30"},
+        ),
+        httpx.Response(
+            400,
+            json=exact_body,
+            headers={"Retry-After": "30"},
+        ),
+    )
+    for response in invalid_responses:
+        client = handoff.BingeCatCallbackClient(
+            "https://bingecat.internal",
+            "callback-secret",
+            timeout_seconds=1,
+            transport=httpx.MockTransport(
+                lambda _request, response=response: response
+            ),
+        )
+        with pytest.raises(handoff.HandoffError) as rejected:
+            await client.save({})
+        assert rejected.value.code == "callback_unavailable"
+        assert rejected.value.status_code == 503
+
+    wrong_path = handoff.BingeCatCallbackClient(
+        "https://bingecat.internal",
+        "callback-secret",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                409,
+                json=exact_body,
+                headers={"Retry-After": "30"},
+            )
+        ),
+    )
+    with pytest.raises(handoff.HandoffError) as consume_rejected:
+        await wrong_path.consume("opaque-token")
+    assert consume_rejected.value.code == "callback_unavailable"
+    assert consume_rejected.value.status_code == 503
+
+
+def test_callback_client_accepts_only_exact_bounded_save_in_progress_error():
+    asyncio.run(_save_in_progress_contract_scenario())
 
 
 @pytest.mark.parametrize(

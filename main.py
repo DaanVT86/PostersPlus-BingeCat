@@ -628,6 +628,7 @@ from service_auth import AuthError as V2AuthError, SQLiteNonceStore, verify_requ
 from source_art import SourceArtStore
 from cache_policy import FileLeaderLock, get_usage as get_cache_usage, prune_to_targets
 from v2_enrich import (
+    SourceArtUnavailable as V2SourceArtUnavailable,
     UnsupportedPresetVersion,
     build_runtime as build_v2_enrichment_runtime,
     enrich as enrich_v2,
@@ -3361,6 +3362,8 @@ async def v2_enrich_endpoint(request: Request):
         )
     except UnsupportedPresetVersion:
         raise HTTPException(status_code=409, detail="unsupported_preset_version") from None
+    except V2SourceArtUnavailable as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)[:200]) from None
     except Exception as exc:

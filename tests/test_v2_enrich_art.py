@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import tvdb as tvdb_module
+import v2_enrich as enrich_module
 from awards import _RateLimited
 from bingecat_resolver import ResolvedIdentity, resolve_v2_identity
 from integration_contract import (
@@ -61,6 +62,7 @@ from tmdb import (
 from v2_enrich import (
     EnrichmentRuntime,
     ProviderHooks,
+    SourceArtUnavailable,
     UnsupportedPresetVersion,
     enrich,
     freeze_lifecycle_facts,
@@ -143,6 +145,37 @@ def _installed_known_art(store: SourceArtStore) -> SourceArtReference:
         checked_at=NOW - timedelta(hours=1),
         expires_at=NOW + timedelta(days=30),
     )
+
+
+def _reconstructable_known_art(
+    store: SourceArtStore,
+) -> tuple[SourceArtReference, bytes, Path]:
+    derivative = normalize_and_store(
+        "poster",
+        io.BytesIO(_image_bytes("JPEG", size=(900, 1350))),
+        1,
+        store=store,
+        locator=_locator(),
+        now=NOW,
+    )
+    reference = SourceArtReference(
+        source_art_id=derivative.source_art_id,
+        kind="poster",
+        role="primary",
+        policy_key="original.primary",
+        sha256=derivative.sha256,
+        byte_size=derivative.byte_size,
+        mime=derivative.mime,
+        recipe_version=derivative.recipe_version,
+        locator=derivative.locator,
+        locale="neutral",
+        reconstructable=True,
+        observed_at=NOW - timedelta(hours=2),
+        checked_at=NOW - timedelta(hours=1),
+        expires_at=NOW + timedelta(days=30),
+    )
+    path = Path(derivative.path)
+    return reference, path.read_bytes(), path
 
 
 def _rating(
@@ -271,7 +304,12 @@ def _tmdb_metadata(*candidates: V2ArtworkCandidate) -> V2TMDBMetadata:
     )
 
 
-def _runtime(hooks: ProviderHooks, *, stateless=True) -> EnrichmentRuntime:
+def _runtime(
+    hooks: ProviderHooks,
+    *,
+    stateless=True,
+    source_store: SourceArtStore | None = None,
+) -> EnrichmentRuntime:
     return EnrichmentRuntime(
         client=object(),
         pool=None,
@@ -279,6 +317,7 @@ def _runtime(hooks: ProviderHooks, *, stateless=True) -> EnrichmentRuntime:
         mdblist_key="mdblist-key",
         stateless_metadata=stateless,
         hooks=hooks,
+        source_store=source_store,
     )
 
 
@@ -1401,6 +1440,100 @@ def test_expired_source_art_triggers_one_tmdb_lookup_and_atomic_materialization(
     assert result.source_art[0].expires_at > NOW
 
 
+def test_fresh_known_source_art_is_verified_locally_without_provider_calls(tmp_path):
+    store = SourceArtStore(tmp_path / "sources", tmp_path / "ledger.sqlite")
+    reference, _payload, _path = _reconstructable_known_art(store)
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("verified local source art must prevent provider calls")
+
+    result = asyncio.run(
+        enrich(
+            _request(_art_only_config(), known_source_art=[reference]),
+            NOW,
+            runtime=_runtime(ProviderHooks.all(forbidden), source_store=store),
+        )
+    )
+
+    assert result.source_art == (reference,)
+
+
+def test_pruned_fresh_known_source_art_is_rebuilt_by_exact_digest(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = SourceArtStore(tmp_path / "sources", tmp_path / "ledger.sqlite")
+    reference, payload, path = _reconstructable_known_art(store)
+    path.unlink()
+    calls = Counter()
+
+    async def rebuild(locator, **kwargs):
+        calls["rebuild"] += 1
+        assert locator == reference.locator
+        assert kwargs["expected_sha256"] == reference.sha256
+        assert kwargs["store"] is store
+        return store.install(
+            kind=reference.kind,
+            recipe_version=reference.recipe_version,
+            payload=payload,
+            mime=reference.mime,
+            width=500,
+            height=750,
+            locator=reference.locator,
+            now=kwargs["now"],
+            pinned=False,
+            reconstructable=True,
+        )
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("exact source reconstruction avoids metadata providers")
+
+    monkeypatch.setattr(enrich_module, "fetch_derivative", rebuild)
+    result = asyncio.run(
+        enrich(
+            _request(_art_only_config(), known_source_art=[reference]),
+            NOW,
+            runtime=_runtime(ProviderHooks.all(forbidden), source_store=store),
+        )
+    )
+
+    assert calls == Counter({"rebuild": 1})
+    assert result.source_art == (reference,)
+    restored = store.get(reference.sha256, "poster", 1, now=NOW)
+    assert restored is not None
+    assert restored.pinned is False
+
+
+def test_unrecoverable_fresh_known_source_art_has_one_bounded_typed_error(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store = SourceArtStore(tmp_path / "sources", tmp_path / "ledger.sqlite")
+    reference, _payload, path = _reconstructable_known_art(store)
+    path.unlink()
+
+    async def unavailable(*_args, **_kwargs):
+        raise SourceArtError("sensitive provider and filesystem detail")
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("provider hooks must not run after exact rebuild failure")
+
+    monkeypatch.setattr(enrich_module, "fetch_derivative", unavailable)
+    with pytest.raises(SourceArtUnavailable) as captured:
+        asyncio.run(
+            enrich(
+                _request(_art_only_config(), known_source_art=[reference]),
+                NOW,
+                runtime=_runtime(ProviderHooks.all(forbidden), source_store=store),
+            )
+        )
+
+    assert captured.value.code == "source_art_unavailable"
+    assert captured.value.status_code == 503
+    assert str(captured.value) == "source_art_unavailable"
+    assert "sensitive" not in str(captured.value)
+
+
 def test_stateful_enrichment_passes_read_write_cache_mode():
     modes = []
 
@@ -1986,15 +2119,17 @@ def test_locator_path_dns_peer_redirect_and_size_guards(tmp_path):
             "poster",
         )
 
-    private = lambda _host, _port: [
-        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
-    ]
+    def private(_host, _port):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
+
     with pytest.raises(SourceSecurityError, match="public"):
         resolve_public_addresses("image.tmdb.org", resolver=private)
 
-    public = lambda _host, _port: [
-        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
-    ]
+    def public(_host, _port):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ]
+
     png = _image_bytes("PNG", (10, 15))
 
     def peer_mismatch(*_args, **_kwargs):
@@ -2151,3 +2286,14 @@ def test_v2_enrich_route_is_hidden_without_secret_and_uses_raw_strict_json(monke
     unsupported = client.post("/v2/enrich", content=body, headers=unsupported_headers)
     assert unsupported.status_code == 409
     assert unsupported.json()["detail"] == "unsupported_preset_version"
+
+    mocked.side_effect = SourceArtUnavailable()
+    unavailable_headers = build_auth_headers(
+        method="POST", path="/v2/enrich", body=body, request_id=uuid4(),
+        timestamp=timestamp, secret=secret, caller="bingecat", audience="postersplus",
+    )
+    unavailable = client.post(
+        "/v2/enrich", content=body, headers=unavailable_headers
+    )
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {"detail": "source_art_unavailable"}

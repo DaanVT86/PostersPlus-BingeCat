@@ -8,6 +8,7 @@ downloads artwork, or reads the wall clock for a visual decision.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import asdict
 from datetime import datetime
 import hashlib
@@ -57,42 +58,118 @@ _COMPOSITION_LOCK = threading.Lock()
 _COMPOSITION_LANGUAGES_READY = False
 V2_TRENDING_FETCH_COUNT = 40
 V2_TRENDING_BROAD_FETCH_COUNT = 100
-_COMPOSITOR_MODULES = (
-    "v2_render.py",
-    "main.py",
-    "render_spec.py",
-    "preset_registry.py",
-    "source_art.py",
-    "ratings.py",
-    "awards.py",
-    "age_badge.py",
-    "discovery.py",
-    "genre_backgrounds.py",
-    "tmdb.py",
-    "i18n.py",
-    "config.py",
-    "requirements.txt",
-    "dockerfile",
+
+# Renderer identity is intentionally narrower than service identity.  Only
+# semantic compositor definitions, pixel assets, and encoder/drawing library
+# versions belong here.  Authentication, health checks, provider adapters,
+# cache policy, and HTTP routing must not invalidate immutable poster URLs.
+#
+# ``main.py`` still hosts the legacy compositor, so selected top-level symbols
+# are hashed as normalized AST closures rather than hashing the whole module.
+# A health/auth edit in that file is therefore outside this identity, while a
+# change to ``build_poster`` or one of its module-level constants is included.
+RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "v2_render.py",
+        (
+            "_compose",
+            "_encode_webp",
+        ),
+    ),
+    (
+        "main.py",
+        (
+            "RequestConfig",
+            "_load_genre_background",
+            "_make_fallback_canvas",
+            "build_poster",
+        ),
+    ),
+    (
+        "ratings.py",
+        (
+            "parse_custom_score_palette",
+            "draw_frosted_bar",
+            "draw_score_bar",
+            "draw_score_bar_vertical",
+            "sample_frosted_bar_rgb",
+            "score_color_for_mode",
+        ),
+    ),
+    (
+        "awards.py",
+        (
+            "draw_award_badge",
+            "draw_award_sash",
+            "sample_frosted_notch_rgb",
+            "sample_frosted_sash_rgb",
+        ),
+    ),
+    ("age_badge.py", ("draw_quality_age_badge",)),
+    ("discovery.py", ("DiscoveryMeta", "pick_sash")),
+    ("tmdb.py", ("LOGO_ABS_MAX_H", "composite_logo", "logo_centre_y")),
+    ("i18n.py", ("load_languages", "translate_genre", "translate_sash")),
 )
 
 
-def _revision_manifest() -> tuple[str, ...]:
-    assets = [
+def _renderer_assets() -> tuple[str, ...]:
+    roots = (
+        (_BASE_DIR / "fonts", frozenset({".ttf"})),
+        (_BASE_DIR / "static" / "genre_bg", frozenset({".png"})),
+        (_BASE_DIR / "static" / "logos", frozenset({".png"})),
+    )
+    paths = [
         path.relative_to(_BASE_DIR).as_posix()
-        for root in (
-            _BASE_DIR / "fonts",
-            _BASE_DIR / "languages",
-            _BASE_DIR / "static" / "genre_bg",
-            _BASE_DIR / "static" / "logos",
-            _BASE_DIR / "badges",
-        )
+        for root, suffixes in roots
         for path in root.rglob("*")
-        if path.is_file()
+        if path.is_file() and path.suffix.lower() in suffixes
     ]
-    return tuple((*_COMPOSITOR_MODULES, *sorted(assets)))
+    paths.extend(
+        f"languages/{locale}.json" for locale in ("en", "pt", "nl", "de", "es")
+    )
+    return tuple(sorted(set(paths)))
 
 
-RENDERER_REVISION_MANIFEST = _revision_manifest()
+RENDERER_REVISION_ASSET_MANIFEST = _renderer_assets()
+RENDERER_REVISION_MANIFEST = tuple(
+    [
+        f"{relative_path}::{root}"
+        for relative_path, roots in RENDERER_REVISION_CODE_ROOTS
+        for root in roots
+    ]
+    + list(RENDERER_REVISION_ASSET_MANIFEST)
+)
+
+# Selection/canonicalization and source normalization are separately auditable
+# identities.  Their output is already carried by config/snapshot hashes and by
+# each source reference's recipe_version + content digest, so mixing them into
+# RENDERER_REVISION would create cache churn without changing composition.
+RENDER_POLICY_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "v2_render.py",
+        (
+            "_resolve_spec",
+            "_select_base_reference",
+            "_select_logo_reference",
+            "_used_fact_fields",
+            "_used_ratings",
+            "canonical_snapshot_sha256",
+            "snapshot_visual_projection",
+        ),
+    ),
+    ("render_spec.py", ("CanonicalRenderSpec", "canonicalize_config", "compile_requirements")),
+    ("preset_registry.py", ("get_preset",)),
+    (
+        "integration_contract.py",
+        ("ImmutableRenderSnapshot", "RenderInputBundle", "SourceArtReference"),
+    ),
+)
+SOURCE_RECIPE_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("source_art.py", ("RECIPE_VERSIONS", "_normalize_payload")),
+    ("tmdb.py", ("_crop_and_normalise_backdrop", "normalise_poster")),
+    ("face_detect.py", ("detect_faces",)),
+)
+SOURCE_RECIPE_REVISION_ASSET_MANIFEST = ("models/face_detection_yunet.onnx",)
 
 
 class RenderError(RuntimeError):
@@ -1057,39 +1134,160 @@ def _encode_webp(image: Image.Image) -> bytes:
     return payload
 
 
-def _compute_renderer_revision() -> str:
-    import config
+def _without_ast_docstrings(tree: ast.AST) -> ast.AST:
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (
+            isinstance(body, list)
+            and body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            del body[0]
+    return tree
+
+
+def _bound_names(node: ast.AST) -> tuple[str, ...]:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return (node.name,)
+    targets: list[ast.AST] = []
+    if isinstance(node, ast.Assign):
+        targets.extend(node.targets)
+    elif isinstance(node, ast.AnnAssign):
+        targets.append(node.target)
+    names: list[str] = []
+    for target in targets:
+        if isinstance(target, ast.Name):
+            names.append(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            names.extend(
+                child.id for child in target.elts if isinstance(child, ast.Name)
+            )
+    return tuple(names)
+
+
+def _semantic_code_payload(
+    relative_path: str,
+    roots: tuple[str, ...],
+    *,
+    source_overrides: Mapping[str, str] | None = None,
+) -> bytes:
+    path = _BASE_DIR / relative_path
+    try:
+        source = (
+            source_overrides[relative_path]
+            if source_overrides is not None and relative_path in source_overrides
+            else path.read_text(encoding="utf-8")
+        )
+        tree = _without_ast_docstrings(ast.parse(source, filename=relative_path))
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        raise RuntimeError(
+            f"revision source unavailable: {relative_path}"
+        ) from exc
+
+    definitions: dict[str, ast.AST] = {}
+    for node in tree.body:  # type: ignore[attr-defined]
+        for name in _bound_names(node):
+            definitions[name] = node
+    missing = sorted(set(roots) - definitions.keys())
+    if missing:
+        raise RuntimeError(
+            f"revision roots unavailable: {relative_path}:{','.join(missing)}"
+        )
+
+    selected: dict[int, tuple[str, ast.AST]] = {}
+    pending = list(roots)
+    visited_names: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in visited_names:
+            continue
+        visited_names.add(name)
+        node = definitions.get(name)
+        if node is None:
+            continue
+        existing = selected.get(id(node))
+        if existing is None or name < existing[0]:
+            selected[id(node)] = (name, node)
+        dependencies = {
+            child.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+        }
+        pending.extend(sorted(dependencies & definitions.keys(), reverse=True))
+
+    normalized = [
+        {
+            "symbol": name,
+            "tree": ast.dump(node, annotate_fields=True, include_attributes=False),
+        }
+        for name, node in sorted(selected.values(), key=lambda item: item[0])
+    ]
+    return _canonical_json(normalized).encode("utf-8")
+
+
+def _image_library_versions() -> dict[str, str]:
     import numpy
 
+    versions = {
+        "numpy": numpy.__version__,
+        "pillow": PIL.__version__,
+    }
+    for feature in (
+        "freetype2",
+        "fribidi",
+        "harfbuzz",
+        "jpg",
+        "libjpeg_turbo",
+        "raqm",
+        "webp",
+        "zlib",
+        "zlib_ng",
+    ):
+        try:
+            versions[feature] = features.version(feature) or "unavailable"
+        except (KeyError, ValueError):
+            versions[feature] = "unavailable"
     try:
         import cairo
 
-        cairo_version = cairo.cairo_version_string()
-        pycairo_version = getattr(cairo, "version", "unknown")
+        versions["cairo"] = cairo.cairo_version_string()
+        versions["pycairo"] = getattr(cairo, "version", "unknown")
     except ImportError:
-        cairo_version = "unavailable"
-        pycairo_version = "unavailable"
+        versions["cairo"] = "unavailable"
+        versions["pycairo"] = "unavailable"
+    return versions
+
+
+def _compute_semantic_revision(
+    domain: bytes,
+    code_roots: tuple[tuple[str, tuple[str, ...]], ...],
+    *,
+    assets: tuple[str, ...] = (),
+    environment: Mapping[str, Any] | None = None,
+    source_overrides: Mapping[str, str] | None = None,
+) -> str:
     digest = hashlib.sha256()
-    digest.update(b"postersplus-bingecat-v2-renderer\0revision-1\0")
-    environment = {
-        "cairo": cairo_version,
-        "canvas": _CANVAS_SIZE,
-        "numpy": numpy.__version__,
-        "pillow": PIL.__version__,
-        "pycairo": pycairo_version,
-        "trending_broad_fetch_count": config.TRENDING_BROAD_FETCH_COUNT,
-        "trending_fetch_count": config.TRENDING_FETCH_COUNT,
-        "webp": features.version_module("webp") or "unavailable",
-        "webp_settings": dict(_WEBP_SETTINGS),
-    }
-    digest.update(_canonical_json(environment).encode("utf-8"))
-    for relative_path in RENDERER_REVISION_MANIFEST:
+    digest.update(domain)
+    digest.update(b"\0revision-2\0")
+    digest.update(_canonical_json(environment or {}).encode("utf-8"))
+    for relative_path, roots in code_roots:
+        payload = _semantic_code_payload(
+            relative_path,
+            roots,
+            source_overrides=source_overrides,
+        )
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(payload).digest())
+    for relative_path in assets:
         path = _BASE_DIR / relative_path
         try:
             payload = path.read_bytes()
         except OSError as exc:
             raise RuntimeError(
-                f"renderer revision asset unavailable: {path.name}"
+                f"revision asset unavailable: {relative_path}"
             ) from exc
         digest.update(relative_path.encode("utf-8"))
         digest.update(b"\0")
@@ -1097,7 +1295,62 @@ def _compute_renderer_revision() -> str:
     return digest.hexdigest()
 
 
+def _renderer_environment() -> dict[str, Any]:
+    import config
+
+    return {
+        "canvas": _CANVAS_SIZE,
+        "genre_map": config.GENRE_MAP,
+        "genre_priority": config.GENRE_PRIORITY,
+        "legacy_canvas": (config.POSTER_WIDTH, config.POSTER_HEIGHT),
+        "libraries": _image_library_versions(),
+        "movie_weights": config.MOVIE_WEIGHTS,
+        "tv_weights": config.TV_WEIGHTS,
+        "webp_settings": dict(_WEBP_SETTINGS),
+    }
+
+
+def _source_recipe_environment() -> dict[str, Any]:
+    versions = _image_library_versions()
+    try:
+        import cv2
+
+        versions["opencv"] = cv2.__version__
+    except ImportError:
+        versions["opencv"] = "unavailable"
+    try:
+        from importlib.metadata import version
+
+        versions["cairosvg"] = version("CairoSVG")
+    except Exception:
+        versions["cairosvg"] = "unavailable"
+    return {"libraries": versions}
+
+
+def _compute_renderer_revision(
+    *,
+    source_overrides: Mapping[str, str] | None = None,
+) -> str:
+    return _compute_semantic_revision(
+        b"postersplus-bingecat-v2-renderer",
+        RENDERER_REVISION_CODE_ROOTS,
+        assets=RENDERER_REVISION_ASSET_MANIFEST,
+        environment=_renderer_environment(),
+        source_overrides=source_overrides,
+    )
+
+
 RENDERER_REVISION = _compute_renderer_revision()
+RENDER_POLICY_REVISION = _compute_semantic_revision(
+    b"postersplus-bingecat-v2-render-policy",
+    RENDER_POLICY_REVISION_CODE_ROOTS,
+)
+SOURCE_RECIPE_REVISION = _compute_semantic_revision(
+    b"postersplus-bingecat-v2-source-recipe",
+    SOURCE_RECIPE_REVISION_CODE_ROOTS,
+    assets=SOURCE_RECIPE_REVISION_ASSET_MANIFEST,
+    environment=_source_recipe_environment(),
+)
 
 
 def render(
@@ -1168,8 +1421,12 @@ def render(
 
 
 __all__ = [
+    "RENDER_POLICY_REVISION",
     "RENDERER_REVISION",
+    "RENDERER_REVISION_ASSET_MANIFEST",
+    "RENDERER_REVISION_CODE_ROOTS",
     "RENDERER_REVISION_MANIFEST",
+    "SOURCE_RECIPE_REVISION",
     "RenderConflict",
     "RenderError",
     "RenderInputError",

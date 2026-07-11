@@ -1396,29 +1396,77 @@ def test_render_endpoint_rejects_signed_body_tamper(monkeypatch):
     assert response.json()["detail"] == "invalid_service_auth"
 
 
-def test_renderer_revision_covers_code_dependencies_fonts_and_locales():
-    assert RENDERER_REVISION == RENDERER_REVISION.lower()
-    assert len(RENDERER_REVISION) == 64
-    assert all(character in "0123456789abcdef" for character in RENDERER_REVISION)
-    assert Path(__file__).name not in RENDERER_REVISION
+def test_renderer_revision_is_semantic_pixel_identity_not_service_identity():
+    revisions = (
+        RENDERER_REVISION,
+        render_module.RENDER_POLICY_REVISION,
+        render_module.SOURCE_RECIPE_REVISION,
+    )
+    for revision in revisions:
+        assert revision == revision.lower()
+        assert len(revision) == 64
+        assert all(character in "0123456789abcdef" for character in revision)
+
     manifest = set(render_module.RENDERER_REVISION_MANIFEST)
     assert {
-        "v2_render.py",
-        "main.py",
-        "ratings.py",
-        "awards.py",
-        "age_badge.py",
-        "discovery.py",
-        "genre_backgrounds.py",
-        "tmdb.py",
-        "i18n.py",
-        "config.py",
+        "v2_render.py::_compose",
+        "v2_render.py::_encode_webp",
+        "main.py::RequestConfig",
+        "main.py::_load_genre_background",
+        "main.py::_make_fallback_canvas",
+        "main.py::build_poster",
+        "ratings.py::draw_score_bar",
+        "awards.py::draw_award_sash",
+        "age_badge.py::draw_quality_age_badge",
+        "discovery.py::pick_sash",
+        "tmdb.py::composite_logo",
+        "i18n.py::translate_sash",
     }.issubset(manifest)
+    assert "main.py" not in manifest
+    assert "config.py" not in manifest
+    assert "render_spec.py" not in manifest
+    assert "source_art.py" not in manifest
+    assert "requirements.txt" not in manifest
+    assert "dockerfile" not in manifest
     assert any(path.startswith("fonts/") for path in manifest)
-    assert any(path.startswith("languages/") for path in manifest)
     assert any(path.startswith("static/genre_bg/") for path in manifest)
     assert any(path.startswith("static/logos/") for path in manifest)
-    assert any(path.startswith("badges/") for path in manifest)
+    assert not any(path.endswith(".svg") for path in manifest)
+    assert not any(path.endswith(".gitkeep") for path in manifest)
+    assert {
+        "languages/en.json",
+        "languages/pt.json",
+        "languages/nl.json",
+        "languages/de.json",
+        "languages/es.json",
+    }.issubset(manifest)
+    assert "languages/fr.json" not in manifest
+
+    main_source = (Path(render_module.__file__).parent / "main.py").read_text(
+        encoding="utf-8"
+    )
+    health = 'async def health_check():\n    """Lightweight liveness probe — no auth required, used by Docker healthcheck."""\n    return {"status": "ok"}'
+    assert health in main_source
+    health_only_change = main_source.replace(
+        health,
+        health.replace('{"status": "ok"}', '{"status": "healthy"}'),
+        1,
+    )
+    assert render_module._compute_renderer_revision(  # noqa: SLF001
+        source_overrides={"main.py": health_only_change}
+    ) == RENDERER_REVISION
+
+    pixel_constant = "_FALLBACK_DEFAULT_TINT = (1.0, 1.0, 1.4)"
+    assert pixel_constant in main_source
+    compositor_change = main_source.replace(
+        pixel_constant,
+        "_FALLBACK_DEFAULT_TINT = (1.0, 1.0, 1.5)",
+        1,
+    )
+    assert render_module._compute_renderer_revision(  # noqa: SLF001
+        source_overrides={"main.py": compositor_change}
+    ) != RENDERER_REVISION
+
     source = Path(render_module.__file__).read_text(encoding="utf-8")
     assert not any(
         f"def {name}(" in source
