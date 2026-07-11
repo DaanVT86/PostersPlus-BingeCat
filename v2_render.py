@@ -863,6 +863,8 @@ def _request_config(engine, spec: CanonicalRenderSpec, locale: str):
             value = list(value)
         elif name in {"rating_text_color", "sash_text_color"}:
             value = _rgb(value)
+        elif name == "score_custom_palette":
+            value = engine.parse_custom_score_palette(value)
         setattr(config, name, value)
 
     # Artwork selection already honored the canonical logo-language policy.

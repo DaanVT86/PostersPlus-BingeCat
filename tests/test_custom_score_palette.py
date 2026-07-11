@@ -3,6 +3,8 @@ import unittest
 
 import main
 from ratings import parse_custom_score_palette, score_color_for_mode
+from render_spec import canonicalize_config
+from v2_render import _request_config
 
 
 class CustomScorePaletteTests(unittest.TestCase):
@@ -42,6 +44,19 @@ class CustomScorePaletteTests(unittest.TestCase):
         self.assertIn('<option value="palette_custom">Custom</option>', html)
         self.assertIn("params.set('score_custom_palette', _customPalette)", html)
         self.assertIn("p.has('score_custom_palette')", html)
+
+    def test_v2_canonical_palette_reaches_shared_compositor(self):
+        spec = canonicalize_config(
+            {
+                "score_color_mode": 3,
+                "score_custom_palette": "80:ABCDEF,0:111111",
+            }
+        )
+        cfg = _request_config(main, spec, "en")
+        self.assertEqual(
+            cfg.score_custom_palette,
+            [(0, (17, 17, 17)), (80, (171, 205, 239))],
+        )
 
 
 if __name__ == "__main__":

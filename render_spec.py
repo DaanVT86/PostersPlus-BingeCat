@@ -43,6 +43,12 @@ _ALIASES = {
     "bottom_vignette": "bottom_gradient",
     "logo_native_fallback": "logo_priority",
 }
+_CLIENT_EDGE_INSETS = {
+    "stremio_tv_nuvio": (0.0, 0.0),
+    "stremio_desktop_web": (0.007, 0.004),
+    "plex": (0.0, 0.0),
+    "jellyfin": (0.0, 0.0),
+}
 
 
 @dataclass(frozen=True)
@@ -124,9 +130,15 @@ class CanonicalRenderSpec:
     movie_weights: tuple[tuple[str, float], ...] = ()
     tv_weights: tuple[tuple[str, float], ...] = ()
     fallback_to_imdb: bool = False
+    # Optional extension: omitted from canonical JSON unless an active custom
+    # colour mode consumes it, preserving all existing fixed-preset hashes.
+    score_custom_palette: str | None = None
 
     def canonical_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        payload = asdict(self)
+        if payload["score_custom_palette"] is None:
+            payload.pop("score_custom_palette")
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
     def sha256(self) -> str:
         return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
@@ -197,6 +209,29 @@ def _color(value: Any) -> str | None:
     return None
 
 
+def _custom_palette(value: Any) -> str | None:
+    """Return one stable, bounded threshold palette or ``None``."""
+
+    if not isinstance(value, str) or len(value) > 1024:
+        return None
+    parsed: dict[int, str] = {}
+    pieces = value.replace("\n", ",").replace(";", ",").split(",")
+    for piece in pieces[:32]:
+        if ":" not in piece:
+            continue
+        threshold_text, color_text = piece.split(":", 1)
+        try:
+            threshold = int(threshold_text.strip())
+        except ValueError:
+            continue
+        color = _color(color_text)
+        if 0 <= threshold <= 100 and color is not None:
+            parsed[threshold] = color
+    if not parsed:
+        return None
+    return ",".join(f"{threshold}:{parsed[threshold]}" for threshold in sorted(parsed))
+
+
 def _weights(value: Any, allowed: frozenset[str]) -> tuple[tuple[str, float], ...]:
     if isinstance(value, str):
         pairs = (piece.split(":", 1) for piece in value.split(",") if ":" in piece)
@@ -262,6 +297,12 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         values["logo_priority"] = "native_original" if _bool(raw["logo_native_fallback"], True) else "native_text"
 
     defaults = CanonicalRenderSpec()
+    client_insets = _CLIENT_EDGE_INSETS.get(
+        str(values.get("primary_client") or "").strip().lower()
+    )
+    if client_insets is not None:
+        values.setdefault("bar_bottom_inset", client_insets[0])
+        values.setdefault("sash_badge_inset", client_insets[1])
     top_gradient = _choice(values.get("top_gradient"), defaults.top_gradient, {"off", "low", "medium", "high", "custom"})
     bottom_gradient = _choice(values.get("bottom_gradient"), defaults.bottom_gradient, {"off", "low", "medium", "high", "custom"})
     badge_display_mode = _int(values.get("badge_display_mode"), defaults.badge_display_mode, 0, 5)
@@ -279,6 +320,10 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         elif isinstance(sash_input, (list, tuple)):
             sash_input = [*sash_input, *[f"-{slot}" for slot in declared_exclusions]]
     sash_priority, sash_exclusions = _sashes(sash_input)
+
+    score_color_mode = _int(values.get("score_color_mode"), defaults.score_color_mode, 0, 3)
+    bar_accent = _choice(values.get("bar_accent"), defaults.bar_accent, {"silver", "gold", "sample", "palette_0", "palette_1", "palette_2", "palette_custom"})
+    palette_is_active = score_color_mode == 3 or bar_accent == "palette_custom"
 
     return CanonicalRenderSpec(
         show_award_sash=_bool(values.get("show_award_sash"), defaults.show_award_sash),
@@ -307,7 +352,7 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         bar_frost_opacity=_float(values.get("bar_frost_opacity"), defaults.bar_frost_opacity, 0.0, 1.0),
         bar_bottom_inset=_float(values.get("bar_bottom_inset"), defaults.bar_bottom_inset, 0.0, 0.1),
         bar_style=_choice(values.get("bar_style"), defaults.bar_style, {"frosted", "pure_black", "silver", "gold", "rating_black", "rating_frosted"}),
-        bar_accent=_choice(values.get("bar_accent"), defaults.bar_accent, {"silver", "gold", "sample", "palette_0", "palette_1", "palette_2", "palette_custom"}),
+        bar_accent=bar_accent,
         bar_score_out_of_10=_bool(values.get("bar_score_out_of_10"), defaults.bar_score_out_of_10),
         bar_match_notch=_bool(values.get("bar_match_notch"), defaults.bar_match_notch),
         bar_append=_choice(values.get("bar_append"), defaults.bar_append, {"rating_year", "rating", "year", "sash", "second_rating"}),
@@ -332,7 +377,7 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         bottom_gradient_opacity=_float(values.get("bottom_gradient_opacity"), defaults.bottom_gradient_opacity, 0.0, 1.0, opacity=True),
         bottom_gradient_height=_float(values.get("bottom_gradient_height"), defaults.bottom_gradient_height, 0.0, 1.0),
         hide_genre=_bool(values.get("hide_genre"), defaults.hide_genre),
-        score_color_mode=_int(values.get("score_color_mode"), defaults.score_color_mode, 0, 3),
+        score_color_mode=score_color_mode,
         sash_mode=_choice(values.get("sash_mode"), defaults.sash_mode, {"hidden", "sash", "notch"}),
         sash_badge_style=_choice(values.get("sash_badge_style"), defaults.sash_badge_style, {"silver", "gold", "frosted", "black"}),
         sash_badge_size_w=_float(values.get("sash_badge_size_w"), defaults.sash_badge_size_w, 0.5, 2.0),
@@ -354,6 +399,11 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         movie_weights=_weights(values.get("movie_weights"), _MOVIE_SOURCES),
         tv_weights=_weights(values.get("tv_weights"), _TV_SOURCES),
         fallback_to_imdb=_bool(values.get("fallback_to_imdb"), defaults.fallback_to_imdb),
+        score_custom_palette=(
+            _custom_palette(values.get("score_custom_palette"))
+            if palette_is_active
+            else None
+        ),
     )
 
 

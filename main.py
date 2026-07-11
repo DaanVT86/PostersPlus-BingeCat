@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import zoneinfo
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from urllib.parse import parse_qsl, urlencode
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, HTMLResponse
@@ -1138,6 +1138,95 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.sash_text_color      = _parse_hex_color(params.get("sash_text_color"))
 
     return cfg
+
+
+def _canonical_legacy_render_identity(config: RequestConfig) -> str:
+    """Stable cache identity for the visual values the legacy parser consumed.
+
+    Unknown query parameters never reach ``RequestConfig`` and equivalent raw
+    values have already been clamped/normalised, preventing unbounded cache-key
+    fragmentation without changing public rendering behaviour.
+    """
+
+    payload = asdict(config)
+    # Legacy parser-only alias; rendering consumes sash_mode exclusively.
+    payload.pop("sash_badge", None)
+    # Explicit default weights and omitted weights produce identical scores.
+    payload["movie_weights"] = {
+        name: float(value)
+        for name, value in sorted((config.movie_weights or _cfg.MOVIE_WEIGHTS).items())
+    }
+    payload["tv_weights"] = {
+        name: float(value)
+        for name, value in sorted((config.tv_weights or _cfg.TV_WEIGHTS).items())
+    }
+    if config.top_gradient != "custom":
+        payload["top_gradient_opacity"] = None
+        payload["top_gradient_height"] = None
+    if config.bottom_gradient != "custom":
+        payload["bottom_gradient_opacity"] = None
+        payload["bottom_gradient_height"] = None
+    if config.score_color_mode != 3 and config.bar_accent != "palette_custom":
+        payload["score_custom_palette"] = None
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+@dataclass(frozen=True)
+class LegacyProviderRequirements:
+    mdblist: bool
+    quality: bool
+    trending: bool
+    release_status: bool
+    recent_digital_release: bool
+
+
+def _legacy_provider_requirements(config: RequestConfig) -> LegacyProviderRequirements:
+    """Derive outbound provider needs before any optional call is scheduled."""
+
+    sash_visible = config.show_award_sash and config.sash_mode != "hidden"
+    slots = set(config.sash_priority) if sash_visible else set()
+    rating_visible = config.rating_display_mode in {1, 2, 3, 5} or (
+        config.rating_display_mode == 4
+        and config.bar_append in {"rating", "rating_year", "second_rating"}
+    )
+    mdblist_sashes = {
+        "wins",
+        "gg_wins",
+        "festival",
+        "pic_noms",
+        "gg_noms",
+        "cult",
+        "true_story",
+        "metacritic",
+        "new_release",
+    }
+    release_slots = {
+        "release_status",
+        "cinema",
+        "streaming",
+        "physical",
+        "production",
+        "ended",
+        "cancelled",
+        "airing",
+    }
+    return LegacyProviderRequirements(
+        mdblist=(
+            rating_visible
+            or config.badge_display_mode == 3
+            or bool(slots & mdblist_sashes)
+        ),
+        quality=config.badge_display_mode in {1, 2, 4, 5},
+        trending=bool(slots & {"trending", "trending_broad"}),
+        release_status=bool(slots & release_slots),
+        recent_digital_release="just_added" in slots,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3709,6 +3798,7 @@ async def get_poster(
         )
     }
     rcfg = build_request_config(raw_params)
+    provider_requirements = _legacy_provider_requirements(rcfg)
 
     # Operator force-refresh: ?nocache=1 skips the composite cache READ so a fresh
     # render is produced (and re-cached), letting an operator invalidate a single
@@ -3745,9 +3835,15 @@ async def get_poster(
             f"{int(rcfg.fallback_to_imdb)}"
         )
         _server_sig = "|server=" + _server_render_signature()
+        try:
+            _visual_identity = _canonical_legacy_render_identity(rcfg)
+        except (TypeError, ValueError):
+            # Defensive fallback for an unforeseen non-finite legacy value.
+            # It remains bounded and ignores unknown query parameters.
+            _visual_identity = repr(rcfg)
         _params_hash = hashlib.sha256(
             (
-                "&".join(f"{k}={v}" for k, v in sorted(raw_params.items()))
+                _visual_identity
                 + _detect_sig
                 + _poster_selection_sig
                 + _rating_policy_sig
@@ -3860,6 +3956,10 @@ async def get_poster(
     _rating_backoff_active = False  # set when backoff nullifies the key; used to suppress final-poster caching
     _mdblist_unavailable_reason = "no API key configured"
 
+    if not provider_requirements.mdblist:
+        effective_mdblist_key = None
+        _mdblist_unavailable_reason = "not required by visual configuration"
+
     if not rating_already_cached and effective_mdblist_key:
         _loop_now = asyncio.get_running_loop().time()
 
@@ -3941,9 +4041,12 @@ async def get_poster(
     if quality:
         quality_tokens = parse_quality(quality)
         cached_tokens  = None
-    else:
+    elif provider_requirements.quality:
         cached_tokens  = get_cached_quality(imdb_id, release_date_for_quality_ttl)
         quality_tokens = cached_tokens or []
+    else:
+        cached_tokens = []
+        quality_tokens = []
 
     # A quality source is available when the server has AIOStreams configured,
     # or QUALITY_SOURCE=scraper with a valid SCRAPER_URL.
@@ -3953,7 +4056,7 @@ async def get_poster(
     )
     _quality_cooldown_active = _has_quality_source and _quality_backoff_remaining() > 0
     quality_needs_fetch = (
-        rcfg.badge_display_mode in (1, 2, 4, 5)
+        provider_requirements.quality
         and not quality
         and cached_tokens is None
         and _has_quality_source
@@ -3978,7 +4081,11 @@ async def get_poster(
         quality_needs_fetch = False
         quality_pending = True
 
-    if not rating_already_cached and not effective_mdblist_key:
+    if (
+        provider_requirements.mdblist
+        and not rating_already_cached
+        and not effective_mdblist_key
+    ):
         logger.warning(
             f"MDBList unavailable for {imdb_id}: {_mdblist_unavailable_reason} — "
             "poster will be served without rating/award data."
@@ -4403,7 +4510,11 @@ async def get_poster(
             _image_coro,
             _resolve_logo() if (is_textless and not is_no_poster) else _resolved(None),
             rating_coro,
-            fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
+            (
+                fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type)
+                if provider_requirements.trending
+                else _resolved(None)
+            ),
         )
 
         rating_key_used, rating_result = rating_fetch_result
@@ -4623,8 +4734,7 @@ async def get_poster(
         # ------------------------------------------------------------------
         _release_status: str | None = None
         _recent_digital_release_date: str | None = None
-        _rs_slots = {"release_status", "cinema", "streaming", "physical", "production", "ended", "cancelled", "airing"}
-        if any(s in rcfg.sash_priority for s in _rs_slots):
+        if provider_requirements.release_status:
             _fetch_rs = True
             
             import datetime
@@ -4660,7 +4770,7 @@ async def get_poster(
             if rcfg.release_status_cinema_only and _release_status not in ("Cinema", "Production"):
                 _release_status = None
 
-        if type not in ("tv", "series") and "just_added" in rcfg.sash_priority:
+        if type not in ("tv", "series") and provider_requirements.recent_digital_release:
             _recent_digital_release_date = await fetch_recent_movie_digital_release_date(
                 client, tmdb_id, effective_tmdb_key,
                 tmdb_data.get("tmdb_status"),

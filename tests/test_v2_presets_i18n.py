@@ -5,6 +5,7 @@ import pytest
 
 from i18n import normalize_locale, resolve_locale_chain
 from preset_registry import BINGECAT_PRESET_REGISTRY, get_preset, list_public_presets
+from render_spec import canonicalize_config
 
 
 def test_bingecat_presets_are_immutable_and_have_pinned_hashes():
@@ -68,6 +69,35 @@ def test_fixed_presets_keep_their_source_visuals_with_quality_disabled():
     assert prestige.rating_display_mode == 1  # legacy Prestige rating bar
     assert prestige.accent_bar_font_size_ratio == 0.08
     assert prestige.badge_display_mode == 0
+
+
+def test_custom_palette_is_canonical_only_while_visually_active():
+    inactive = canonicalize_config(
+        {"score_color_mode": 2, "score_custom_palette": "80:ABCDEF,0:111111"}
+    )
+    active = canonicalize_config(
+        {"score_color_mode": 3, "score_custom_palette": "80:ABCDEF,0:111111"}
+    )
+    assert inactive.score_custom_palette is None
+    assert "score_custom_palette" not in inactive.canonical_json()
+    assert active.score_custom_palette == "0:#111111,80:#abcdef"
+    assert '"score_custom_palette":"0:#111111,80:#abcdef"' in active.canonical_json()
+
+
+def test_primary_client_is_reduced_to_visual_edge_insets():
+    desktop = canonicalize_config({"primary_client": "stremio_desktop_web"})
+    explicit = canonicalize_config(
+        {
+            "primary_client": "stremio_desktop_web",
+            "bar_bottom_inset": 0.02,
+            "sash_badge_inset": -0.01,
+        }
+    )
+    assert desktop.bar_bottom_inset == 0.007
+    assert desktop.sash_badge_inset == 0.004
+    assert explicit.bar_bottom_inset == 0.02
+    assert explicit.sash_badge_inset == -0.01
+    assert "primary_client" not in desktop.canonical_json()
 
 
 def test_locale_normalization_and_deterministic_fallback_chain():
