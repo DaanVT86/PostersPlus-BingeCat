@@ -493,6 +493,37 @@ class SourceArtStore:
                 "CREATE INDEX IF NOT EXISTS ix_source_art_last_used ON source_art_ledger(last_used_at)"
             )
 
+    def ensure_capacity(self, required_bytes: int) -> None:
+        """Fail before creating a raw/derived file that could cross the hard cap."""
+
+        import config
+
+        required = max(0, int(required_bytes))
+        with self._connect() as connection:
+            current = max(
+                0,
+                int(
+                    connection.execute(
+                        "SELECT COALESCE(SUM(byte_size), 0) FROM source_art_ledger"
+                    ).fetchone()[0]
+                    or 0
+                ),
+            )
+        temp_bytes = 0
+        temp_root = self.root / "tmp"
+        if temp_root.exists() and not temp_root.is_symlink():
+            for index, entry in enumerate(temp_root.iterdir()):
+                if index >= 256:
+                    break
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if entry.is_file() and not entry.is_symlink():
+                    temp_bytes += max(0, int(info.st_size))
+        if current + temp_bytes + required > config.SOURCE_CACHE_MAX_BYTES:
+            raise SourceResourceError("source cache hard limit reached")
+
     def get(self, sha256: str, kind: str, recipe_version: int, *, now: datetime | None = None) -> SourceDerivative | None:
         used = _utc(now)
         with self._connect() as connection:
@@ -544,51 +575,93 @@ class SourceArtStore:
         digest = hashlib.sha256(payload).hexdigest()
         source_art_id = f"{kind}-r{recipe_version}-{digest}"
         suffix = ".jpg" if mime == "image/jpeg" else ".png"
-        directory = self.root / kind / digest[:2]
-        directory.mkdir(parents=True, exist_ok=True)
-        destination = directory / f"{digest}{suffix}"
-        fd, temp_path = tempfile.mkstemp(prefix="install-", dir=directory)
-        try:
-            with os.fdopen(fd, "wb") as output:
-                output.write(payload)
-                output.flush()
-                os.fsync(output.fileno())
-            try:
-                os.link(temp_path, destination)
-            except FileExistsError:
-                existing_size, existing_digest = _hash_file(destination)
-                if existing_size != len(payload) or existing_digest != digest:
-                    raise SourceDigestMismatch("content-addressed destination mismatch")
-        finally:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
         locator_json = locator.model_dump_json() if locator is not None else None
+        directory = self.root / kind / digest[:2]
+        destination = directory / f"{digest}{suffix}"
+        temp_path: str | None = None
+        linked_new = False
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO source_art_ledger
-                    (source_art_id, kind, sha256, byte_size, mime, recipe_version,
-                     path, width, height, locator_json, created_at, last_used_at,
-                     pinned, reconstructable)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    source_art_id, kind, digest, len(payload), mime, recipe_version,
-                    str(destination), width, height, locator_json,
-                    used.timestamp(), used.timestamp(), int(pinned), int(reconstructable),
-                ),
-            )
-            connection.execute(
-                """UPDATE source_art_ledger
-                   SET last_used_at=MAX(last_used_at, ?), locator_json=COALESCE(locator_json, ?),
-                       pinned=MAX(pinned, ?), reconstructable=MAX(reconstructable, ?)
-                   WHERE source_art_id=?""",
-                (used.timestamp(), locator_json, int(pinned), int(reconstructable), source_art_id),
-            )
-            connection.commit()
+            try:
+                existing = connection.execute(
+                    "SELECT byte_size FROM source_art_ledger WHERE source_art_id=?",
+                    (source_art_id,),
+                ).fetchone()
+                if existing is None:
+                    import config
+
+                    current = max(
+                        0,
+                        int(
+                            connection.execute(
+                                "SELECT COALESCE(SUM(byte_size), 0) FROM source_art_ledger"
+                            ).fetchone()[0]
+                            or 0
+                        ),
+                    )
+                    if current + len(payload) > config.SOURCE_CACHE_MAX_BYTES:
+                        raise SourceResourceError("source cache hard limit reached")
+
+                directory.mkdir(parents=True, exist_ok=True)
+                fd, temp_path = tempfile.mkstemp(prefix="install-", dir=directory)
+                with os.fdopen(fd, "wb") as output:
+                    output.write(payload)
+                    output.flush()
+                    os.fsync(output.fileno())
+                try:
+                    os.link(temp_path, destination)
+                    linked_new = True
+                except FileExistsError:
+                    try:
+                        info = destination.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        raise SourceDigestMismatch(
+                            "content-addressed destination is unavailable"
+                        ) from exc
+                    if destination.is_symlink() or not destination.is_file():
+                        raise SourceDigestMismatch(
+                            "content-addressed destination is not a regular file"
+                        )
+                    existing_size, existing_digest = _hash_file(destination)
+                    if existing_size != len(payload) or existing_digest != digest:
+                        raise SourceDigestMismatch("content-addressed destination mismatch")
+
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO source_art_ledger
+                        (source_art_id, kind, sha256, byte_size, mime, recipe_version,
+                         path, width, height, locator_json, created_at, last_used_at,
+                         pinned, reconstructable)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source_art_id, kind, digest, len(payload), mime, recipe_version,
+                        str(destination), width, height, locator_json,
+                        used.timestamp(), used.timestamp(), int(pinned), int(reconstructable),
+                    ),
+                )
+                connection.execute(
+                    """UPDATE source_art_ledger
+                       SET last_used_at=MAX(last_used_at, ?), locator_json=COALESCE(locator_json, ?),
+                           pinned=MAX(pinned, ?), reconstructable=MAX(reconstructable, ?)
+                       WHERE source_art_id=?""",
+                    (used.timestamp(), locator_json, int(pinned), int(reconstructable), source_art_id),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                if linked_new:
+                    try:
+                        destination.unlink()
+                    except OSError:
+                        pass
+                raise
+            finally:
+                if temp_path is not None:
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
         installed = self.get(digest, kind, recipe_version, now=used)
         if installed is None:  # Defensive: the atomically installed file must be readable.
             raise SourceArtError("source derivative installation did not converge")
@@ -715,6 +788,10 @@ async def fetch_derivative(
         )
         if cached is not None:
             return cached
+    # Reserve one bounded raw download before writing it.  Normalisation removes
+    # the raw file before the final derivative is installed, so the source pool
+    # cannot transiently cross its hard allocation.
+    await asyncio.to_thread(active_store.ensure_capacity, MAX_SOURCE_BYTES)
     temp_dir = active_store.root / "tmp"
     downloaded = downloader(locator, kind, temp_dir=temp_dir)
     if hasattr(downloaded, "__await__"):
@@ -732,6 +809,10 @@ async def fetch_derivative(
                     recipe_version,
                     declared_mime=downloaded.content_type,
                 )
+            try:
+                downloaded.path.unlink()
+            except OSError:
+                pass
             digest = hashlib.sha256(payload).hexdigest()
             if expected_sha256 and digest != expected_sha256:
                 raise SourceDigestMismatch("normalized source digest did not match snapshot")

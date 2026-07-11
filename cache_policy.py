@@ -1,17 +1,18 @@
-"""Bounded cache accounting and eviction policy.
+"""Bounded physical cache accounting and eviction policy.
 
-This module deliberately keeps policy separate from the hot legacy cache
-helpers.  Reads and inserts do not walk the cache volume; the ledger and the
-SQLite composite table provide cheap accounting, while this module performs a
-bounded reconciliation during maintenance or an authenticated operator call.
+The public contract reports physical bytes exactly once.  Composite BLOB bytes
+are shown separately from SQLite overhead, so ``sum(pool.bytes)`` describes the
+space on disk instead of double-counting the database file that contains them.
+All filesystem reconciliation is bounded and never follows symlinks.
 """
 
 from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -20,29 +21,31 @@ import config
 
 SCHEMA = "postersplus_cache_usage"
 VERSION = 1
+POOL_NAMES = (
+    "source_derivatives",
+    "legacy_composites",
+    "sqlite",
+    "sqlite_wal",
+    "temp",
+)
+RECONCILE_LIMIT = 256
+FILE_WALK_LIMIT = 20_000
 
 
 @dataclass(frozen=True, slots=True)
 class CachePoolUsage:
     name: str
     bytes: int
-    hard_bytes: int
+    hard_limit_bytes: int
     high_watermark_bytes: int
     target_bytes: int
-    details: dict[str, int] = field(default_factory=dict)
 
-    @property
-    def over_hard(self) -> bool:
-        return self.bytes > self.hard_bytes
-
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, int]:
         return {
-            "bytes": int(self.bytes),
-            "hard_bytes": int(self.hard_bytes),
-            "high_watermark_bytes": int(self.high_watermark_bytes),
-            "target_bytes": int(self.target_bytes),
-            "over_hard": self.over_hard,
-            **{key: int(value) for key, value in self.details.items()},
+            "bytes": max(0, int(self.bytes)),
+            "hard_limit_bytes": max(0, int(self.hard_limit_bytes)),
+            "high_watermark_bytes": max(0, int(self.high_watermark_bytes)),
+            "target_bytes": max(0, int(self.target_bytes)),
         }
 
 
@@ -55,275 +58,416 @@ class CacheUsage:
     def total_bytes(self) -> int:
         return sum(pool.bytes for pool in self.pools.values())
 
+    @property
+    def source_group_bytes(self) -> int:
+        return self.pools["source_derivatives"].bytes
+
+    @property
+    def legacy_group_bytes(self) -> int:
+        return sum(
+            self.pools[name].bytes
+            for name in ("legacy_composites", "sqlite", "sqlite_wal", "temp")
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": SCHEMA,
             "version": VERSION,
-            "generated_at": self.generated_at,
-            "total_bytes": self.total_bytes,
-            "pools": {name: pool.to_dict() for name, pool in self.pools.items()},
+            "generated_at": int(self.generated_at),
+            "total_bytes": int(self.total_bytes),
+            "pools": {name: self.pools[name].to_dict() for name in POOL_NAMES},
         }
+
+
+@dataclass(frozen=True, slots=True)
+class Eviction:
+    items: int = 0
+    bytes: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {"items": max(0, int(self.items)), "bytes": max(0, int(self.bytes))}
 
 
 @dataclass(frozen=True, slots=True)
 class PruneResult:
     started_at: int
     finished_at: int
-    deleted_items: int
-    deleted_bytes: int
-    source_deleted_items: int = 0
-    legacy_deleted_items: int = 0
-    temp_deleted_items: int = 0
+    before: CacheUsage
+    after: CacheUsage
+    evictions: dict[str, Eviction]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": SCHEMA,
             "version": VERSION,
-            "started_at": self.started_at,
-            "finished_at": self.finished_at,
-            "deleted_items": self.deleted_items,
-            "deleted_bytes": self.deleted_bytes,
-            "source_deleted_items": self.source_deleted_items,
-            "legacy_deleted_items": self.legacy_deleted_items,
-            "temp_deleted_items": self.temp_deleted_items,
+            "started_at": int(self.started_at),
+            "finished_at": int(self.finished_at),
+            "before": self.before.to_dict(),
+            "after": self.after.to_dict(),
+            "evictions": {
+                name: self.evictions.get(name, Eviction()).to_dict()
+                for name in POOL_NAMES
+            },
         }
 
 
 def _file_size(path: str | os.PathLike[str]) -> int:
     try:
-        return max(0, os.stat(path, follow_symlinks=False).st_size)
+        info = os.stat(path, follow_symlinks=False)
     except OSError:
+        return 0
+    return max(0, int(info.st_size)) if stat.S_ISREG(info.st_mode) else 0
+
+
+def _bounded_files(root: str | os.PathLike[str], *, limit: int = FILE_WALK_LIMIT):
+    """Yield at most *limit* regular files below root without following links."""
+
+    base = Path(root)
+    if not base.exists() or base.is_symlink():
+        return
+    stack = [base]
+    yielded = 0
+    while stack and yielded < limit:
+        current = stack.pop()
+        try:
+            entries = os.scandir(current)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                if yielded >= limit:
+                    break
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        yielded += 1
+                        yield Path(entry.path)
+                except OSError:
+                    continue
+
+
+def _sum_query(path: str | os.PathLike[str], sql: str) -> int:
+    if not os.path.exists(path):
+        return 0
+    try:
+        with sqlite3.connect(path, timeout=2.0) as db:
+            row = db.execute(sql).fetchone()
+        return max(0, int((row or (0,))[0] or 0))
+    except (sqlite3.Error, TypeError, ValueError):
         return 0
 
 
-def _bounded_files(root: str | os.PathLike[str], *, limit: int = 20_000):
-    """Yield regular files below *root* without following links.
+def _source_derivative_bytes() -> int:
+    """Cheap ledger aggregate plus a bounded corruption reconciliation sample."""
 
-    This is only used by maintenance/accounting, never by a poster request or
-    cache insert.  A hard limit prevents a damaged volume from turning an
-    operator endpoint into an unbounded directory walk.
-    """
-    base = Path(root)
-    seen = 0
-    if not base.exists():
-        return
-    stack = [base]
-    while stack and seen < limit:
-        current = stack.pop()
-        try:
-            entries = list(os.scandir(current))
-        except OSError:
-            continue
-        for entry in entries:
-            if seen >= limit:
-                break
-            try:
-                if entry.is_symlink():
-                    continue
-                if entry.is_dir(follow_symlinks=False):
-                    stack.append(Path(entry.path))
-                elif entry.is_file(follow_symlinks=False):
-                    seen += 1
-                    yield Path(entry.path)
-            except OSError:
-                continue
-
-
-def _source_usage() -> tuple[int, int, int]:
-    """Return (derivative bytes, temporary bytes, missing ledger entries)."""
-    derivative = 0
-    missing = 0
-    ledger = Path(config.SOURCE_ART_LEDGER_PATH)
-    if ledger.exists():
-        try:
-            with sqlite3.connect(ledger, timeout=2.0) as db:
-                rows = db.execute(
-                    "SELECT path, byte_size FROM source_art_ledger"
-                ).fetchall()
-            for path, _recorded in rows:
-                size = _file_size(path)
-                if size:
-                    derivative += size
-                else:
-                    missing += 1
-        except sqlite3.Error:
-            # A partially initialized ledger is safe to report as zero; the
-            # next maintenance cycle will reconcile it.
-            pass
-    temp_root = Path(config.SOURCE_ART_CACHE_DIR) / "tmp"
-    temp = sum(_file_size(path) for path in _bounded_files(temp_root))
-    return derivative, temp, missing
-
-
-def _legacy_usage() -> tuple[int, int, int, int]:
-    """Return (composite blob bytes, sqlite bytes, wal bytes, temp bytes)."""
-    composite = 0
-    if os.path.exists(config.DB_PATH):
-        try:
-            with sqlite3.connect(config.DB_PATH, timeout=2.0) as db:
-                composite = int(
-                    db.execute(
-                        "SELECT COALESCE(SUM(LENGTH(jpeg_bytes)), 0) "
-                        "FROM final_poster_cache"
-                    ).fetchone()[0]
-                    or 0
-                )
-        except sqlite3.Error:
-            pass
+    ledger = config.SOURCE_ART_LEDGER_PATH
+    total = _sum_query(
+        ledger,
+        "SELECT COALESCE(SUM(byte_size), 0) FROM source_art_ledger",
+    )
+    if not os.path.exists(ledger):
+        return total
+    # Sampling catches stale/corrupt rows without stat'ing an unbounded ledger.
     try:
-        sqlite_bytes = _file_size(config.DB_PATH)
+        with sqlite3.connect(ledger, timeout=2.0) as db:
+            rows = db.execute(
+                "SELECT path, byte_size FROM source_art_ledger "
+                "ORDER BY last_used_at ASC LIMIT ?",
+                (RECONCILE_LIMIT,),
+            ).fetchall()
+        for path, recorded in rows:
+            if not _source_path_is_regular(path):
+                total = max(0, total - max(0, int(recorded or 0)))
+    except (sqlite3.Error, TypeError, ValueError):
+        pass
+    return total
+
+
+def _composite_bytes() -> int:
+    return _sum_query(
+        config.DB_PATH,
+        "SELECT COALESCE(SUM(LENGTH(jpeg_bytes)), 0) FROM final_poster_cache",
+    )
+
+
+def _source_path_parts(path: object) -> tuple[str, ...] | None:
+    if not isinstance(path, str) or not path or "\x00" in path:
+        return None
+    root = Path(config.SOURCE_ART_CACHE_DIR).absolute()
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return None
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        return None
+    parts = relative.parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
+    return parts
+
+
+def _open_source_parent(path: object) -> tuple[int, str] | None:
+    """Open the parent through no-follow dirfds, eliminating symlink races."""
+
+    parts = _source_path_parts(path)
+    if parts is None:
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(config.SOURCE_ART_CACHE_DIR, flags)
     except OSError:
-        sqlite_bytes = 0
-    wal_bytes = _file_size(f"{config.DB_PATH}-wal") + _file_size(f"{config.DB_PATH}-shm")
-    # SQLite temporary files and atomic-write leftovers are bounded and never
-    # include the database/WAL themselves.
+        return None
+    try:
+        for component in parts[:-1]:
+            next_fd = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        return fd, parts[-1]
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def _source_path_is_regular(path: object) -> bool:
+    opened = _open_source_parent(path)
+    if opened is None:
+        return False
+    parent_fd, name = opened
+    try:
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        return stat.S_ISREG(info.st_mode)
+    except OSError:
+        return False
+    finally:
+        os.close(parent_fd)
+
+
+def _unlink_source_regular(path: object) -> int:
+    opened = _open_source_parent(path)
+    if opened is None:
+        return 0
+    parent_fd, name = opened
+    try:
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(info.st_mode):
+            return 0
+        size = max(0, int(info.st_size))
+        os.unlink(name, dir_fd=parent_fd)
+        return size
+    except OSError:
+        return 0
+    finally:
+        os.close(parent_fd)
+
+
+def _temp_bytes() -> int:
+    total = 0
+    counted: set[Path] = set()
+    source_tmp = Path(config.SOURCE_ART_CACHE_DIR) / "tmp"
+    for path in _bounded_files(source_tmp):
+        absolute = path.absolute()
+        counted.add(absolute)
+        total += _file_size(path)
     db_dir = Path(config.DB_PATH).parent
-    temp = 0
-    for path in _bounded_files(db_dir):
-        if path.name.startswith((".tmp-", "tmp-", "install-")):
-            temp += _file_size(path)
-    return composite, sqlite_bytes, wal_bytes, temp
+    ledger_dir = Path(config.SOURCE_ART_LEDGER_PATH).parent
+    seen_roots: set[Path] = set()
+    for root in (db_dir, ledger_dir):
+        root = root.absolute()
+        if root in seen_roots:
+            continue
+        seen_roots.add(root)
+        for path in _bounded_files(root):
+            absolute = path.absolute()
+            if absolute in counted:
+                continue
+            if path.name.startswith((".tmp-", "tmp-", "install-", "raw-")):
+                counted.add(absolute)
+                total += _file_size(path)
+    return total
 
 
 def get_usage() -> CacheUsage:
-    source_bytes, source_temp, missing = _source_usage()
-    composite, sqlite_bytes, wal_bytes, legacy_temp = _legacy_usage()
-    source_pool = CachePoolUsage(
-        "source_derivatives",
-        source_bytes + source_temp,
+    source = _source_derivative_bytes()
+    composites = _composite_bytes()
+    cache_db_size = _file_size(config.DB_PATH)
+    ledger_db_size = _file_size(config.SOURCE_ART_LEDGER_PATH)
+    # BLOB bytes live inside cache.db.  Only the remainder is SQLite overhead.
+    sqlite_overhead = max(cache_db_size - composites, 0) + ledger_db_size
+    wal = sum(
+        _file_size(path)
+        for path in (
+            f"{config.DB_PATH}-wal",
+            f"{config.DB_PATH}-shm",
+            f"{config.SOURCE_ART_LEDGER_PATH}-wal",
+            f"{config.SOURCE_ART_LEDGER_PATH}-shm",
+        )
+    )
+    temp = _temp_bytes()
+    source_limits = (
         config.SOURCE_CACHE_MAX_BYTES,
         config.SOURCE_CACHE_HIGH_WATERMARK_BYTES,
         config.SOURCE_CACHE_TARGET_BYTES,
-        {
-            "derivative_bytes": source_bytes,
-            "temp_bytes": source_temp,
-            "missing_ledger_entries": missing,
-        },
     )
-    legacy_pool = CachePoolUsage(
-        "legacy",
-        composite + sqlite_bytes + wal_bytes + legacy_temp,
+    legacy_limits = (
         config.LEGACY_CACHE_MAX_BYTES,
         config.LEGACY_CACHE_HIGH_WATERMARK_BYTES,
         config.LEGACY_CACHE_TARGET_BYTES,
-        {
-            "composite_bytes": composite,
-            "sqlite_bytes": sqlite_bytes,
-            "sqlite_wal_bytes": wal_bytes,
-            "temp_bytes": legacy_temp,
-        },
     )
-    return CacheUsage(
-        generated_at=int(time.time()),
-        pools={source_pool.name: source_pool, legacy_pool.name: legacy_pool},
-    )
+    values = {
+        "source_derivatives": source,
+        "legacy_composites": composites,
+        "sqlite": sqlite_overhead,
+        "sqlite_wal": wal,
+        "temp": temp,
+    }
+    pools = {
+        name: CachePoolUsage(
+            name,
+            value,
+            *(source_limits if name == "source_derivatives" else legacy_limits),
+        )
+        for name, value in values.items()
+    }
+    return CacheUsage(generated_at=int(time.time()), pools=pools)
 
 
-def _remove_source_to_target(target: int, max_items: int) -> tuple[int, int]:
-    ledger = Path(config.SOURCE_ART_LEDGER_PATH)
-    if not ledger.exists():
-        return 0, 0
-    deleted_items = deleted_bytes = 0
+def _remove_source_to_target(target: int, max_items: int) -> Eviction:
+    ledger = config.SOURCE_ART_LEDGER_PATH
+    if not os.path.exists(ledger):
+        return Eviction()
+    removed_items = removed_bytes = 0
     try:
         with sqlite3.connect(ledger, timeout=5.0) as db:
             db.execute("BEGIN IMMEDIATE")
+            current = max(
+                0,
+                int(
+                    db.execute(
+                        "SELECT COALESCE(SUM(byte_size), 0) FROM source_art_ledger"
+                    ).fetchone()[0]
+                    or 0
+                ),
+            )
             rows = db.execute(
                 "SELECT source_art_id, path, byte_size FROM source_art_ledger "
-                "WHERE pinned=0 AND reconstructable=1 ORDER BY last_used_at ASC "
-                "LIMIT ?",
+                "WHERE pinned=0 AND reconstructable=1 ORDER BY last_used_at ASC LIMIT ?",
                 (max_items,),
             ).fetchall()
-            current = _source_usage()[0]
             for source_id, path, recorded in rows:
-                if current <= target or deleted_items >= max_items:
+                if current <= target:
                     break
-                size = _file_size(path) or max(0, int(recorded or 0))
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
+                recorded_size = max(0, int(recorded or 0))
+                actual = _unlink_source_regular(path)
                 db.execute("DELETE FROM source_art_ledger WHERE source_art_id=?", (source_id,))
-                deleted_items += 1
-                deleted_bytes += size
-                current = max(0, current - size)
+                current = max(0, current - recorded_size)
+                removed_items += 1
+                removed_bytes += actual
             db.commit()
-    except sqlite3.Error:
-        return deleted_items, deleted_bytes
-    return deleted_items, deleted_bytes
+    except (sqlite3.Error, TypeError, ValueError):
+        return Eviction(removed_items, removed_bytes)
+    return Eviction(removed_items, removed_bytes)
 
 
-def _remove_legacy_to_target(target: int, max_items: int) -> tuple[int, int]:
+def _remove_legacy_to_target(target: int, max_items: int) -> Eviction:
+    if not os.path.exists(config.DB_PATH):
+        return Eviction()
+    removed_items = removed_bytes = 0
     try:
         with sqlite3.connect(config.DB_PATH, timeout=5.0) as db:
+            db.execute("PRAGMA busy_timeout=5000")
             db.execute("BEGIN IMMEDIATE")
-            composite, sqlite_bytes, wal_bytes, temp = _legacy_usage()
-            # Database overhead cannot be removed without VACUUM; preserve it
-            # and only evict reconstructable composite blobs to reach target.
-            blob_target = max(0, target - sqlite_bytes - wal_bytes - temp)
+            usage = get_usage()
+            current = usage.legacy_group_bytes
             rows = db.execute(
                 "SELECT cache_key, LENGTH(jpeg_bytes) FROM final_poster_cache "
-                "ORDER BY cached_at ASC LIMIT ?",
+                "ORDER BY cached_at ASC, cache_key ASC LIMIT ?",
                 (max_items,),
             ).fetchall()
-            deleted_items = deleted_bytes = 0
-            for key, size in rows:
-                if composite <= blob_target or deleted_items >= max_items:
+            for key, raw_size in rows:
+                if current <= target:
                     break
+                size = max(0, int(raw_size or 0))
                 db.execute("DELETE FROM final_poster_cache WHERE cache_key=?", (key,))
-                value = max(0, int(size or 0))
-                composite = max(0, composite - value)
-                deleted_items += 1
-                deleted_bytes += value
+                current = max(0, current - size)
+                removed_items += 1
+                removed_bytes += size
             db.commit()
-            return deleted_items, deleted_bytes
-    except sqlite3.Error:
-        return 0, 0
+            # Both calls are bounded; they make freed pages reusable/reclaimable
+            # without a blocking full VACUUM.
+            db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            db.execute("PRAGMA incremental_vacuum(1000)")
+    except (sqlite3.Error, TypeError, ValueError):
+        return Eviction(removed_items, removed_bytes)
+    return Eviction(removed_items, removed_bytes)
 
 
-def _remove_expired_temp(max_items: int) -> tuple[int, int]:
+def _remove_expired_temp(max_items: int) -> Eviction:
     cutoff = time.time() - max(0, config.SOURCE_CACHE_RAW_MAX_AGE_SECONDS)
-    removed = removed_bytes = 0
-    roots = [Path(config.SOURCE_ART_CACHE_DIR) / "tmp", Path(config.DB_PATH).parent]
-    for root in roots:
+    removed_items = removed_bytes = 0
+    roots = (
+        (Path(config.SOURCE_ART_CACHE_DIR) / "tmp", False),
+        (Path(config.DB_PATH).parent, True),
+    )
+    for root, require_temp_name in roots:
         for path in _bounded_files(root):
-            if removed >= max_items or not path.name.startswith((".tmp-", "tmp-", "install-")):
+            if removed_items >= max_items:
+                return Eviction(removed_items, removed_bytes)
+            if require_temp_name and not path.name.startswith(
+                (".tmp-", "tmp-", "install-", "raw-")
+            ):
                 continue
             try:
-                if path.stat().st_mtime >= cutoff:
+                info = path.stat(follow_symlinks=False)
+                if info.st_mtime >= cutoff:
                     continue
-                size = path.stat().st_size
                 path.unlink()
-                removed += 1
-                removed_bytes += size
+                removed_items += 1
+                removed_bytes += max(0, int(info.st_size))
             except OSError:
                 continue
-    return removed, removed_bytes
+    return Eviction(removed_items, removed_bytes)
 
 
 def prune_to_targets(*, max_items: int | None = None) -> PruneResult:
     started = int(time.time())
-    budget = max(1, min(int(max_items or config.CACHE_PRUNE_MAX_ITEMS), config.CACHE_PRUNE_MAX_ITEMS))
-    temp_items, temp_bytes = _remove_expired_temp(budget)
-    remaining = max(0, budget - temp_items)
-    source_items = source_bytes = legacy_items = legacy_bytes = 0
-    usage = get_usage()
-    source = usage.pools["source_derivatives"]
-    if remaining and source.bytes > source.target_bytes:
-        source_items, source_bytes = _remove_source_to_target(source.target_bytes, remaining)
-        remaining -= source_items
-    usage = get_usage()
-    legacy = usage.pools["legacy"]
-    if remaining and legacy.bytes > legacy.target_bytes:
-        legacy_items, legacy_bytes = _remove_legacy_to_target(legacy.target_bytes, remaining)
-    finished = int(time.time())
+    budget = max(
+        1,
+        min(int(max_items or config.CACHE_PRUNE_MAX_ITEMS), config.CACHE_PRUNE_MAX_ITEMS),
+    )
+    before = get_usage()
+    evictions: dict[str, Eviction] = {}
+    temp = _remove_expired_temp(budget)
+    evictions["temp"] = temp
+    remaining = max(0, budget - temp.items)
+
+    # A pool is intentionally untouched between target and high watermark.
+    if (
+        remaining
+        and before.source_group_bytes > config.SOURCE_CACHE_HIGH_WATERMARK_BYTES
+    ):
+        source = _remove_source_to_target(config.SOURCE_CACHE_TARGET_BYTES, remaining)
+        evictions["source_derivatives"] = source
+        remaining -= source.items
+
+    middle = get_usage()
+    if (
+        remaining
+        and middle.legacy_group_bytes > config.LEGACY_CACHE_HIGH_WATERMARK_BYTES
+    ):
+        legacy = _remove_legacy_to_target(config.LEGACY_CACHE_TARGET_BYTES, remaining)
+        evictions["legacy_composites"] = legacy
+
+    after = get_usage()
     return PruneResult(
         started_at=started,
-        finished_at=finished,
-        deleted_items=temp_items + source_items + legacy_items,
-        deleted_bytes=temp_bytes + source_bytes + legacy_bytes,
-        source_deleted_items=source_items,
-        legacy_deleted_items=legacy_items,
-        temp_deleted_items=temp_items,
+        finished_at=int(time.time()),
+        before=before,
+        after=after,
+        evictions=evictions,
     )
 
 
@@ -370,6 +514,14 @@ class FileLeaderLock:
 
 
 __all__ = [
-    "CachePoolUsage", "CacheUsage", "FileLeaderLock", "PruneResult",
-    "get_usage", "prune_to_targets", "SCHEMA", "VERSION",
+    "CachePoolUsage",
+    "CacheUsage",
+    "Eviction",
+    "FileLeaderLock",
+    "POOL_NAMES",
+    "PruneResult",
+    "SCHEMA",
+    "VERSION",
+    "get_usage",
+    "prune_to_targets",
 ]

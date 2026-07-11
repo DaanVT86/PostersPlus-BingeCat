@@ -3078,8 +3078,9 @@ async def _verify_v2_cache_request(request: Request) -> None:
 async def v2_cache_usage_endpoint(request: Request):
     """Authenticated, bounded cache accounting for the operator plane."""
     await _verify_v2_cache_request(request)
+    usage = await asyncio.to_thread(get_cache_usage)
     return JSONResponse(
-        content=get_cache_usage().to_dict(),
+        content=usage.to_dict(),
         headers={"Cache-Control": "no-store"},
     )
 

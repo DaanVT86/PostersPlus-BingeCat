@@ -11,6 +11,8 @@ from collections import OrderedDict
 from datetime import datetime
 from typing import NamedTuple
 
+import config as runtime_config
+
 logger = logging.getLogger(__name__)
 
 from config import (
@@ -368,6 +370,12 @@ def _l1_byte_cap() -> int:
 
 
 def _l1_put(cache_key: str, entry: _CompositeL1Entry) -> None:
+    entry = _CompositeL1Entry(
+        bytes(entry.bytes),
+        str(entry.content_type or "image/webp").strip().lower(),
+        float(entry.expires_at),
+        str(entry.content_hash).strip().lower(),
+    )
     with _composite_l1_lock:
         _composite_l1[cache_key] = entry
         _composite_l1.move_to_end(cache_key)
@@ -402,8 +410,10 @@ def get_cached_final_poster(cache_key: str) -> bytes | None:
             entry = _composite_l1.get(cache_key)
             if entry is not None:
                 if time.time() <= entry.expires_at:
-                    _composite_l1.move_to_end(cache_key)
-                    return entry.bytes
+                    if hashlib.sha256(entry.bytes).hexdigest() == entry.content_hash:
+                        _composite_l1.move_to_end(cache_key)
+                        return entry.bytes
+                    logger.warning("Final poster L1 digest mismatch for %s", cache_key)
                 _composite_l1.pop(cache_key, None)
 
     # L2: SQLite with TTL check
@@ -435,8 +445,9 @@ def get_cached_final_poster(cache_key: str) -> bytes | None:
                 get_db().execute("DELETE FROM final_poster_cache WHERE cache_key = ?", (cache_key,))
                 get_db().commit()
             return None
+        normalized_content_type = str(content_type or "image/webp").strip().lower()
         _l1_put(cache_key, _CompositeL1Entry(
-            data, content_type or "image/webp", expires_at, digest,
+            data, normalized_content_type, expires_at, digest,
         ))
         return data
     except Exception as exc:
@@ -444,21 +455,97 @@ def get_cached_final_poster(cache_key: str) -> bytes | None:
         return None
 
 
-def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes, request_params: str = None, ttl_override: int = None) -> None:
-    """Store a fully composited JPEG poster into L1 (RAM) and L2 (SQLite)."""
-    content_type = f"image/{IMAGE_FORMAT}"
+def _cache_file_bytes() -> int:
+    total = 0
+    for path in (
+        runtime_config.DB_PATH,
+        f"{runtime_config.DB_PATH}-wal",
+        f"{runtime_config.DB_PATH}-shm",
+        runtime_config.SOURCE_ART_LEDGER_PATH,
+        f"{runtime_config.SOURCE_ART_LEDGER_PATH}-wal",
+        f"{runtime_config.SOURCE_ART_LEDGER_PATH}-shm",
+    ):
+        try:
+            info = os.stat(path, follow_symlinks=False)
+            if os.path.isfile(path):
+                total += max(0, int(info.st_size))
+        except OSError:
+            continue
+    return total
+
+
+def _prepare_composite_capacity(
+    connection: sqlite3.Connection,
+    cache_key: str,
+    payload_size: int,
+) -> tuple[bool, tuple[str, ...]]:
+    """Make reusable SQLite pages available without a per-insert table scan."""
+
+    hard_limit = max(0, int(runtime_config.LEGACY_CACHE_MAX_BYTES))
+    if hard_limit <= 0:
+        return False, ()
+    page_size = max(512, int(connection.execute("PRAGMA page_size").fetchone()[0] or 4096))
+    free_pages = max(0, int(connection.execute("PRAGMA freelist_count").fetchone()[0] or 0))
+    existing = connection.execute(
+        "SELECT LENGTH(jpeg_bytes) FROM final_poster_cache WHERE cache_key=?",
+        (cache_key,),
+    ).fetchone()
+    reusable = free_pages * page_size + max(0, int((existing or (0,))[0] or 0))
+    reserve = page_size * 4
+    projected_growth = max(0, payload_size - reusable) + reserve
+    physical = _cache_file_bytes()
+    if physical + projected_growth <= hard_limit:
+        return True, ()
+
+    # Only a near-hard insert pays this bounded eviction query.  The normal hot
+    # path performs two point/PRAGMA reads and never COUNTs or scans the table.
+    rows = connection.execute(
+        "SELECT cache_key, LENGTH(jpeg_bytes) FROM final_poster_cache "
+        "WHERE cache_key<>? ORDER BY cached_at ASC, cache_key ASC LIMIT ?",
+        (cache_key, max(1, int(runtime_config.CACHE_PRUNE_MAX_ITEMS))),
+    ).fetchall()
+    evicted: list[str] = []
+    for old_key, raw_size in rows:
+        connection.execute("DELETE FROM final_poster_cache WHERE cache_key=?", (old_key,))
+        evicted.append(str(old_key))
+        reusable += max(0, int(raw_size or 0))
+        projected_growth = max(0, payload_size - reusable) + reserve
+        if physical + projected_growth <= hard_limit:
+            return True, tuple(evicted)
+    return False, tuple(evicted)
+
+
+def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes, request_params: str = None, ttl_override: int = None) -> bool:
+    """Store a composite without allowing its physical pool past the hard cap."""
+    content_type = f"image/{str(IMAGE_FORMAT).strip().lower()}"
     content_hash = hashlib.sha256(jpeg_bytes).hexdigest()
 
     # L2: persist to SQLite for warm restarts
     try:
         with _db_lock:
+            connection = get_db()
             now = int(time.time())
             cached_at = now
             expires_at = int(cached_at + (
                 ttl_override if ttl_override is not None else
                 COMPOSITE_CACHE_TTL + _ttl_jitter(cache_key, COMPOSITE_CACHE_TTL_JITTER)
             ))
-            get_db().execute(
+            connection.execute("BEGIN IMMEDIATE")
+            accepted, evicted_keys = _prepare_composite_capacity(
+                connection,
+                cache_key,
+                len(jpeg_bytes),
+            )
+            if not accepted:
+                # Keep useful evictions: they create reusable pages for the next
+                # bounded insert even when this single payload cannot fit.
+                connection.commit()
+                with _composite_l1_lock:
+                    for old_key in evicted_keys:
+                        _composite_l1.pop(old_key, None)
+                logger.warning("Composite cache hard limit rejected %s", cache_key)
+                return False
+            connection.execute(
                 """
                 INSERT OR REPLACE INTO final_poster_cache
                     (cache_key, jpeg_bytes, cached_at, request_params,
@@ -469,7 +556,7 @@ def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes, request_params: s
                  content_type, content_hash, expires_at),
             )
             if COMPOSITE_MAX_ENTRIES > 0:
-                deleted = get_db().execute(
+                deleted = connection.execute(
                     "DELETE FROM final_poster_cache WHERE cache_key IN "
                     "(SELECT cache_key FROM final_poster_cache "
                     " ORDER BY cached_at DESC, cache_key DESC LIMIT -1 OFFSET ?)",
@@ -477,12 +564,24 @@ def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes, request_params: s
                 ).rowcount
                 if deleted:
                     logger.info("Composite cache cap: evicted %s oldest entries", deleted)
-            get_db().commit()
+            connection.commit()
+            if evicted_keys:
+                with _composite_l1_lock:
+                    for old_key in evicted_keys:
+                        _composite_l1.pop(old_key, None)
         _l1_put(cache_key, _CompositeL1Entry(
             bytes(jpeg_bytes), content_type, expires_at, content_hash,
         ))
+        return True
     except Exception as exc:
+        try:
+            connection = get_db()
+            if connection.in_transaction:
+                connection.rollback()
+        except Exception:
+            pass
         logger.error(f"Final poster cache write error: {exc}")
+        return False
 
 def delete_cached_final_poster(cache_key: str) -> None:
     """Remove a composited poster from both L1 (RAM) and L2 (SQLite) caches."""
