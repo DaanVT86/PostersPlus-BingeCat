@@ -70,7 +70,6 @@ import os
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
-from config import SASH_PRIORITY as DEFAULT_SASH_PRIORITY  # single source of truth
 import config as _cfg
 
 logger = logging.getLogger(__name__)
@@ -397,6 +396,10 @@ class DiscoveryMeta:
 
     # Social proof
     trending_rank: int | None = None
+    # Private v2 renders pin their thresholds into the immutable contract;
+    # legacy callers leave these unset and retain runtime-configurable values.
+    trending_fetch_count: int | None = None
+    trending_broad_fetch_count: int | None = None
 
     # Timely release / TV lifecycle signals
     is_new_release: bool = False      # legacy combined signal
@@ -688,10 +691,13 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
         return meta.matched_cast[0] if meta.matched_cast else None
 
     if slot == "trending":
-        return f"#{meta.trending_rank} Today" if meta.trending_rank and meta.trending_rank <= _cfg.TRENDING_FETCH_COUNT else None
+        threshold = meta.trending_fetch_count or _cfg.TRENDING_FETCH_COUNT
+        return f"#{meta.trending_rank} Today" if meta.trending_rank and meta.trending_rank <= threshold else None
 
     if slot == "trending_broad":
-        return f"#{meta.trending_rank} Today" if meta.trending_rank and _cfg.TRENDING_FETCH_COUNT < meta.trending_rank <= _cfg.TRENDING_BROAD_FETCH_COUNT else None
+        narrow = meta.trending_fetch_count or _cfg.TRENDING_FETCH_COUNT
+        broad = meta.trending_broad_fetch_count or _cfg.TRENDING_BROAD_FETCH_COUNT
+        return f"#{meta.trending_rank} Today" if meta.trending_rank and narrow < meta.trending_rank <= broad else None
 
     if slot == "new_season":
         return "New Season" if meta.is_new_season else None
@@ -727,15 +733,21 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
 
     if slot == "structural":
         for key in _STRUCTURAL_CHECKS:
-            if key == "short_film"  and meta.is_short_film:  return _STRUCTURAL_LABELS[key]
-            if key == "mini_series" and meta.is_mini_series:  return _STRUCTURAL_LABELS[key]
-            if key == "binge_ready" and meta.is_binge_ready:  return _STRUCTURAL_LABELS[key]
+            if key == "short_film" and meta.is_short_film:
+                return _STRUCTURAL_LABELS[key]
+            if key == "mini_series" and meta.is_mini_series:
+                return _STRUCTURAL_LABELS[key]
+            if key == "binge_ready" and meta.is_binge_ready:
+                return _STRUCTURAL_LABELS[key]
         return None
 
     if slot in ("short_film", "mini_series", "binge_ready"):
-        if slot == "short_film" and meta.is_short_film: return _STRUCTURAL_LABELS[slot]
-        if slot == "mini_series" and meta.is_mini_series: return _STRUCTURAL_LABELS[slot]
-        if slot == "binge_ready" and meta.is_binge_ready: return _STRUCTURAL_LABELS[slot]
+        if slot == "short_film" and meta.is_short_film:
+            return _STRUCTURAL_LABELS[slot]
+        if slot == "mini_series" and meta.is_mini_series:
+            return _STRUCTURAL_LABELS[slot]
+        if slot == "binge_ready" and meta.is_binge_ready:
+            return _STRUCTURAL_LABELS[slot]
         return None
 
     if slot == "release_status":

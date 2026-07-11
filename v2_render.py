@@ -55,6 +55,8 @@ _WEBP_SETTINGS: Mapping[str, Any] = {
 }
 _COMPOSITION_LOCK = threading.Lock()
 _COMPOSITION_LANGUAGES_READY = False
+V2_TRENDING_FETCH_COUNT = 40
+V2_TRENDING_BROAD_FETCH_COUNT = 100
 _COMPOSITOR_MODULES = (
     "v2_render.py",
     "main.py",
@@ -416,8 +418,6 @@ def _selected_sash_fact(
     spec: CanonicalRenderSpec,
     snapshot: ImmutableRenderSnapshot,
 ) -> tuple[str, ...] | None:
-    import config
-
     facts = snapshot.facts.values
     for slot in spec.sash_priority:
         matched = False
@@ -451,14 +451,14 @@ def _selected_sash_fact(
         elif slot == "trending":
             matched = bool(
                 facts.trending_rank
-                and facts.trending_rank <= config.TRENDING_FETCH_COUNT
+                and facts.trending_rank <= V2_TRENDING_FETCH_COUNT
             )
         elif slot == "trending_broad":
             matched = bool(
                 facts.trending_rank
-                and config.TRENDING_FETCH_COUNT
+                and V2_TRENDING_FETCH_COUNT
                 < facts.trending_rank
-                <= config.TRENDING_BROAD_FETCH_COUNT
+                <= V2_TRENDING_BROAD_FETCH_COUNT
             )
         elif slot == "new_season":
             matched = bool(facts.is_new_season)
@@ -938,6 +938,8 @@ def _discovery_meta(
             facts.original_language if "original_language" in used_fields else None
         ),
         trending_rank=(facts.trending_rank if "trending_rank" in used_fields else None),
+        trending_fetch_count=V2_TRENDING_FETCH_COUNT,
+        trending_broad_fetch_count=V2_TRENDING_BROAD_FETCH_COUNT,
         is_new_release=(
             bool(facts.is_new_release) if "is_new_release" in used_fields else False
         ),

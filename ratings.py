@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 import httpx
 import numpy as np
+from integration_contract import DB_INTEGER_MAX
 
 logger = logging.getLogger(__name__)
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
@@ -25,7 +26,6 @@ from config import (
     SCORE_GLOW_ALPHA,
     RATING_MIN_VOTES,
 )
-from integration_contract import DB_INTEGER_MAX
 
 
 _RATING_VOTE_KEYS = ("vote_count", "votes", "count", "rating_count", "ratings_count")

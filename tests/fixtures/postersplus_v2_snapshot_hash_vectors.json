@@ -1,0 +1,5199 @@
+{
+  "canonical_json": {
+    "allow_nan": false,
+    "ensure_ascii": true,
+    "separators": [
+      ",",
+      ":"
+    ],
+    "sort_keys": true
+  },
+  "configs": {
+    "custom-empty-movie-weights": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": true,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 2,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "hidden",
+        "sash_poster_color": false,
+        "sash_priority": [],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": false,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": true,
+        "version": 1
+      }
+    },
+    "fallback-title": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "nl",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "hidden",
+        "sash_poster_color": false,
+        "sash_priority": [],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": false,
+        "textless": false,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "fixed-clean-notch": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "photoreal",
+        "fallback_to_imdb": true,
+        "hide_genre": false,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [
+          [
+            "imdb",
+            0.0
+          ],
+          [
+            "letterboxd",
+            0.99
+          ],
+          [
+            "metacritic",
+            0.0
+          ],
+          [
+            "metacriticuser",
+            0.0
+          ],
+          [
+            "myanimelist",
+            0.0
+          ],
+          [
+            "popcorn",
+            0.0
+          ],
+          [
+            "rogerebert",
+            0.0
+          ],
+          [
+            "tmdb",
+            0.0
+          ],
+          [
+            "tomatoes",
+            0.0
+          ],
+          [
+            "trakt",
+            0.01
+          ]
+        ],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 5,
+        "rating_text_color": null,
+        "release_status_cinema_only": true,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.2,
+        "sash_badge_size_w": 1.4,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "notch",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "wins",
+          "gg_wins",
+          "festival",
+          "pic_noms",
+          "gg_noms",
+          "studio",
+          "director",
+          "cast",
+          "trending",
+          "new_season",
+          "returning",
+          "premiere",
+          "just_added",
+          "season_finale",
+          "cult",
+          "foreign",
+          "new_release",
+          "metacritic",
+          "true_story",
+          "short_film",
+          "mini_series",
+          "binge_ready",
+          "trending_broad",
+          "cinema",
+          "streaming",
+          "physical",
+          "production",
+          "ended",
+          "cancelled",
+          "airing"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": false,
+        "top_gradient": "medium",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [
+          [
+            "imdb",
+            0.0
+          ],
+          [
+            "metacritic",
+            0.0
+          ],
+          [
+            "metacriticuser",
+            0.0
+          ],
+          [
+            "myanimelist",
+            0.0
+          ],
+          [
+            "popcorn",
+            0.0
+          ],
+          [
+            "tmdb",
+            0.0
+          ],
+          [
+            "tomatoes",
+            0.2
+          ],
+          [
+            "trakt",
+            0.8
+          ]
+        ],
+        "use_original_art": false,
+        "version": 1
+      },
+      "preset_ref": "clean-notch@1"
+    },
+    "fixed-minimalist": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.06,
+        "badge_anchor_y": 0.055,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 36,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "photoreal",
+        "fallback_to_imdb": true,
+        "hide_genre": false,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 3,
+        "minimalist_mode_font_size_ratio": 0.056,
+        "minimalist_mode_font_x_offset": 0.065,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [
+          [
+            "imdb",
+            0.0
+          ],
+          [
+            "letterboxd",
+            0.99
+          ],
+          [
+            "metacritic",
+            0.0
+          ],
+          [
+            "metacriticuser",
+            0.0
+          ],
+          [
+            "myanimelist",
+            0.0
+          ],
+          [
+            "popcorn",
+            0.0
+          ],
+          [
+            "rogerebert",
+            0.0
+          ],
+          [
+            "tmdb",
+            0.0
+          ],
+          [
+            "tomatoes",
+            0.0
+          ],
+          [
+            "trakt",
+            0.01
+          ]
+        ],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 3,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [
+          "cinema",
+          "streaming",
+          "physical",
+          "production",
+          "ended",
+          "cancelled",
+          "airing"
+        ],
+        "sash_height_ratio": 0.135,
+        "sash_length_ratio": 1.2,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "wins",
+          "gg_wins",
+          "festival",
+          "pic_noms",
+          "gg_noms",
+          "studio",
+          "director",
+          "cast",
+          "trending",
+          "new_season",
+          "returning",
+          "premiere",
+          "just_added",
+          "season_finale",
+          "cult",
+          "foreign",
+          "new_release",
+          "metacritic",
+          "true_story",
+          "short_film",
+          "mini_series",
+          "binge_ready",
+          "trending_broad"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": false,
+        "top_gradient": "medium",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [
+          [
+            "imdb",
+            0.0
+          ],
+          [
+            "metacritic",
+            0.0
+          ],
+          [
+            "metacriticuser",
+            0.0
+          ],
+          [
+            "myanimelist",
+            0.0
+          ],
+          [
+            "popcorn",
+            0.0
+          ],
+          [
+            "tmdb",
+            0.0
+          ],
+          [
+            "tomatoes",
+            0.2
+          ],
+          [
+            "trakt",
+            0.8
+          ]
+        ],
+        "use_original_art": false,
+        "version": 1
+      },
+      "preset_ref": "minimalist@1"
+    },
+    "fixed-prestige": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.06,
+        "badge_anchor_y": 0.045,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 28,
+        "badge_min_score": 5,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "photoreal",
+        "fallback_to_imdb": true,
+        "hide_genre": false,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [
+          [
+            "imdb",
+            0.0
+          ],
+          [
+            "letterboxd",
+            0.99
+          ],
+          [
+            "metacritic",
+            0.0
+          ],
+          [
+            "metacriticuser",
+            0.0
+          ],
+          [
+            "myanimelist",
+            0.0
+          ],
+          [
+            "popcorn",
+            0.0
+          ],
+          [
+            "rogerebert",
+            0.0
+          ],
+          [
+            "tmdb",
+            0.0
+          ],
+          [
+            "tomatoes",
+            0.0
+          ],
+          [
+            "trakt",
+            0.01
+          ]
+        ],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 1,
+        "rating_text_color": null,
+        "release_status_cinema_only": true,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.135,
+        "sash_length_ratio": 1.2,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "wins",
+          "gg_wins",
+          "festival",
+          "pic_noms",
+          "gg_noms",
+          "studio",
+          "director",
+          "cast",
+          "trending",
+          "new_season",
+          "returning",
+          "premiere",
+          "just_added",
+          "season_finale",
+          "cult",
+          "foreign",
+          "new_release",
+          "metacritic",
+          "true_story",
+          "short_film",
+          "mini_series",
+          "binge_ready",
+          "trending_broad",
+          "cinema",
+          "streaming",
+          "physical",
+          "production",
+          "ended",
+          "cancelled",
+          "airing"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": false,
+        "top_gradient": "medium",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [
+          [
+            "imdb",
+            0.0
+          ],
+          [
+            "metacritic",
+            0.0
+          ],
+          [
+            "metacriticuser",
+            0.0
+          ],
+          [
+            "myanimelist",
+            0.0
+          ],
+          [
+            "popcorn",
+            0.0
+          ],
+          [
+            "tmdb",
+            0.0
+          ],
+          [
+            "tomatoes",
+            0.2
+          ],
+          [
+            "trakt",
+            0.8
+          ]
+        ],
+        "use_original_art": false,
+        "version": 1
+      },
+      "preset_ref": "prestige@1"
+    },
+    "logo-native-nl": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "nl",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "hidden",
+        "sash_poster_color": false,
+        "sash_priority": [],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": false,
+        "textless": false,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "missing-optional": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 3,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": false,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 1,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "wins",
+          "trending",
+          "cinema"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": true,
+        "version": 1
+      }
+    },
+    "original-primary": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "hidden",
+        "sash_poster_color": false,
+        "sash_priority": [],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": false,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": true,
+        "version": 1
+      }
+    },
+    "original-top-rated": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "top_rated",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "hidden",
+        "sash_poster_color": false,
+        "sash_priority": [],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": false,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": true,
+        "version": 1
+      }
+    },
+    "sash-cinema-greyscale": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "cult",
+          "cinema"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-cinema-only": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": true,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "streaming",
+          "cult"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-gg-noms": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": false,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "gg_noms",
+          "cult"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-gg-wins": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": false,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "wins",
+          "gg_wins",
+          "cult"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-hidden-greyscale": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "hidden",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "cinema"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-new-release": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": false,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "new_release",
+          "cult"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-picture-noms": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": false,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "pic_noms",
+          "gg_noms",
+          "cult"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-trending": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": false,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "trending",
+          "cult"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-trending-broad": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": false,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "trending_broad",
+          "cult"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "sash-wins-only": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": false,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "sash",
+        "sash_poster_color": false,
+        "sash_priority": [
+          "wins"
+        ],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": true,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    },
+    "textless-base": {
+      "canonical_config": {
+        "accent_bar_append_mode": 0,
+        "accent_bar_bottom_ratio": 0.04,
+        "accent_bar_font_size_ratio": 0.08,
+        "accent_bar_y_offset": 0.9,
+        "badge_anchor_x": 0.05,
+        "badge_anchor_y": 0.05,
+        "badge_display_mode": 0,
+        "badge_gap": 8,
+        "badge_height": 20,
+        "badge_min_score": 2,
+        "bar_accent": "silver",
+        "bar_append": "rating_year",
+        "bar_bottom_inset": 0.0,
+        "bar_font_size_ratio": 0.55,
+        "bar_frost_opacity": 0.85,
+        "bar_height_ratio": 0.08,
+        "bar_match_notch": false,
+        "bar_score_out_of_10": false,
+        "bar_style": "frosted",
+        "bottom_gradient": "high",
+        "bottom_gradient_height": 0.0,
+        "bottom_gradient_opacity": 0.0,
+        "cinema_greyscale": true,
+        "cinema_greyscale_skip_if_available": false,
+        "combined_badge_stacked": false,
+        "fallback_bg_style": "minimal",
+        "fallback_to_imdb": false,
+        "hide_genre": true,
+        "logo_bottom_anchor": false,
+        "logo_bottom_ratio": 0.28,
+        "logo_language": "en",
+        "logo_max_h_ratio": 0.25,
+        "logo_max_w_ratio": 0.75,
+        "logo_priority": "native_original",
+        "minimalist_append_mode": 0,
+        "minimalist_mode_font_size_ratio": 0.055,
+        "minimalist_mode_font_x_offset": 0.05,
+        "minimalist_mode_font_y_offset": 0.92,
+        "movie_weights": [],
+        "muted": false,
+        "numeric_score_font_size_ratio": 0.1,
+        "numeric_score_y_offset": 0.9,
+        "original_art_source": "primary",
+        "rating_display_mode": 0,
+        "rating_text_color": null,
+        "release_status_cinema_only": false,
+        "sash_badge_font_ratio": 0.43,
+        "sash_badge_frost_opacity": 0.75,
+        "sash_badge_inset": 0.0,
+        "sash_badge_size_h": 1.05,
+        "sash_badge_size_w": 1.05,
+        "sash_badge_style": "frosted",
+        "sash_exclusions": [],
+        "sash_height_ratio": 0.12,
+        "sash_length_ratio": 1.15,
+        "sash_mode": "hidden",
+        "sash_poster_color": false,
+        "sash_priority": [],
+        "sash_text_color": null,
+        "sash_winner_star": false,
+        "schema": "bingecat_postersplus_v2",
+        "score_color_mode": 2,
+        "score_glow_alpha": 40,
+        "score_glow_blur": 1,
+        "score_glow_threshold": 85,
+        "score_out_of_10": false,
+        "show_award_sash": false,
+        "textless": true,
+        "top_gradient": "high",
+        "top_gradient_height": 0.0,
+        "top_gradient_opacity": 0.0,
+        "top_vignette_sash_only": false,
+        "tv_weights": [],
+        "use_original_art": false,
+        "version": 1
+      }
+    }
+  },
+  "media": {
+    "movie": {
+      "imdb_id": "tt0133093",
+      "media_type": "movie",
+      "tmdb_id": 603
+    }
+  },
+  "schema": "postersplus_v2_snapshot_hash_vectors",
+  "snapshots": {
+    "both-release-signals": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "is_digital_release",
+              "is_new_release"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "is_digital_release": true,
+          "is_new_release": true
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "cinema": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "release_status": "cinema"
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "cinema-cult": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "is_cult",
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "is_cult": true,
+          "release_status": "cinema"
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "digital-only": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "is_digital_release"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "is_digital_release": true
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "empty-weight-ratings": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 84.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "letterboxd",
+          "scale": 5.0,
+          "score": 4.2,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 81.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "trakt",
+          "scale": 100.0,
+          "score": 81.0,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 91.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "tomatoes",
+          "scale": 100.0,
+          "score": 91.0,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        }
+      ],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "00f17f19c9cab30c6a8055c05ec35d381520641592af994d2f5c7aca4c128247",
+          "source_art_id": "base-primary-neutral"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "globe-and-cult": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "award_wins",
+              "is_cult"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "award_wins": [
+            "Globe Winner"
+          ],
+          "is_cult": true
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "globe-nom": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "award_nominations",
+              "is_cult"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "award_nominations": [
+            "Globe Nominee"
+          ],
+          "is_cult": true
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "globe-only": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "award_wins"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "award_wins": [
+            "Globe Winner"
+          ]
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "logo-exact-neutral": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "backdrop",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.backdrop",
+          "recipe_version": 5,
+          "reconstructable": false,
+          "role": "fallback_backdrop",
+          "sha256": "bb0c9b0344f61db563e9064a925d53bdca2b5d665fdf5b979f616c3cae7ac585",
+          "source_art_id": "logo-base-backdrop-a"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "neutral",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.nl",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "f990f21f0a75aec057ccc58444a77410cb31b9fa56afe62c85d531c3b41346df",
+          "source_art_id": "logo-policy-neutral"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "nl",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.nl",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "fa6e163511bbf0f45caa671ee5625e4d9b2bead074d885831b7d94981fa7d364",
+          "source_art_id": "logo-policy-nl"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "en",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.nl",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "0fa490451da405d518cef902b4a599e12d1c475c02a672f0c3139cdb46cfb586",
+          "source_art_id": "logo-policy-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "neutral",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_text.nl",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "4112f1055bf68f0569a92f4ea7ea24ceaaa9dc1b041a22d43729ba1063f616ab",
+          "source_art_id": "logo-policy-wrong"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "logo-exact-requested": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "backdrop",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.backdrop",
+          "recipe_version": 5,
+          "reconstructable": false,
+          "role": "fallback_backdrop",
+          "sha256": "8336be39d599fb22c7d18185af1ab7eb3f33f1817bc27c3e1a1a26f90dae4c7b",
+          "source_art_id": "logo-base-backdrop-b"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "nl",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.nl",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "a4bdb01086d8fabea246b908b23ea305595662ca6faddf56c76cb64348fc10c9",
+          "source_art_id": "logo-requested-nl"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "en",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.nl",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "48c6e1d3d245ec1e81c84707cd0ec5c2d691aa3b14358cf7cf22da6e0f0245e0",
+          "source_art_id": "logo-requested-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "neutral",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_text.nl",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "44388e21872bfc06fff1629c77f46ad0f0f42881b17b08f18aaccd91768ba2e0",
+          "source_art_id": "logo-requested-wrong"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "logo-wrong-only": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "backdrop",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.backdrop",
+          "recipe_version": 5,
+          "reconstructable": false,
+          "role": "fallback_backdrop",
+          "sha256": "240b2ca216463c2c4608bc49745122daa9f5fbed6c50982a6c7c410693a5354d",
+          "source_art_id": "logo-base-backdrop-c"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "neutral",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_text.nl",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "f82b97787e98730c7e22dbb3a35d39f24705691588f2fd67c0d6f9bb2331f447",
+          "source_art_id": "logo-only-wrong"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "missing-optional": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "00f17f19c9cab30c6a8055c05ec35d381520641592af994d2f5c7aca4c128247",
+          "source_art_id": "base-primary-neutral"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "original-primary-locales": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "en",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "827e03dd2eee85c9abeeb816a2ac3d972582f1431e10d36ebacfe18b4c480614",
+          "source_art_id": "primary-choice-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "5750e3d463dd93f4d8d60c6abc902742c1e58ba49ba17bbcf31efa198e4fb231",
+          "source_art_id": "primary-choice-nl"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "ea62206ad3d10377335beb8c1fbe931612d93fb92c1654e990fff940aa78307b",
+          "source_art_id": "primary-choice-neutral"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.top_rated",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "top_rated",
+          "sha256": "e780cc6e57b25cdbbef7f283d2c304be3509d04d84d3b070564882371d3a73c9",
+          "source_art_id": "top-irrelevant"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "original-top-locales": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "en",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.top_rated",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "top_rated",
+          "sha256": "07ccf5540a7dfe50b698438148daa111c84bb78721a939e3498fdc7630515798",
+          "source_art_id": "top-choice-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.top_rated",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "top_rated",
+          "sha256": "2d813ba810204dbf40839858427b239d42c615d59364070def035737796a01b7",
+          "source_art_id": "top-choice-nl"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "b749e34647940528451c4d5e6450d9d0be8d84039b4d61840f0dd44a7c755c0f",
+          "source_art_id": "primary-irrelevant"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "oscar-nom": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "award_nominations",
+              "is_cult"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "award_nominations": [
+            "Oscar Nominee - Best Picture"
+          ],
+          "is_cult": true
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "rich": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "age_rating",
+              "award_nominations",
+              "award_wins",
+              "festival_label",
+              "genre",
+              "is_cult",
+              "is_digital_release",
+              "is_new_release",
+              "is_true_story",
+              "matched_cast",
+              "matched_directors",
+              "matched_studios",
+              "release_status",
+              "release_year",
+              "trending_rank"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "age_rating": 16,
+          "award_nominations": [
+            "Oscar Nominee - Best Picture",
+            "Globe Nominee"
+          ],
+          "award_wins": [
+            "Globe Winner",
+            "Oscar Winner"
+          ],
+          "festival_label": "Palme d'Or Winner",
+          "genre": "Sci-Fi",
+          "is_cult": true,
+          "is_digital_release": true,
+          "is_new_release": true,
+          "is_true_story": false,
+          "matched_cast": [
+            "Keanu Reeves"
+          ],
+          "matched_directors": [
+            "C. Nolan"
+          ],
+          "matched_studios": [
+            "A24 Films"
+          ],
+          "release_status": "cinema",
+          "release_year": 1999,
+          "trending_rank": 12
+        }
+      },
+      "ratings": [
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 84.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "letterboxd",
+          "scale": 5.0,
+          "score": 4.2,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 81.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "trakt",
+          "scale": 100.0,
+          "score": 81.0,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 91.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "tomatoes",
+          "scale": 100.0,
+          "score": 91.0,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 87.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "imdb",
+          "scale": 10.0,
+          "score": 8.7,
+          "source": "imdb:title_metrics",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 74.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "metacritic",
+          "scale": 100.0,
+          "score": 74.0,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 83.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "tmdb",
+          "scale": 100.0,
+          "score": 83.0,
+          "source": "tmdb:volatile",
+          "vote_count": 12345
+        }
+      ],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f",
+          "source_art_id": "textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "5b23a0307d9b3946f39d444974cd20d47b549e1247ebc7536326e422e155a269",
+          "source_art_id": "textless-nl",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "5b23a0307d9b3946f39d444974cd20d47b549e1247ebc7536326e422e155a269",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "en",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "335301cf7ef02956ce2c8d9539b9a956d6347198964ed1cfd0b92a361b58b7a2",
+          "source_art_id": "textless-en",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "335301cf7ef02956ce2c8d9539b9a956d6347198964ed1cfd0b92a361b58b7a2",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "backdrop",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.backdrop",
+          "recipe_version": 5,
+          "reconstructable": false,
+          "role": "fallback_backdrop",
+          "sha256": "e92c1906122d338c5075ab1f60c966b786669c2497539fbe694c3013190f39f4",
+          "source_art_id": "backdrop-neutral"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "neutral",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.en",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "099f598ec2ba793e9c8ace9947471093cce44e4d3720c7485e03d705ad803f1f",
+          "source_art_id": "logo-exact-neutral-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "en",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.en",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "617e52449817aa40f0cc5e561d161e07475b7d5dd7879cd5829ced94a0d47903",
+          "source_art_id": "logo-exact-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "neutral",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_text.en",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "e8b97f414397e41251eb6e309b7652aad11b0df23855362cd5e8e89787b72004",
+          "source_art_id": "logo-wrong-neutral-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "598daac2110f8bd7ea63de6ab715129e0f7022b558462f3a059e0c46d4b23733",
+          "source_art_id": "primary-neutral"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "4ba2c03d4e8316fe4bce989d78433bb42218cba558f6ba8057c4e85574511073",
+          "source_art_id": "primary-nl"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.top_rated",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "top_rated",
+          "sha256": "49ddfd6da47ea52a834784c171385fcdbcb935de569efe8b7927bb371080b3f2",
+          "source_art_id": "top-rated-nl"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "rich-reversed": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "age_rating",
+              "award_nominations",
+              "award_wins",
+              "festival_label",
+              "genre",
+              "is_cult",
+              "is_digital_release",
+              "is_new_release",
+              "is_true_story",
+              "matched_cast",
+              "matched_directors",
+              "matched_studios",
+              "release_status",
+              "release_year",
+              "trending_rank"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "age_rating": 16,
+          "award_nominations": [
+            "Oscar Nominee - Best Picture",
+            "Globe Nominee"
+          ],
+          "award_wins": [
+            "Globe Winner",
+            "Oscar Winner"
+          ],
+          "festival_label": "Palme d'Or Winner",
+          "genre": "Sci-Fi",
+          "is_cult": true,
+          "is_digital_release": true,
+          "is_new_release": true,
+          "is_true_story": false,
+          "matched_cast": [
+            "Keanu Reeves"
+          ],
+          "matched_directors": [
+            "C. Nolan"
+          ],
+          "matched_studios": [
+            "A24 Films"
+          ],
+          "release_status": "cinema",
+          "release_year": 1999,
+          "trending_rank": 12
+        }
+      },
+      "ratings": [
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 83.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "tmdb",
+          "scale": 100.0,
+          "score": 83.0,
+          "source": "tmdb:volatile",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 74.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "metacritic",
+          "scale": 100.0,
+          "score": 74.0,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 87.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "imdb",
+          "scale": 10.0,
+          "score": 8.7,
+          "source": "imdb:title_metrics",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 91.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "tomatoes",
+          "scale": 100.0,
+          "score": 91.0,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 81.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "trakt",
+          "scale": 100.0,
+          "score": 81.0,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        },
+        {
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "metric": "score",
+          "normalized_score": 84.0,
+          "observed_at": "2026-07-11T10:00:00Z",
+          "provider": "letterboxd",
+          "scale": 5.0,
+          "score": 4.2,
+          "source": "mdblist:imdb",
+          "vote_count": 12345
+        }
+      ],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.top_rated",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "top_rated",
+          "sha256": "49ddfd6da47ea52a834784c171385fcdbcb935de569efe8b7927bb371080b3f2",
+          "source_art_id": "top-rated-nl"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "4ba2c03d4e8316fe4bce989d78433bb42218cba558f6ba8057c4e85574511073",
+          "source_art_id": "primary-nl"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "original.primary",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "primary",
+          "sha256": "598daac2110f8bd7ea63de6ab715129e0f7022b558462f3a059e0c46d4b23733",
+          "source_art_id": "primary-neutral"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "neutral",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_text.en",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "e8b97f414397e41251eb6e309b7652aad11b0df23855362cd5e8e89787b72004",
+          "source_art_id": "logo-wrong-neutral-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "en",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.en",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "617e52449817aa40f0cc5e561d161e07475b7d5dd7879cd5829ced94a0d47903",
+          "source_art_id": "logo-exact-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "logo",
+          "locale": "neutral",
+          "mime": "image/png",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "logo.native_original.en",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "logo",
+          "sha256": "099f598ec2ba793e9c8ace9947471093cce44e4d3720c7485e03d705ad803f1f",
+          "source_art_id": "logo-exact-neutral-en"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "backdrop",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.backdrop",
+          "recipe_version": 5,
+          "reconstructable": false,
+          "role": "fallback_backdrop",
+          "sha256": "e92c1906122d338c5075ab1f60c966b786669c2497539fbe694c3013190f39f4",
+          "source_art_id": "backdrop-neutral"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "en",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "335301cf7ef02956ce2c8d9539b9a956d6347198964ed1cfd0b92a361b58b7a2",
+          "source_art_id": "textless-en",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "335301cf7ef02956ce2c8d9539b9a956d6347198964ed1cfd0b92a361b58b7a2",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "5b23a0307d9b3946f39d444974cd20d47b549e1247ebc7536326e422e155a269",
+          "source_art_id": "textless-nl",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "5b23a0307d9b3946f39d444974cd20d47b549e1247ebc7536326e422e155a269",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f",
+          "source_art_id": "textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "streaming-cult": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "is_cult",
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "is_cult": true,
+          "release_status": "streaming"
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "textless-en": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "en",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "e0d8457064c93ba11b5bb785a005198a3826c001882bd10409354de13dc41185",
+          "source_art_id": "tl-fallback-en",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "e0d8457064c93ba11b5bb785a005198a3826c001882bd10409354de13dc41185",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "textless-neutral-requested-en": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "en",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "30a5489c0d5396c1c0741e3e8446358e852504e8531be753cf8b24906bc4c25b",
+          "source_art_id": "tl-choice-en",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "30a5489c0d5396c1c0741e3e8446358e852504e8531be753cf8b24906bc4c25b",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "71833e6381a7491d4fc15c64ea627aeb6fc62a3ce9086873c7f8bf84f36dee7c",
+          "source_art_id": "tl-choice-nl",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "71833e6381a7491d4fc15c64ea627aeb6fc62a3ce9086873c7f8bf84f36dee7c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "c6883aca87ea071c81e56b7be5ec40329f6dbd5b88066adb5cb4c79dd587ba37",
+          "source_art_id": "tl-choice-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "c6883aca87ea071c81e56b7be5ec40329f6dbd5b88066adb5cb4c79dd587ba37",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "textless-null-and-en": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": null,
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "f6bbd5bc7c0ca3e9ceb1bc7d6d12558622755ac15215d79a8c976ebc254f98f7",
+          "source_art_id": "tl-null",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "f6bbd5bc7c0ca3e9ceb1bc7d6d12558622755ac15215d79a8c976ebc254f98f7",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "en",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "65b452674e6db491b64b8fc72dcb630555e7a19e79909498b2daaa93554523b9",
+          "source_art_id": "tl-null-en",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "65b452674e6db491b64b8fc72dcb630555e7a19e79909498b2daaa93554523b9",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "textless-requested-en": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "en",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "fa3ac9e89d0c563bf7c3d7515eb7c937074cd9cf6a42b723dedbc289c1349f3d",
+          "source_art_id": "tl-requested-en",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "fa3ac9e89d0c563bf7c3d7515eb7c937074cd9cf6a42b723dedbc289c1349f3d",
+          "verified_at": "2026-07-11T10:00:00Z"
+        },
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "nl",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "cfd176834607a5bc3e2e1e1b278311c5527269d299777f85b7e05e27402978ed",
+          "source_art_id": "tl-requested-nl",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "cfd176834607a5bc3e2e1e1b278311c5527269d299777f85b7e05e27402978ed",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "titles-all": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "titles-no-es": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [],
+        "values": {}
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "D\u00e9j\u00e0 Vu",
+        "nl": "Caf\u00e9 aan Zee"
+      }
+    },
+    "trending-100": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "is_cult",
+              "trending_rank"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "is_cult": true,
+          "trending_rank": 100
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "trending-101": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "is_cult",
+              "trending_rank"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "is_cult": true,
+          "trending_rank": 101
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "trending-40": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "is_cult",
+              "trending_rank"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "is_cult": true,
+          "trending_rank": 40
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    },
+    "trending-41": {
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-08-11T11:00:00Z",
+            "fields": [
+              "is_cult",
+              "trending_rank"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          }
+        ],
+        "values": {
+          "is_cult": true,
+          "trending_rank": 41
+        }
+      },
+      "ratings": [],
+      "source_art": [
+        {
+          "byte_size": 2048,
+          "checked_at": "2026-07-11T11:00:00Z",
+          "expires_at": "2026-08-11T11:00:00Z",
+          "kind": "poster",
+          "locale": "neutral",
+          "mime": "image/jpeg",
+          "observed_at": "2026-07-11T10:00:00Z",
+          "policy_key": "fallback.textless",
+          "recipe_version": 1,
+          "reconstructable": false,
+          "role": "textless_poster",
+          "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "source_art_id": "base-textless-neutral",
+          "textless_verified": true,
+          "verification_recipe": "ppocr.textless.v1",
+          "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+          "verified_at": "2026-07-11T10:00:00Z"
+        }
+      ],
+      "titles_by_locale": {
+        "de": "\u00dcbermorgen",
+        "en": "D\u00e9j\u00e0 Vu",
+        "es": "El Ni\u00f1o",
+        "nl": "Caf\u00e9 aan Zee",
+        "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+      }
+    }
+  },
+  "vectors": [
+    {
+      "config_ref": "fixed-clean-notch",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_wins": "bingecat",
+            "release_status": "bingecat"
+          },
+          "values": {
+            "award_wins": [
+              "Globe Winner",
+              "Oscar Winner"
+            ],
+            "release_status": "cinema"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [
+          {
+            "metric": "score",
+            "normalized_score": 84.0,
+            "provider": "letterboxd",
+            "source": "mdblist:imdb"
+          },
+          {
+            "metric": "score",
+            "normalized_score": 74.0,
+            "provider": "metacritic",
+            "source": "mdblist:imdb"
+          },
+          {
+            "metric": "score",
+            "normalized_score": 81.0,
+            "provider": "trakt",
+            "source": "mdblist:imdb"
+          }
+        ],
+        "source_art": [
+          {
+            "kind": "logo",
+            "locale": "neutral",
+            "policy_key": "logo.native_original.en",
+            "recipe_version": 1,
+            "role": "logo",
+            "sha256": "099f598ec2ba793e9c8ace9947471093cce44e4d3720c7485e03d705ad803f1f",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          },
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "643f0cbaa9115d805d8a3efa099f75608857846acc9bbcd3af4259a27f628a4d",
+      "id": "fixed-clean-notch-en",
+      "locale": "en",
+      "snapshot_ref": "rich"
+    },
+    {
+      "config_ref": "fixed-prestige",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_wins": "bingecat",
+            "genre": "bingecat",
+            "release_status": "bingecat",
+            "release_year": "bingecat"
+          },
+          "values": {
+            "award_wins": [
+              "Globe Winner",
+              "Oscar Winner"
+            ],
+            "genre": "Sci-Fi",
+            "release_status": "cinema",
+            "release_year": 1999
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [
+          {
+            "metric": "score",
+            "normalized_score": 84.0,
+            "provider": "letterboxd",
+            "source": "mdblist:imdb"
+          },
+          {
+            "metric": "score",
+            "normalized_score": 81.0,
+            "provider": "trakt",
+            "source": "mdblist:imdb"
+          }
+        ],
+        "source_art": [
+          {
+            "kind": "logo",
+            "locale": "neutral",
+            "policy_key": "logo.native_original.en",
+            "recipe_version": 1,
+            "role": "logo",
+            "sha256": "099f598ec2ba793e9c8ace9947471093cce44e4d3720c7485e03d705ad803f1f",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          },
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "82561a54c71b5f35010afd6c691d18248b658027736c487b1fe3e17db83e3b7f",
+      "id": "fixed-prestige-en",
+      "locale": "en",
+      "snapshot_ref": "rich"
+    },
+    {
+      "config_ref": "fixed-minimalist",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_wins": "bingecat",
+            "genre": "bingecat"
+          },
+          "values": {
+            "award_wins": [
+              "Globe Winner",
+              "Oscar Winner"
+            ],
+            "genre": "Sci-Fi"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [
+          {
+            "metric": "score",
+            "normalized_score": 84.0,
+            "provider": "letterboxd",
+            "source": "mdblist:imdb"
+          },
+          {
+            "metric": "score",
+            "normalized_score": 74.0,
+            "provider": "metacritic",
+            "source": "mdblist:imdb"
+          },
+          {
+            "metric": "score",
+            "normalized_score": 81.0,
+            "provider": "trakt",
+            "source": "mdblist:imdb"
+          }
+        ],
+        "source_art": [
+          {
+            "kind": "logo",
+            "locale": "neutral",
+            "policy_key": "logo.native_original.en",
+            "recipe_version": 1,
+            "role": "logo",
+            "sha256": "099f598ec2ba793e9c8ace9947471093cce44e4d3720c7485e03d705ad803f1f",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          },
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "ecee4ab59419ae74554b9ab0c848ead057f248e718d5c2638e2fbd33506a9c56",
+      "id": "fixed-minimalist-en",
+      "locale": "en",
+      "snapshot_ref": "rich"
+    },
+    {
+      "config_ref": "fixed-minimalist",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_wins": "bingecat",
+            "genre": "bingecat"
+          },
+          "values": {
+            "award_wins": [
+              "Globe Winner",
+              "Oscar Winner"
+            ],
+            "genre": "Sci-Fi"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [
+          {
+            "metric": "score",
+            "normalized_score": 84.0,
+            "provider": "letterboxd",
+            "source": "mdblist:imdb"
+          },
+          {
+            "metric": "score",
+            "normalized_score": 74.0,
+            "provider": "metacritic",
+            "source": "mdblist:imdb"
+          },
+          {
+            "metric": "score",
+            "normalized_score": 81.0,
+            "provider": "trakt",
+            "source": "mdblist:imdb"
+          }
+        ],
+        "source_art": [
+          {
+            "kind": "logo",
+            "locale": "neutral",
+            "policy_key": "logo.native_original.en",
+            "recipe_version": 1,
+            "role": "logo",
+            "sha256": "099f598ec2ba793e9c8ace9947471093cce44e4d3720c7485e03d705ad803f1f",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          },
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "8eb97ee31008167ef5aed779ec732a9245da60c2d78c0c35c9cca6a887971f7f"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "ecee4ab59419ae74554b9ab0c848ead057f248e718d5c2638e2fbd33506a9c56",
+      "id": "minimalist-reversed-inputs",
+      "locale": "en",
+      "same_hash_as": "fixed-minimalist-en",
+      "snapshot_ref": "rich-reversed"
+    },
+    {
+      "config_ref": "custom-empty-movie-weights",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [
+          {
+            "metric": "score",
+            "normalized_score": 84.0,
+            "provider": "letterboxd",
+            "source": "mdblist:imdb"
+          },
+          {
+            "metric": "score",
+            "normalized_score": 91.0,
+            "provider": "tomatoes",
+            "source": "mdblist:imdb"
+          }
+        ],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "original.primary",
+            "recipe_version": 1,
+            "role": "primary",
+            "sha256": "00f17f19c9cab30c6a8055c05ec35d381520641592af994d2f5c7aca4c128247",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "9a25afc58108b717f0b1887be7ea71f5252122402f8eacbb2c2767152b3f940e",
+      "id": "custom-empty-movie-weights",
+      "locale": "en",
+      "snapshot_ref": "empty-weight-ratings"
+    },
+    {
+      "config_ref": "sash-gg-wins",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_wins": "bingecat"
+          },
+          "values": {
+            "award_wins": [
+              "Globe Winner"
+            ]
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "9fc1d289c5d7e46701a7aeb3a01565877be67b688eecb5021b59bd0f51ee235f",
+      "id": "sash-globe-winner",
+      "locale": "en",
+      "snapshot_ref": "globe-and-cult"
+    },
+    {
+      "config_ref": "sash-picture-noms",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_nominations": "bingecat"
+          },
+          "values": {
+            "award_nominations": [
+              "Oscar Nominee - Best Picture"
+            ]
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "334b28cb95912dfbed30d13d659c2a5fcad77f2a119d807a6ad9a0ff5dd61581",
+      "id": "sash-oscar-nominee",
+      "locale": "en",
+      "snapshot_ref": "oscar-nom"
+    },
+    {
+      "config_ref": "sash-gg-noms",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_nominations": "bingecat"
+          },
+          "values": {
+            "award_nominations": [
+              "Globe Nominee"
+            ]
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "07b289f10fe8bac133112561a362180ff01702f715d0ff388fad326a9c44cfd8",
+      "id": "sash-globe-nominee",
+      "locale": "en",
+      "snapshot_ref": "globe-nom"
+    },
+    {
+      "config_ref": "sash-trending",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "trending_rank": "bingecat"
+          },
+          "values": {
+            "trending_rank": 40
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "0bc6e53341b20909fbf25f7e47b69da693bd65b3b7aca9ccee3223b5dc01361a",
+      "id": "trending-40-inclusive",
+      "locale": "en",
+      "snapshot_ref": "trending-40"
+    },
+    {
+      "config_ref": "sash-trending",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "is_cult": "bingecat"
+          },
+          "values": {
+            "is_cult": true
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "9d0684a997d59bd0b4cc773c4686da0b5f2e3b5762ea6e3674f0c62803f8ebde",
+      "id": "trending-41-exclusive",
+      "locale": "en",
+      "snapshot_ref": "trending-41"
+    },
+    {
+      "config_ref": "sash-trending-broad",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "trending_rank": "bingecat"
+          },
+          "values": {
+            "trending_rank": 100
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "c322d81f37ade2f62191b8cb23b2efb03e47916aaaa4abcc0ed479c534b773f9",
+      "id": "trending-broad-100-inclusive",
+      "locale": "en",
+      "snapshot_ref": "trending-100"
+    },
+    {
+      "config_ref": "sash-trending-broad",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "is_cult": "bingecat"
+          },
+          "values": {
+            "is_cult": true
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "9d0684a997d59bd0b4cc773c4686da0b5f2e3b5762ea6e3674f0c62803f8ebde",
+      "id": "trending-broad-101-exclusive",
+      "locale": "en",
+      "snapshot_ref": "trending-101"
+    },
+    {
+      "config_ref": "sash-new-release",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "is_digital_release": "bingecat"
+          },
+          "values": {
+            "is_digital_release": true
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "5ce23e597dc6f19a7f3f45b404672fc4107f29fcb088e3a12859f33608500ca8",
+      "id": "new-release-digital-only",
+      "locale": "en",
+      "snapshot_ref": "digital-only"
+    },
+    {
+      "config_ref": "sash-new-release",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "is_digital_release": "bingecat",
+            "is_new_release": "bingecat"
+          },
+          "values": {
+            "is_digital_release": true,
+            "is_new_release": true
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "0c7d1fb122ba18ff296694bfbf35f7b7c7ded4dbd2307b981ae4c6699b4b3578",
+      "id": "new-release-both-signals",
+      "locale": "en",
+      "snapshot_ref": "both-release-signals"
+    },
+    {
+      "config_ref": "sash-cinema-only",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "is_cult": "bingecat"
+          },
+          "values": {
+            "is_cult": true
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "9d0684a997d59bd0b4cc773c4686da0b5f2e3b5762ea6e3674f0c62803f8ebde",
+      "id": "cinema-only-streaming-ignored",
+      "locale": "en",
+      "snapshot_ref": "streaming-cult"
+    },
+    {
+      "config_ref": "sash-cinema-greyscale",
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "is_cult": "bingecat",
+            "release_status": "bingecat"
+          },
+          "values": {
+            "is_cult": true,
+            "release_status": "cinema"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "092c079a3767940d4498cadd89813717604aba1b67dce4f65083e87d3817b8d6",
+      "id": "cinema-greyscale-visible",
+      "locale": "en",
+      "snapshot_ref": "cinema-cult"
+    },
+    {
+      "config_ref": "sash-hidden-greyscale",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "60576f1319a8185df10746dc079caefb33e78826324c1064b9c1972c56c2a81c"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "cb82797af041259216ae152acca05a9fa07cfca17bafb30f20b06fa250c5e340",
+      "id": "cinema-greyscale-hidden",
+      "locale": "en",
+      "snapshot_ref": "cinema"
+    },
+    {
+      "config_ref": "original-primary",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "original.primary",
+            "recipe_version": 1,
+            "role": "primary",
+            "sha256": "ea62206ad3d10377335beb8c1fbe931612d93fb92c1654e990fff940aa78307b",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "1ef1f5fa414de409341506b89ae09a1d6e98290041ca6815855eab57da42702d",
+      "id": "original-primary-neutral",
+      "locale": "nl",
+      "snapshot_ref": "original-primary-locales"
+    },
+    {
+      "config_ref": "original-top-rated",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "nl",
+            "policy_key": "original.top_rated",
+            "recipe_version": 1,
+            "role": "top_rated",
+            "sha256": "2d813ba810204dbf40839858427b239d42c615d59364070def035737796a01b7",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "23b6f4d51d2886a8bd6b4dae00cb8f1ab5b24d0f15ac35161b7e0009b245673e",
+      "id": "original-top-rated-requested",
+      "locale": "nl",
+      "snapshot_ref": "original-top-locales"
+    },
+    {
+      "config_ref": "textless-base",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "c6883aca87ea071c81e56b7be5ec40329f6dbd5b88066adb5cb4c79dd587ba37",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "c6883aca87ea071c81e56b7be5ec40329f6dbd5b88066adb5cb4c79dd587ba37"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "43d00861b97beb54704c613afa3a7eb5296b7ff3d662393644c59dc542fb66da",
+      "id": "textless-neutral-wins",
+      "locale": "nl",
+      "snapshot_ref": "textless-neutral-requested-en"
+    },
+    {
+      "config_ref": "textless-base",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "nl",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "cfd176834607a5bc3e2e1e1b278311c5527269d299777f85b7e05e27402978ed",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "cfd176834607a5bc3e2e1e1b278311c5527269d299777f85b7e05e27402978ed"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "79fc8d7b8c047458b140547d29b33b7ff98621c44e5352e8c66a48e58eeaf0d0",
+      "id": "textless-requested-wins",
+      "locale": "nl",
+      "snapshot_ref": "textless-requested-en"
+    },
+    {
+      "config_ref": "textless-base",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "en",
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "e0d8457064c93ba11b5bb785a005198a3826c001882bd10409354de13dc41185",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "e0d8457064c93ba11b5bb785a005198a3826c001882bd10409354de13dc41185"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "d4fcc6b98ba5d846456fdd70bfe71f10778c14c302fb74e4e4ca4c0840133b2a",
+      "id": "textless-en-fallback",
+      "locale": "nl",
+      "snapshot_ref": "textless-en"
+    },
+    {
+      "config_ref": "textless-base",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": null,
+            "policy_key": "fallback.textless",
+            "recipe_version": 1,
+            "role": "textless_poster",
+            "sha256": "f6bbd5bc7c0ca3e9ceb1bc7d6d12558622755ac15215d79a8c976ebc254f98f7",
+            "textless_verified": true,
+            "verification_recipe": "ppocr.textless.v1",
+            "verification_source_digest": "f6bbd5bc7c0ca3e9ceb1bc7d6d12558622755ac15215d79a8c976ebc254f98f7"
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "98ecb4f0d8008d0cb152f3a55c07e8ee4775a78f3de0a225215b6e51709ecc45",
+      "id": "null-locale-is-neutral",
+      "locale": "nl",
+      "snapshot_ref": "textless-null-and-en"
+    },
+    {
+      "config_ref": "logo-native-nl",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "backdrop",
+            "locale": "neutral",
+            "policy_key": "fallback.backdrop",
+            "recipe_version": 5,
+            "role": "fallback_backdrop",
+            "sha256": "bb0c9b0344f61db563e9064a925d53bdca2b5d665fdf5b979f616c3cae7ac585",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          },
+          {
+            "kind": "logo",
+            "locale": "neutral",
+            "policy_key": "logo.native_original.nl",
+            "recipe_version": 1,
+            "role": "logo",
+            "sha256": "f990f21f0a75aec057ccc58444a77410cb31b9fa56afe62c85d531c3b41346df",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "6bf0a399f6948e130f888b647d79b98990d984c29a333d4936ad8cc315e5a893",
+      "id": "logo-exact-policy-neutral",
+      "locale": "nl",
+      "snapshot_ref": "logo-exact-neutral"
+    },
+    {
+      "config_ref": "logo-native-nl",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "backdrop",
+            "locale": "neutral",
+            "policy_key": "fallback.backdrop",
+            "recipe_version": 5,
+            "role": "fallback_backdrop",
+            "sha256": "8336be39d599fb22c7d18185af1ab7eb3f33f1817bc27c3e1a1a26f90dae4c7b",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          },
+          {
+            "kind": "logo",
+            "locale": "nl",
+            "policy_key": "logo.native_original.nl",
+            "recipe_version": 1,
+            "role": "logo",
+            "sha256": "a4bdb01086d8fabea246b908b23ea305595662ca6faddf56c76cb64348fc10c9",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "e7900f3f925267b3b040850a1f84804b13a8bb6becd6bd1319d39f9f17f5b0c0",
+      "id": "logo-exact-policy-requested",
+      "locale": "nl",
+      "snapshot_ref": "logo-exact-requested"
+    },
+    {
+      "config_ref": "logo-native-nl",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "backdrop",
+            "locale": "neutral",
+            "policy_key": "fallback.backdrop",
+            "recipe_version": 5,
+            "role": "fallback_backdrop",
+            "sha256": "240b2ca216463c2c4608bc49745122daa9f5fbed6c50982a6c7c410693a5354d",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          }
+        ],
+        "titles_by_locale": {
+          "nl": "Caf\u00e9 aan Zee"
+        }
+      },
+      "expected_sha256": "eb865aac4b15c28a85f0fcc7736beaf268d1b6625088cfac9b951c064f7ff5a0",
+      "id": "logo-wrong-policy-falls-back-title",
+      "locale": "nl",
+      "snapshot_ref": "logo-wrong-only"
+    },
+    {
+      "config_ref": "missing-optional",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [
+          {
+            "kind": "poster",
+            "locale": "neutral",
+            "policy_key": "original.primary",
+            "recipe_version": 1,
+            "role": "primary",
+            "sha256": "00f17f19c9cab30c6a8055c05ec35d381520641592af994d2f5c7aca4c128247",
+            "textless_verified": null,
+            "verification_recipe": null,
+            "verification_source_digest": null
+          }
+        ],
+        "titles_by_locale": {}
+      },
+      "expected_sha256": "1097d61f65e08bcfe325aa7fbba806027cd4a7a340d6af599cedf383516c0c43",
+      "id": "missing-optional-facts",
+      "locale": "en",
+      "snapshot_ref": "missing-optional"
+    },
+    {
+      "config_ref": "fallback-title",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "D\u00e9j\u00e0 Vu"
+        }
+      },
+      "expected_sha256": "4f65928d382cc223ea8c2b384d1f0d04cca234f8031acba78d4f403617d60565",
+      "id": "fallback-title-en",
+      "locale": "en",
+      "snapshot_ref": "titles-all"
+    },
+    {
+      "config_ref": "fallback-title",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "pt": "Cora\u00e7\u00e3o de A\u00e7o"
+        }
+      },
+      "expected_sha256": "96e4ebd6eafc1cc560ca3b03fc9081fa0bf5a309541b9671578c9d09d3294f51",
+      "id": "fallback-title-pt",
+      "locale": "pt",
+      "snapshot_ref": "titles-all"
+    },
+    {
+      "config_ref": "fallback-title",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "nl": "Caf\u00e9 aan Zee"
+        }
+      },
+      "expected_sha256": "db119cda5c09bf01d2a5c627e05cd17307ad820ae67944c4120fe3cdf7da3b8a",
+      "id": "fallback-title-nl",
+      "locale": "nl",
+      "snapshot_ref": "titles-all"
+    },
+    {
+      "config_ref": "fallback-title",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "de": "\u00dcbermorgen"
+        }
+      },
+      "expected_sha256": "d12d3e6f06eb2814898916bcf730f7c5b198574c0b32952ff6f153fd234b860c",
+      "id": "fallback-title-de",
+      "locale": "de",
+      "snapshot_ref": "titles-all"
+    },
+    {
+      "config_ref": "fallback-title",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "es": "El Ni\u00f1o"
+        }
+      },
+      "expected_sha256": "278ba93bae0f611b526740283b27f55dc4d25b2233e5bfe55e9b17c846b3a92e",
+      "id": "fallback-title-es",
+      "locale": "es",
+      "snapshot_ref": "titles-all"
+    },
+    {
+      "config_ref": "fallback-title",
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0133093",
+          "media_type": "movie",
+          "tmdb_id": 603
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "D\u00e9j\u00e0 Vu"
+        }
+      },
+      "expected_sha256": "4f65928d382cc223ea8c2b384d1f0d04cca234f8031acba78d4f403617d60565",
+      "id": "fallback-title-missing-locale-en",
+      "locale": "es",
+      "snapshot_ref": "titles-no-es"
+    }
+  ],
+  "version": 1
+}
