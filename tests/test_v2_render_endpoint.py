@@ -647,7 +647,9 @@ def test_weighted_score_matches_legacy_no_match_defaults_and_imdb_fallback(tmp_p
     )
 
 
-def test_hash_tamper_requirement_and_freshness_mismatches_fail_closed(tmp_path):
+def test_hash_tamper_requirement_and_freshness_mismatches_fail_closed(
+    tmp_path, monkeypatch
+):
     store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
     art = _install_art(store)
     original = _canonical_config(use_original_art=True, hide_genre=True)
@@ -662,12 +664,39 @@ def test_hash_tamper_requirement_and_freshness_mismatches_fail_closed(tmp_path):
 
     rating_config = _canonical_config(
         use_original_art=True,
-        hide_genre=True,
-        rating_display_mode=2,
+        hide_genre=False,
+        rating_display_mode=1,
+        accent_bar_append_mode=0,
+        badge_display_mode=3,
         fallback_to_imdb=True,
     )
-    with pytest.raises(RenderConflict, match="missing_required_rating"):
-        render(_bundle(rating_config, snapshot), source_store=store)
+    empty_snapshot = _snapshot(
+        facts=NormalizedFactsEnvelope(values=NormalizedFacts(), provenance=()),
+        source_art=(art,),
+    )
+    import main
+
+    def provider_call_forbidden(*_args, **_kwargs):
+        raise AssertionError("render attempted a provider rating call")
+
+    monkeypatch.setattr(main, "fetch_rating", provider_call_forbidden)
+    first_missing, first_metadata = render(
+        _bundle(rating_config, empty_snapshot), source_store=store
+    )
+    second_missing, second_metadata = render(
+        _bundle(rating_config, empty_snapshot), source_store=store
+    )
+    assert first_missing == second_missing
+    assert first_metadata.content_sha256 == hashlib.sha256(first_missing).hexdigest()
+    assert second_metadata == first_metadata
+    projection = snapshot_visual_projection(
+        empty_snapshot,
+        media=_bundle(rating_config, empty_snapshot).media,
+        spec=canonicalize_config(rating_config),
+        locale="en",
+    )
+    assert projection["ratings"] == []
+    assert projection["facts"]["values"] == {}
 
     stale = _snapshot(
         facts=_facts(expires_at=NOW),

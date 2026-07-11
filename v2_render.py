@@ -514,26 +514,6 @@ def _selected_sash_fact(
     return None
 
 
-def _validate_requirements(
-    spec: CanonicalRenderSpec,
-    requirements: DataRequirements,
-    snapshot: ImmutableRenderSnapshot,
-) -> None:
-    populated = set(snapshot.facts.values.model_dump(mode="python", exclude_none=True))
-    if requirements.ratings and not snapshot.ratings:
-        raise RenderConflict("missing_required_rating")
-    if requirements.release_year and "release_year" not in populated:
-        raise RenderConflict("missing_required_fact")
-    if requirements.certification and not ({"age_rating", "certification"} & populated):
-        raise RenderConflict("missing_required_fact")
-    if (
-        not spec.hide_genre
-        and spec.rating_display_mode in {1, 2, 3, 4}
-        and "genre" not in populated
-    ):
-        raise RenderConflict("missing_required_fact")
-
-
 def _used_ratings(
     spec: CanonicalRenderSpec,
     requirements: DataRequirements,
@@ -1127,7 +1107,6 @@ def render(
         raise RenderInputError("invalid_render_bundle")
     spec = _resolve_spec(bundle)
     requirements = compile_requirements(spec)
-    _validate_requirements(spec, requirements, bundle.snapshot)
     base_reference = _select_base_reference(spec, bundle.snapshot, bundle.locale)
     logo_reference = _select_logo_reference(spec, bundle.snapshot)
     used_ratings = _used_ratings(
