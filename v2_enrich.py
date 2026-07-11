@@ -50,6 +50,8 @@ from tmdb import (
 
 
 ProviderCallable = Callable[..., Any]
+OPTIONAL_MISSING_TTL = timedelta(hours=24)
+CONFIGURATION_MISSING_TTL = timedelta(hours=6)
 
 
 class UnsupportedPresetVersion(RuntimeError):
@@ -549,6 +551,38 @@ def _logo_options(
     )[:3]
 
 
+def _has_transient_blocking_art_failure(
+    specs: tuple[CanonicalRenderSpec, ...],
+    source_art: list[SourceArtReference],
+    statuses: list[ProviderResultStatus],
+) -> bool:
+    """Only retry the whole enrichment when required original art is blocked.
+
+    Ratings, sashes, age facts, logos and fallback artwork are render-optional.
+    Their own status deadlines still drive a later refresh without preventing a
+    usable snapshot/prewarm from being published now.
+    """
+
+    required = {
+        (
+            spec.original_art_source,
+            f"original.{spec.original_art_source}",
+        )
+        for spec in specs
+        if spec.use_original_art
+    }
+    if not required:
+        return False
+    available = {(item.role, item.policy_key) for item in source_art}
+    if required <= available:
+        return False
+    return any(
+        status.status in {"partial", "rate_limited", "error"}
+        and status.provider in {"tmdb", "tvdb", "source_art"}
+        for status in statuses
+    )
+
+
 async def enrich(
     request: EnrichmentRequest,
     now: datetime,
@@ -617,10 +651,12 @@ async def enrich(
         provider_media_type = resolved.media_type
     if mdblist_missing:
         if not runtime.mdblist_key or not imdb_id:
+            expires = evaluated_at + CONFIGURATION_MISSING_TTL
             statuses.append(
                 ProviderResultStatus(
                     provider="mdblist", status="missing", observed_at=evaluated_at,
                     missing_fields=mdblist_missing,
+                    expires_at=expires,
                 )
             )
         else:
@@ -640,15 +676,16 @@ async def enrich(
                     statuses.append(
                         ProviderResultStatus(
                             provider="mdblist", status="rate_limited",
-                            observed_at=evaluated_at, retry_at=retry,
+                            observed_at=evaluated_at, retry_at=retry, expires_at=retry,
                             missing_fields=mdblist_missing,
                         )
                     )
                 elif detail is FETCH_FAILED:
+                    retry = evaluated_at + timedelta(minutes=5)
                     statuses.append(
                         ProviderResultStatus(
                             provider="mdblist", status="error", observed_at=evaluated_at,
-                            retry_at=evaluated_at + timedelta(minutes=5),
+                            retry_at=retry, expires_at=retry,
                             missing_fields=mdblist_missing,
                         )
                     )
@@ -725,18 +762,20 @@ async def enrich(
                         )
                     )
                 else:
+                    retry = evaluated_at + timedelta(minutes=5)
                     statuses.append(
                         ProviderResultStatus(
                             provider="mdblist", status="error", observed_at=evaluated_at,
-                            retry_at=evaluated_at + timedelta(minutes=5),
+                            retry_at=retry, expires_at=retry,
                             missing_fields=mdblist_missing,
                         )
                     )
             except Exception:
+                retry = evaluated_at + timedelta(minutes=5)
                 statuses.append(
                     ProviderResultStatus(
                         provider="mdblist", status="error", observed_at=evaluated_at,
-                        retry_at=evaluated_at + timedelta(minutes=5),
+                        retry_at=retry, expires_at=retry,
                         missing_fields=mdblist_missing,
                     )
                 )
@@ -826,11 +865,13 @@ async def enrich(
         provider_media_type = resolved.media_type
     metadata: V2TMDBMetadata | None = None
     if (missing_art_kinds or tmdb_fact_needed) and not runtime.tmdb_key:
+        expires = evaluated_at + CONFIGURATION_MISSING_TTL
         statuses.append(
             ProviderResultStatus(
                 provider="tmdb",
                 status="missing",
                 observed_at=evaluated_at,
+                expires_at=expires,
                 missing_fields=("metadata",),
             )
         )
@@ -861,12 +902,14 @@ async def enrich(
             )
         except Exception as exc:
             retry = _http_rate_limit_retry(exc, evaluated_at)
+            retry_at = retry or evaluated_at + timedelta(minutes=5)
             statuses.append(
                 ProviderResultStatus(
                     provider="tmdb",
                     status="rate_limited" if retry else "error",
                     observed_at=evaluated_at,
-                    retry_at=retry or evaluated_at + timedelta(minutes=5),
+                    retry_at=retry_at,
+                    expires_at=retry_at,
                     missing_fields=("metadata",),
                 )
             )
@@ -935,10 +978,12 @@ async def enrich(
         )
 
     if requirements.trending and "trending_rank" not in facts and not runtime.tmdb_key:
+        expires = evaluated_at + CONFIGURATION_MISSING_TTL
         statuses.append(
             ProviderResultStatus(
                 provider="tmdb_trending", status="missing", observed_at=evaluated_at,
                 missing_fields=("trending_rank",),
+                expires_at=expires,
             )
         )
     elif requirements.trending and "trending_rank" not in facts:
@@ -971,21 +1016,25 @@ async def enrich(
             )
         except Exception as exc:
             retry = _http_rate_limit_retry(exc, evaluated_at)
+            retry_at = retry or evaluated_at + timedelta(minutes=15)
             statuses.append(
                 ProviderResultStatus(
                     provider="tmdb_trending",
                     status="rate_limited" if retry else "error",
                     observed_at=evaluated_at,
-                    retry_at=retry or evaluated_at + timedelta(minutes=15),
+                    retry_at=retry_at,
+                    expires_at=retry_at,
                     missing_fields=("trending_rank",),
                 )
             )
 
     if release_status_needed and "release_status" not in facts and not runtime.tmdb_key:
+        expires = evaluated_at + CONFIGURATION_MISSING_TTL
         statuses.append(
             ProviderResultStatus(
                 provider="tmdb_release", status="missing", observed_at=evaluated_at,
                 missing_fields=("release_status",),
+                expires_at=expires,
             )
         )
     elif release_status_needed and "release_status" not in facts:
@@ -1021,12 +1070,14 @@ async def enrich(
             )
         except Exception as exc:
             retry = _http_rate_limit_retry(exc, evaluated_at)
+            retry_at = retry or evaluated_at + timedelta(hours=1)
             statuses.append(
                 ProviderResultStatus(
                     provider="tmdb_release",
                     status="rate_limited" if retry else "error",
                     observed_at=evaluated_at,
-                    retry_at=retry or evaluated_at + timedelta(hours=1),
+                    retry_at=retry_at,
+                    expires_at=retry_at,
                     missing_fields=("release_status",),
                 )
             )
@@ -1154,10 +1205,11 @@ async def enrich(
             )
             tvdb_candidates.extend(fallbacks or ())
         except Exception:
+            retry_at = evaluated_at + timedelta(hours=1)
             statuses.append(
                 ProviderResultStatus(
                     provider="tvdb", status="error", observed_at=evaluated_at,
-                    retry_at=evaluated_at + timedelta(hours=1),
+                    retry_at=retry_at, expires_at=retry_at,
                 )
             )
 
@@ -1255,17 +1307,19 @@ async def enrich(
     if requirements.certification and not ({"certification", "age_rating"} & facts.keys()):
         missing_normalized.append("age_rating")
     if missing_normalized:
+        expires = evaluated_at + OPTIONAL_MISSING_TTL
         statuses.append(
             ProviderResultStatus(
                 provider="normalized_facts",
                 status="missing",
                 observed_at=evaluated_at,
+                expires_at=expires,
                 missing_fields=tuple(dict.fromkeys(missing_normalized)),
             )
         )
 
     normalized_facts = _fact_envelope(facts, fact_evidence)
-    partial = any(status.status in {"partial", "missing", "rate_limited", "error"} for status in statuses)
+    partial = _has_transient_blocking_art_failure(specs, source_art, statuses)
     retries.extend(status.retry_at for status in statuses if status.retry_at is not None)
     retry_at = min(retries) if retries else None
     media = MediaIdentity(

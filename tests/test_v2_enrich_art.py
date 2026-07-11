@@ -27,11 +27,14 @@ from integration_contract import (
     CONTRACT_VERSION,
     EnrichmentRequest,
     EnrichmentResult,
+    ImmutableRenderSnapshot,
     MediaIdentity,
     ProviderRating,
+    RenderInputBundle,
     SourceArtReference,
 )
 from ratings import RatingDetail, RatingFetchDetails, fetch_rating, fetch_rating_details
+from render_spec import canonicalize_config
 from service_auth import MemoryNonceStore, build_auth_headers
 from source_art import (
     DownloadedSource,
@@ -61,6 +64,7 @@ from v2_enrich import (
     enrich,
     freeze_lifecycle_facts,
 )
+from v2_render import canonical_snapshot_sha256, render
 
 
 NOW = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
@@ -106,6 +110,37 @@ def _known_art(
         verification_recipe="ppocr.textless.v1" if verified else None,
         verified_at=NOW - timedelta(days=1) if verified else None,
         verification_source_digest="a" * 64 if verified else None,
+    )
+
+
+def _installed_known_art(store: SourceArtStore) -> SourceArtReference:
+    payload = _image_bytes("JPEG", size=(500, 750))
+    derivative = store.install(
+        kind="poster",
+        recipe_version=1,
+        payload=payload,
+        mime="image/jpeg",
+        width=500,
+        height=750,
+        locator=None,
+        now=NOW,
+        pinned=True,
+        reconstructable=False,
+    )
+    return SourceArtReference(
+        source_art_id=derivative.source_art_id,
+        kind="poster",
+        role="primary",
+        policy_key="original.primary",
+        sha256=derivative.sha256,
+        byte_size=derivative.byte_size,
+        mime=derivative.mime,
+        recipe_version=derivative.recipe_version,
+        locale="neutral",
+        reconstructable=False,
+        observed_at=NOW - timedelta(hours=2),
+        checked_at=NOW - timedelta(hours=1),
+        expires_at=NOW + timedelta(days=30),
     )
 
 
@@ -221,6 +256,40 @@ def _runtime(hooks: ProviderHooks, *, stateless=True) -> EnrichmentRuntime:
         stateless_metadata=stateless,
         hooks=hooks,
     )
+
+
+def _render_enrichment_result(
+    config: dict,
+    result: EnrichmentResult,
+    *,
+    source_store: SourceArtStore | None = None,
+) -> bytes:
+    spec = canonicalize_config(config)
+    canonical_config = json.loads(spec.canonical_json())
+    snapshot = ImmutableRenderSnapshot(
+        evaluated_at=result.evaluated_at,
+        titles_by_locale=result.titles_by_locale,
+        ratings=result.ratings,
+        facts=result.facts,
+        source_art=result.source_art,
+    )
+    bundle = RenderInputBundle(
+        schema=CONTRACT_SCHEMA,
+        version=CONTRACT_VERSION,
+        media=result.media,
+        locale="en",
+        canonical_config=canonical_config,
+        config_sha256=spec.sha256(),
+        snapshot_sha256=canonical_snapshot_sha256(
+            snapshot,
+            media=result.media,
+            spec=spec,
+            locale="en",
+        ),
+        snapshot=snapshot,
+    )
+    payload, _metadata = render(bundle, source_store=source_store)
+    return payload
 
 
 def test_rating_details_preserve_scale_votes_and_legacy_projection(monkeypatch):
@@ -1118,10 +1187,15 @@ def test_stateful_enrichment_passes_read_write_cache_mode():
         )
     )
     assert modes == ["read_write"]
-    assert result.partial is True
+    assert result.partial is False
+    source_status = next(
+        item for item in result.provider_statuses if item.provider == "source_art"
+    )
+    assert source_status.status == "missing"
+    assert source_status.expires_at == NOW + timedelta(hours=6)
 
 
-def test_missing_tmdb_key_yields_partial_without_spending_provider_call():
+def test_missing_tmdb_key_is_checked_without_spending_provider_call():
     calls = Counter()
 
     async def tmdb(*_args, **_kwargs):
@@ -1153,8 +1227,10 @@ def test_missing_tmdb_key_yields_partial_without_spending_provider_call():
         )
     )
     assert calls["tmdb"] == 0
-    assert result.partial is True
-    assert any(status.provider == "tmdb" and status.status == "missing" for status in result.provider_statuses)
+    assert result.partial is False
+    status = next(item for item in result.provider_statuses if item.provider == "tmdb")
+    assert status.status == "missing"
+    assert status.expires_at == NOW + timedelta(hours=6)
 
 
 def test_missing_tmdb_key_gates_trending_and_release_adapters_too():
@@ -1193,7 +1269,7 @@ def test_missing_tmdb_key_gates_trending_and_release_adapters_too():
     }
     result = asyncio.run(enrich(_request(config), NOW, runtime=runtime))
     assert calls == Counter()
-    assert result.partial is True
+    assert result.partial is False
     statuses = {item.provider: item.status for item in result.provider_statuses}
     assert statuses["tmdb"] == "missing"
     assert statuses["tmdb_trending"] == "missing"
@@ -1331,7 +1407,7 @@ def test_known_source_art_is_recipe_checked_and_bounded_by_kind_and_locale():
     assert result.source_art[0].recipe_version == 1
 
 
-def test_rate_limit_returns_bounded_partial_status_and_retry_timestamp():
+def test_optional_rating_rate_limit_returns_usable_snapshot_and_retry_timestamp(tmp_path):
     async def limited(*_args, **_kwargs):
         return _RateLimited(45)
 
@@ -1347,16 +1423,31 @@ def test_rate_limit_returns_bounded_partial_status_and_retry_timestamp():
         fetch_tvdb=forbidden,
         materialize_art=forbidden,
     )
-    config = {**_art_only_config(), "rating_display_mode": 1}
-    result = asyncio.run(enrich(_request(config), NOW, runtime=_runtime(hooks)))
-    assert result.partial is True
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    art = _installed_known_art(store)
+    config = {
+        **_art_only_config(),
+        "rating_display_mode": 2,
+        "hide_genre": True,
+    }
+    result = asyncio.run(
+        enrich(
+            _request(config, known_source_art=[art]),
+            NOW,
+            runtime=_runtime(hooks),
+        )
+    )
+    assert result.partial is False
     status = next(item for item in result.provider_statuses if item.provider == "mdblist")
     assert status.status == "rate_limited"
     assert status.retry_at == NOW + timedelta(seconds=45)
+    assert status.expires_at == status.retry_at
     assert result.retry_at == status.retry_at
+    rendered = _render_enrichment_result(config, result, source_store=store)
+    assert rendered[:4] == b"RIFF"
 
 
-def test_tmdb_rate_limit_is_returned_as_typed_partial_with_missing_field():
+def test_optional_trending_rate_limit_has_separate_retry_without_blocking():
     async def limited(*_args, **_kwargs):
         response = httpx.Response(
             429,
@@ -1388,10 +1479,12 @@ def test_tmdb_rate_limit_is_returned_as_typed_partial_with_missing_field():
     assert status.status == "rate_limited"
     assert status.missing_fields == ("trending_rank",)
     assert status.retry_at == NOW + timedelta(seconds=30)
+    assert status.expires_at == status.retry_at
+    assert result.partial is False
     assert result.retry_at == status.retry_at
 
 
-def test_missing_required_rating_is_explicit_partial_not_false_complete():
+def test_missing_required_rating_is_explicit_checked_but_snapshot_is_usable():
     async def empty(*_args, **_kwargs):
         return RatingFetchDetails((), "Unknown", None, (), None)
 
@@ -1405,7 +1498,9 @@ def test_missing_required_rating_is_explicit_partial_not_false_complete():
     )
     result = asyncio.run(
         enrich(
-            _request({**_art_only_config(), "rating_display_mode": 1}),
+            _request(
+                {**_art_only_config(), "rating_display_mode": 2, "hide_genre": True},
+            ),
             NOW,
             runtime=_runtime(hooks),
         )
@@ -1413,7 +1508,89 @@ def test_missing_required_rating_is_explicit_partial_not_false_complete():
     status = next(item for item in result.provider_statuses if item.provider == "mdblist")
     assert status.status == "missing"
     assert "ratings" in status.missing_fields
+    assert status.expires_at == NOW + timedelta(days=7)
+    assert status.retry_at is None
+    assert result.partial is False
+    assert result.retry_at is None
+
+
+def test_transient_required_original_art_failure_remains_blocking():
+    async def tmdb_failure(*_args, **_kwargs):
+        raise httpx.ConnectError("temporary TMDB failure")
+
+    async def empty_tvdb(*_args, **_kwargs):
+        return ()
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("unneeded provider")
+
+    hooks = ProviderHooks(
+        resolve_identity=forbidden,
+        fetch_ratings=forbidden,
+        fetch_tmdb=tmdb_failure,
+        fetch_trending=forbidden,
+        fetch_release=forbidden,
+        fetch_tvdb=empty_tvdb,
+        materialize_art=forbidden,
+    )
+    result = asyncio.run(
+        enrich(
+            _request(_art_only_config(), known_source_art=[]),
+            NOW,
+            runtime=_runtime(hooks),
+        )
+    )
+    status = next(item for item in result.provider_statuses if item.provider == "tmdb")
+    assert status.status == "error"
+    assert status.retry_at == NOW + timedelta(minutes=5)
+    assert status.expires_at == status.retry_at
     assert result.partial is True
+    assert result.retry_at == status.retry_at
+
+
+def test_transient_optional_fallback_art_and_logo_failure_stays_renderable():
+    async def tmdb_failure(*_args, **_kwargs):
+        raise httpx.ConnectError("temporary TMDB failure")
+
+    async def tvdb_failure(*_args, **_kwargs):
+        raise httpx.ConnectError("temporary TVDB failure")
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("unneeded provider")
+
+    hooks = ProviderHooks(
+        resolve_identity=forbidden,
+        fetch_ratings=forbidden,
+        fetch_tmdb=tmdb_failure,
+        fetch_trending=forbidden,
+        fetch_release=forbidden,
+        fetch_tvdb=tvdb_failure,
+        materialize_art=forbidden,
+    )
+    config = {
+        "rating_display_mode": 0,
+        "show_award_sash": False,
+        "badge_display_mode": 0,
+        "use_original_art": False,
+        "textless": False,
+        "hide_genre": True,
+    }
+    result = asyncio.run(
+        enrich(
+            _request(config, known_source_art=[]),
+            NOW,
+            runtime=_runtime(hooks),
+        )
+    )
+    assert result.partial is False
+    assert result.retry_at == NOW + timedelta(minutes=5)
+    assert not result.source_art
+    assert {
+        (item.provider, item.status)
+        for item in result.provider_statuses
+    } >= {("tmdb", "error"), ("tvdb", "error"), ("source_art", "missing")}
+    rendered = _render_enrichment_result(config, result)
+    assert rendered[:4] == b"RIFF"
 
 
 def test_lifecycle_facts_use_explicit_evaluated_at_only():
