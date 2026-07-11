@@ -4,6 +4,10 @@ The public contract reports physical bytes exactly once.  Composite BLOB bytes
 are shown separately from SQLite overhead, so ``sum(pool.bytes)`` describes the
 space on disk instead of double-counting the database file that contains them.
 All filesystem reconciliation is bounded and never follows symlinks.
+
+Temporary staging has no independent persistent allocation: it is charged to
+Core's shared 5 GB legacy group while active.  The deployment-wide 10 GB
+headroom absorbs short staging spikes, but is never advertised as cache budget.
 """
 
 from __future__ import annotations
@@ -88,6 +92,12 @@ class Eviction:
         return {"items": max(0, int(self.items)), "bytes": max(0, int(self.bytes))}
 
 
+@dataclass(slots=True)
+class ScanState:
+    visited_entries: int = 0
+    incomplete: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class PruneResult:
     started_at: int
@@ -119,15 +129,23 @@ def _file_size(path: str | os.PathLike[str]) -> int:
     return max(0, int(info.st_size)) if stat.S_ISREG(info.st_mode) else 0
 
 
-def _bounded_files(root: str | os.PathLike[str], *, limit: int = FILE_WALK_LIMIT):
-    """Yield at most *limit* regular files below root without following links."""
+def _bounded_files(
+    root: str | os.PathLike[str],
+    *,
+    limit: int = FILE_WALK_LIMIT,
+    state: ScanState | None = None,
+):
+    """Yield files while charging every encountered entry to one hard limit."""
 
+    scan = state if state is not None else ScanState()
     base = Path(root)
     if not base.exists() or base.is_symlink():
         return
     stack = [base]
-    yielded = 0
-    while stack and yielded < limit:
+    while stack:
+        if scan.visited_entries >= limit:
+            scan.incomplete = True
+            return
         current = stack.pop()
         try:
             entries = os.scandir(current)
@@ -135,15 +153,16 @@ def _bounded_files(root: str | os.PathLike[str], *, limit: int = FILE_WALK_LIMIT
             continue
         with entries:
             for entry in entries:
-                if yielded >= limit:
-                    break
+                if scan.visited_entries >= limit:
+                    scan.incomplete = True
+                    return
+                scan.visited_entries += 1
                 try:
                     if entry.is_symlink():
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(Path(entry.path))
                     elif entry.is_file(follow_symlinks=False):
-                        yielded += 1
                         yield Path(entry.path)
                 except OSError:
                     continue
@@ -264,11 +283,12 @@ def _unlink_source_regular(path: object) -> int:
         os.close(parent_fd)
 
 
-def _temp_bytes() -> int:
+def _temp_bytes() -> tuple[int, bool]:
     total = 0
     counted: set[Path] = set()
+    scan = ScanState()
     source_tmp = Path(config.SOURCE_ART_CACHE_DIR) / "tmp"
-    for path in _bounded_files(source_tmp):
+    for path in _bounded_files(source_tmp, state=scan):
         absolute = path.absolute()
         counted.add(absolute)
         total += _file_size(path)
@@ -280,14 +300,21 @@ def _temp_bytes() -> int:
         if root in seen_roots:
             continue
         seen_roots.add(root)
-        for path in _bounded_files(root):
+        for path in _bounded_files(root, state=scan):
             absolute = path.absolute()
             if absolute in counted:
                 continue
             if path.name.startswith((".tmp-", "tmp-", "install-", "raw-")):
                 counted.add(absolute)
                 total += _file_size(path)
-    return total
+    if scan.incomplete:
+        # The exact tail is unknowable.  Report a conservative allocation-sized
+        # sentinel so cleanup is triggered and callers never see a false low.
+        total = max(
+            total,
+            config.SOURCE_CACHE_MAX_BYTES + config.LEGACY_CACHE_MAX_BYTES,
+        )
+    return total, scan.incomplete
 
 
 def get_usage() -> CacheUsage:
@@ -306,16 +333,11 @@ def get_usage() -> CacheUsage:
             f"{config.SOURCE_ART_LEDGER_PATH}-shm",
         )
     )
-    temp = _temp_bytes()
+    temp, _temp_incomplete = _temp_bytes()
     source_limits = (
         config.SOURCE_CACHE_MAX_BYTES,
         config.SOURCE_CACHE_HIGH_WATERMARK_BYTES,
         config.SOURCE_CACHE_TARGET_BYTES,
-    )
-    legacy_limits = (
-        config.LEGACY_CACHE_MAX_BYTES,
-        config.LEGACY_CACHE_HIGH_WATERMARK_BYTES,
-        config.LEGACY_CACHE_TARGET_BYTES,
     )
     values = {
         "source_derivatives": source,
@@ -325,13 +347,21 @@ def get_usage() -> CacheUsage:
         "temp": temp,
     }
     pools = {
-        name: CachePoolUsage(
-            name,
-            value,
-            *(source_limits if name == "source_derivatives" else legacy_limits),
+        "source_derivatives": CachePoolUsage(
+            "source_derivatives", values["source_derivatives"], *source_limits
         )
-        for name, value in values.items()
     }
+    legacy_names = ("legacy_composites", "sqlite", "sqlite_wal", "temp")
+    legacy_total = sum(values[name] for name in legacy_names)
+    for name in legacy_names:
+        other_bytes = legacy_total - values[name]
+        pools[name] = CachePoolUsage(
+            name,
+            values[name],
+            max(0, config.LEGACY_CACHE_MAX_BYTES - other_bytes),
+            max(0, config.LEGACY_CACHE_HIGH_WATERMARK_BYTES - other_bytes),
+            max(0, config.LEGACY_CACHE_TARGET_BYTES - other_bytes),
+        )
     return CacheUsage(generated_at=int(time.time()), pools=pools)
 
 
@@ -412,8 +442,9 @@ def _remove_expired_temp(max_items: int) -> Eviction:
         (Path(config.SOURCE_ART_CACHE_DIR) / "tmp", False),
         (Path(config.DB_PATH).parent, True),
     )
+    scan = ScanState()
     for root, require_temp_name in roots:
-        for path in _bounded_files(root):
+        for path in _bounded_files(root, state=scan):
             if removed_items >= max_items:
                 return Eviction(removed_items, removed_bytes)
             if require_temp_name and not path.name.startswith(

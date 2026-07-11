@@ -9,10 +9,12 @@ import io
 import ipaddress
 import os
 import re
+import secrets
 import socket
 import sqlite3
 import ssl
 import tempfile
+import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,6 +31,7 @@ MAX_SOURCE_BYTES = 16 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_IMAGE_AXIS = 8192
 MAX_REDIRECTS = 2
+CAPACITY_RESERVATION_SECONDS = 300
 RECIPE_VERSIONS = {"poster": 1, "backdrop": 5, "logo": 1}
 
 
@@ -493,13 +496,60 @@ class SourceArtStore:
                 "CREATE INDEX IF NOT EXISTS ix_source_art_last_used ON source_art_ledger(last_used_at)"
             )
 
-    def ensure_capacity(self, required_bytes: int) -> None:
-        """Fail before creating a raw/derived file that could cross the hard cap."""
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS source_art_capacity_reservations (
+                    token TEXT PRIMARY KEY,
+                    byte_size INTEGER NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS ix_source_art_reservation_expiry "
+                "ON source_art_capacity_reservations(expires_at)"
+            )
+
+    def _bounded_temp_bytes(self, *, limit: int = 256) -> int:
+        temp_root = self.root / "tmp"
+        try:
+            entries = os.scandir(temp_root)
+        except FileNotFoundError:
+            return 0
+        except OSError as exc:
+            raise SourceResourceError("source cache capacity unknown") from exc
+        total = 0
+        visited = 0
+        with entries:
+            for entry in entries:
+                visited += 1
+                if visited > limit:
+                    raise SourceResourceError("source cache capacity unknown")
+                try:
+                    if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                        continue
+                    total += max(0, int(entry.stat(follow_symlinks=False).st_size))
+                except OSError as exc:
+                    raise SourceResourceError("source cache capacity unknown") from exc
+        return total
+
+    def reserve_capacity(self, required_bytes: int) -> str:
+        """Atomically reserve bounded staging bytes across worker processes."""
 
         import config
 
         required = max(0, int(required_bytes))
+        if required <= 0 or required > MAX_SOURCE_BYTES:
+            raise SourceResourceError("invalid source cache reservation")
+        token = secrets.token_urlsafe(24)
+        now = time.time()
+        temp_bytes = self._bounded_temp_bytes()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "DELETE FROM source_art_capacity_reservations WHERE expires_at<=?",
+                (now,),
+            )
             current = max(
                 0,
                 int(
@@ -509,20 +559,38 @@ class SourceArtStore:
                     or 0
                 ),
             )
-        temp_bytes = 0
-        temp_root = self.root / "tmp"
-        if temp_root.exists() and not temp_root.is_symlink():
-            for index, entry in enumerate(temp_root.iterdir()):
-                if index >= 256:
-                    break
-                try:
-                    info = entry.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                if entry.is_file() and not entry.is_symlink():
-                    temp_bytes += max(0, int(info.st_size))
-        if current + temp_bytes + required > config.SOURCE_CACHE_MAX_BYTES:
-            raise SourceResourceError("source cache hard limit reached")
+            reserved = max(
+                0,
+                int(
+                    connection.execute(
+                        "SELECT COALESCE(SUM(byte_size), 0) "
+                        "FROM source_art_capacity_reservations"
+                    ).fetchone()[0]
+                    or 0
+                ),
+            )
+            if (
+                current + reserved + temp_bytes + required
+                > config.SOURCE_CACHE_MAX_BYTES
+            ):
+                connection.rollback()
+                raise SourceResourceError("source cache hard limit reached")
+            connection.execute(
+                "INSERT INTO source_art_capacity_reservations "
+                "(token, byte_size, expires_at) VALUES (?, ?, ?)",
+                (token, required, now + CAPACITY_RESERVATION_SECONDS),
+            )
+            connection.commit()
+        return token
+
+    def release_capacity(self, token: str) -> None:
+        if not isinstance(token, str) or not token or len(token) > 128:
+            return
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM source_art_capacity_reservations WHERE token=?", (token,)
+            )
+            connection.commit()
 
     def get(self, sha256: str, kind: str, recipe_version: int, *, now: datetime | None = None) -> SourceDerivative | None:
         used = _utc(now)
@@ -570,6 +638,7 @@ class SourceArtStore:
         now: datetime | None,
         pinned: bool,
         reconstructable: bool,
+        reservation_token: str | None = None,
     ) -> SourceDerivative:
         used = _utc(now)
         digest = hashlib.sha256(payload).hexdigest()
@@ -590,6 +659,11 @@ class SourceArtStore:
                 if existing is None:
                     import config
 
+                    temp_bytes = self._bounded_temp_bytes()
+                    connection.execute(
+                        "DELETE FROM source_art_capacity_reservations WHERE expires_at<=?",
+                        (time.time(),),
+                    )
                     current = max(
                         0,
                         int(
@@ -599,7 +673,21 @@ class SourceArtStore:
                             or 0
                         ),
                     )
-                    if current + len(payload) > config.SOURCE_CACHE_MAX_BYTES:
+                    other_reserved = max(
+                        0,
+                        int(
+                            connection.execute(
+                                "SELECT COALESCE(SUM(byte_size), 0) "
+                                "FROM source_art_capacity_reservations WHERE token<>?",
+                                (reservation_token or "",),
+                            ).fetchone()[0]
+                            or 0
+                        ),
+                    )
+                    if (
+                        current + other_reserved + temp_bytes + len(payload)
+                        > config.SOURCE_CACHE_MAX_BYTES
+                    ):
                         raise SourceResourceError("source cache hard limit reached")
 
                 directory.mkdir(parents=True, exist_ok=True)
@@ -647,6 +735,11 @@ class SourceArtStore:
                        WHERE source_art_id=?""",
                     (used.timestamp(), locator_json, int(pinned), int(reconstructable), source_art_id),
                 )
+                if reservation_token:
+                    connection.execute(
+                        "DELETE FROM source_art_capacity_reservations WHERE token=?",
+                        (reservation_token,),
+                    )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -791,14 +884,17 @@ async def fetch_derivative(
     # Reserve one bounded raw download before writing it.  Normalisation removes
     # the raw file before the final derivative is installed, so the source pool
     # cannot transiently cross its hard allocation.
-    await asyncio.to_thread(active_store.ensure_capacity, MAX_SOURCE_BYTES)
+    reservation_token = await asyncio.to_thread(
+        active_store.reserve_capacity, MAX_SOURCE_BYTES
+    )
     temp_dir = active_store.root / "tmp"
-    downloaded = downloader(locator, kind, temp_dir=temp_dir)
-    if hasattr(downloaded, "__await__"):
-        downloaded = await downloaded
-    if not isinstance(downloaded, DownloadedSource):
-        raise TypeError("downloader must return DownloadedSource")
     try:
+        downloaded = downloader(locator, kind, temp_dir=temp_dir)
+        if hasattr(downloaded, "__await__"):
+            downloaded = await downloaded
+        if not isinstance(downloaded, DownloadedSource):
+            raise TypeError("downloader must return DownloadedSource")
+
         def normalize_download() -> SourceDerivative:
             if not downloaded.content_type:
                 raise SourceArtError("source MIME header is required")
@@ -827,15 +923,18 @@ async def fetch_derivative(
                 now=now,
                 pinned=False,
                 reconstructable=True,
+                reservation_token=reservation_token,
             )
 
         derivative = await asyncio.to_thread(normalize_download)
         return derivative
     finally:
-        try:
-            downloaded.path.unlink()
-        except OSError:
-            pass
+        if "downloaded" in locals() and isinstance(downloaded, DownloadedSource):
+            try:
+                downloaded.path.unlink()
+            except OSError:
+                pass
+        await asyncio.to_thread(active_store.release_capacity, reservation_token)
 
 
 __all__ = [

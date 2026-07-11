@@ -6,6 +6,7 @@ import hashlib
 import os
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -147,6 +148,14 @@ def test_usage_has_exact_pools_and_never_double_counts_sqlite_blobs(tmp_path: Pa
     assert usage["total_bytes"] == (
         source_file.stat().st_size + db_path.stat().st_size + ledger_path.stat().st_size
     )
+    legacy_names = ("legacy_composites", "sqlite", "sqlite_wal", "temp")
+    legacy_total = sum(usage["pools"][name]["bytes"] for name in legacy_names)
+    for name in legacy_names:
+        pool = usage["pools"][name]
+        other = legacy_total - pool["bytes"]
+        assert pool["hard_limit_bytes"] == max(
+            0, config.LEGACY_CACHE_MAX_BYTES - other
+        )
 
 
 def test_source_prune_rejects_outside_paths_and_never_unlinks_symlinks(tmp_path: Path) -> None:
@@ -249,6 +258,37 @@ def test_temp_prune_never_touches_database_or_non_temp_files(tmp_path: Path) -> 
     assert not temporary.exists()
 
 
+def test_bounded_walk_charges_directories_and_non_files(tmp_path: Path) -> None:
+    root = tmp_path / "tree"
+    root.mkdir()
+    for index in range(10):
+        (root / f"dir-{index}").mkdir()
+    state = cache_policy.ScanState()
+    assert list(cache_policy._bounded_files(root, limit=3, state=state)) == []
+    assert state.visited_entries == 3
+    assert state.incomplete is True
+
+
+def test_incomplete_temp_accounting_is_conservative(monkeypatch, tmp_path: Path) -> None:
+    def incomplete_scan(_root, *, limit=0, state=None):
+        assert state is not None
+        state.incomplete = True
+        if False:
+            yield Path("unused")
+
+    monkeypatch.setattr(cache_policy, "_bounded_files", incomplete_scan)
+    monkeypatch.setattr(cache_policy.config, "SOURCE_ART_CACHE_DIR", str(tmp_path / "source"))
+    monkeypatch.setattr(cache_policy.config, "DB_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setattr(
+        cache_policy.config, "SOURCE_ART_LEDGER_PATH", str(tmp_path / "ledger.db")
+    )
+    temp_bytes, incomplete = cache_policy._temp_bytes()
+    assert incomplete is True
+    assert temp_bytes >= (
+        config.SOURCE_CACHE_MAX_BYTES + config.LEGACY_CACHE_MAX_BYTES
+    )
+
+
 def test_composite_insert_rejects_payload_that_cannot_fit_hard_limit(tmp_path: Path) -> None:
     db_path = _init_cache(tmp_path)
     try:
@@ -290,6 +330,42 @@ def test_source_install_is_atomic_at_hard_limit(tmp_path: Path) -> None:
     with sqlite3.connect(tmp_path / "ledger.sqlite") as db:
         assert db.execute("SELECT COUNT(*) FROM source_art_ledger").fetchone()[0] == 0
     assert not tuple((tmp_path / "source").rglob("*.jpg"))
+
+
+def test_source_capacity_reservations_are_atomic_and_explicitly_released(
+    tmp_path: Path,
+) -> None:
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+
+    def reserve() -> str | None:
+        try:
+            return store.reserve_capacity(15)
+        except SourceResourceError:
+            return None
+
+    with patch.object(config, "SOURCE_CACHE_MAX_BYTES", 20):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _index: reserve(), range(2)))
+        accepted = [token for token in results if token is not None]
+        assert len(accepted) == 1
+        with sqlite3.connect(tmp_path / "ledger.sqlite") as db:
+            assert db.execute(
+                "SELECT COALESCE(SUM(byte_size), 0) "
+                "FROM source_art_capacity_reservations"
+            ).fetchone()[0] == 15
+        store.release_capacity(accepted[0])
+        replacement = store.reserve_capacity(20)
+        store.release_capacity(replacement)
+
+
+def test_source_capacity_fails_closed_when_temp_scan_is_incomplete(tmp_path: Path) -> None:
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    temp = tmp_path / "source" / "tmp"
+    temp.mkdir()
+    for index in range(257):
+        (temp / f"entry-{index}").mkdir()
+    with pytest.raises(SourceResourceError, match="capacity unknown"):
+        store.reserve_capacity(1)
 
 
 def test_cache_endpoints_require_hmac_reject_replay_and_bound_body(monkeypatch) -> None:
