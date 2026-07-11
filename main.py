@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import hmac
 import io
+import json
 import logging
 import os
 import re
@@ -616,7 +617,13 @@ from ratings import (
 )
 from tmdb import composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_trending_candidates, fetch_popular_candidates, fetch_supplemental_candidates, fetch_catalog_candidates, fetch_release_status, fetch_recent_movie_digital_release_date, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, _fetch_metahub_logo, LOGO_ABS_MAX_H
 import tvdb
-from integration_contract import EnrichmentRequest
+from integration_contract import (
+    CONTRACT_SCHEMA,
+    CONTRACT_VERSION,
+    EnrichmentRequest,
+    RenderInputBundle,
+)
+from preset_registry import get_preset, list_public_presets
 from service_auth import AuthError as V2AuthError, SQLiteNonceStore, verify_request as verify_v2_request
 from source_art import SourceArtStore
 from v2_enrich import (
@@ -624,6 +631,14 @@ from v2_enrich import (
     build_runtime as build_v2_enrichment_runtime,
     enrich as enrich_v2,
 )
+from v2_render import (
+    RENDERER_REVISION,
+    RenderError as V2RenderError,
+    render as render_v2_bundle,
+    requirements_metadata,
+    requirements_sha256,
+)
+from render_spec import compile_requirements
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -3029,6 +3044,106 @@ async def _get_v2_source_store():
     if _V2_SOURCE_STORE is None:
         _V2_SOURCE_STORE = await asyncio.to_thread(SourceArtStore.from_config)
     return _V2_SOURCE_STORE
+
+
+@app.get("/v2/presets")
+async def v2_presets_endpoint(request: Request):
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+
+    presets = []
+    for metadata in list_public_presets():
+        preset = get_preset(metadata.ref)
+        # The authenticated catalog is the single source of truth for the
+        # usage-scoped snapshot hash.  BingeCat receives the complete safe,
+        # canonical visual config instead of reimplementing Core's preset
+        # definitions; credentials are rejected by the registry validator.
+        if preset.config.sha256() != metadata.config_sha256:
+            raise HTTPException(status_code=503, detail="preset_catalog_unavailable")
+        requirements = compile_requirements(preset.config)
+        presets.append(
+            {
+                **metadata.to_dict(),
+                "canonical_config": json.loads(preset.config.canonical_json()),
+                "requirements": requirements_metadata(requirements),
+                "requirements_sha256": requirements_sha256(requirements),
+            }
+        )
+    return JSONResponse(
+        content={
+            "schema": CONTRACT_SCHEMA,
+            "version": CONTRACT_VERSION,
+            "renderer_revision": RENDERER_REVISION,
+            "presets": presets,
+        }
+    )
+
+
+@app.post("/v2/render")
+async def v2_render_endpoint(request: Request):
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    try:
+        contract = RenderInputBundle.model_validate_json(await request.body())
+    except ValidationError as exc:
+        details = [
+            {
+                "loc": list(item.get("loc", ()))[:8],
+                "type": str(item.get("type", "validation_error"))[:80],
+                "msg": str(item.get("msg", "invalid value"))[:200],
+            }
+            for item in exc.errors(include_url=False, include_input=False)[:20]
+        ]
+        return JSONResponse(status_code=422, content={"detail": details})
+    try:
+        source_store = (
+            await _get_v2_source_store()
+            if contract.snapshot.source_art
+            else None
+        )
+        payload, metadata = await asyncio.to_thread(
+            render_v2_bundle,
+            contract,
+            source_store=source_store,
+        )
+    except V2RenderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    except Exception as exc:
+        logger.warning(f"v2 rendering failed: {type(exc).__name__}")
+        raise HTTPException(status_code=503, detail="render_unavailable") from None
+    return Response(
+        content=payload,
+        media_type=metadata.content_type,
+        headers={
+            "ETag": f'"{metadata.content_sha256}"',
+            "X-PostersPlus-Content-SHA256": metadata.content_sha256,
+            "X-PostersPlus-Renderer-Revision": metadata.renderer_revision,
+            "X-PostersPlus-Config-SHA256": metadata.config_sha256,
+            "X-PostersPlus-Snapshot-SHA256": metadata.snapshot_sha256,
+        },
+    )
 
 
 @app.post("/v2/enrich")

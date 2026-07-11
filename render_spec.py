@@ -202,6 +202,16 @@ def _weights(value: Any, allowed: frozenset[str]) -> tuple[tuple[str, float], ..
         pairs = (piece.split(":", 1) for piece in value.split(",") if ":" in piece)
     elif isinstance(value, Mapping):
         pairs = value.items()
+    elif isinstance(value, (list, tuple)):
+        # ``CanonicalRenderSpec.canonical_json()`` emits tuple weights as JSON
+        # arrays.  Accept those arrays on the authenticated preset handoff so
+        # consumers can round-trip the published canonical config and verify
+        # its config_sha256 without reimplementing Core's serializer.
+        pairs = (
+            item
+            for item in value
+            if isinstance(item, (list, tuple)) and len(item) == 2
+        )
     else:
         return ()
     normalised: dict[str, float] = {}
@@ -257,7 +267,18 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
     badge_display_mode = _int(values.get("badge_display_mode"), defaults.badge_display_mode, 0, 5)
     if badge_display_mode not in {0, 3}:
         raise ValueError("badge_display_mode is restricted to 0 or 3 for BingeCat custom configs")
-    sash_priority, sash_exclusions = _sashes(values.get("sash_priority"))
+    sash_input = values.get("sash_priority")
+    # Canonical JSON stores the normalized active slots and exclusions in two
+    # fields.  Recombine them at the boundary so the published canonical JSON
+    # is a true hash-preserving round trip (the URL form uses ``-slot`` tokens
+    # in one comma-delimited field).
+    declared_exclusions = values.get("sash_exclusions")
+    if declared_exclusions:
+        if isinstance(sash_input, str):
+            sash_input = f"{sash_input},{','.join(f'-{slot}' for slot in declared_exclusions)}"
+        elif isinstance(sash_input, (list, tuple)):
+            sash_input = [*sash_input, *[f"-{slot}" for slot in declared_exclusions]]
+    sash_priority, sash_exclusions = _sashes(sash_input)
 
     return CanonicalRenderSpec(
         show_award_sash=_bool(values.get("show_award_sash"), defaults.show_award_sash),
