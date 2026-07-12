@@ -464,12 +464,25 @@ async def fetch_v2_artwork_candidates(
     return tuple(out)
 
 
-def _select_by_language(items: list[dict], language: str | None) -> dict | None:
-    """Pick the best artwork: requested language first, then language-neutral,
-    then English, then highest-scored overall. Items are pre-sorted by score."""
+def _select_by_language(
+    items: list[dict],
+    languages: list[str] | None,
+    *,
+    strict: bool = False,
+) -> dict | None:
+    """Pick the best artwork by language preference. Tries each requested language
+    in turn, then language-neutral, then English. Items are pre-sorted by score.
+
+    When ``strict`` is False (backgrounds/posters), an unrelated foreign-language
+    item is accepted as a last resort. When ``strict`` is True (logos), that
+    catch-all is dropped and ``None`` is returned instead — so the caller's
+    provider chain (TMDB/Metahub) is tried rather than serving, say, a French
+    logo for an English title."""
     if not items:
         return None
-    if language:
+    for language in (languages or ()):
+        if not language:
+            continue
         for it in items:
             if it.get("language") == language:
                 return it
@@ -479,7 +492,7 @@ def _select_by_language(items: list[dict], language: str | None) -> dict | None:
     for it in items:
         if it.get("language") == "eng":
             return it
-    return items[0]
+    return None if strict else items[0]
 
 
 # ---------------------------------------------------------------------------
@@ -505,13 +518,32 @@ def _cache_key_for(url: str, prefix: str) -> str:
     return f"tvdb_{prefix}_" + tail.strip("/").replace("/", "_")
 
 
+def _logo_language_order(
+    logo_language: str | None,
+    original_language: str | None,
+    logo_priority: str,
+) -> list[str]:
+    """Ordered list of TVDB (3-letter) language codes to prefer, derived from the
+    same priority rules TMDB uses so both sources agree on which languages count
+    as a match (and, crucially, which don't)."""
+    from tmdb import image_language_order
+    order = image_language_order(logo_language or "en", original_language, logo_priority)
+    return [lang for lang in (_to_tvdb_lang(c) for c in order) if lang]
+
+
 async def fetch_tvdb_logo(
     client: httpx.AsyncClient,
     artworks: dict[str, list[dict]],
     logo_language: str | None = None,
+    original_language: str | None = None,
+    logo_priority: str = "native_original",
 ) -> Image.Image | None:
     """Best TVDB clearlogo as an alpha-trimmed RGBA image, or None."""
-    chosen = _select_by_language(artworks.get("logos", []), _to_tvdb_lang(logo_language))
+    chosen = _select_by_language(
+        artworks.get("logos", []),
+        _logo_language_order(logo_language, original_language, logo_priority),
+        strict=True,
+    )
     if not chosen:
         return None
     url = chosen["url"]
@@ -543,6 +575,8 @@ async def tvdb_logo(
     *,
     media_type: str,
     logo_language: str | None = None,
+    original_language: str | None = None,
+    logo_priority: str = "native_original",
     imdb_id: str | None = None,
     tmdb_id: str | None = None,
     tvdb_id_hint: int | str | None = None,
@@ -563,7 +597,10 @@ async def tvdb_logo(
         if not tvdb_id:
             return None
         artworks = await fetch_tvdb_artworks(client, tvdb_id, media_type)
-        logo = await fetch_tvdb_logo(client, artworks, logo_language)
+        logo = await fetch_tvdb_logo(
+            client, artworks, logo_language,
+            original_language=original_language, logo_priority=logo_priority,
+        )
         if logo is not None:
             logger.info(f"TVDB logo rescue succeeded for tvdb_id={tvdb_id}")
         else:
@@ -658,7 +695,8 @@ async def fetch_tvdb_poster(
     """Best TVDB poster, normalised to poster dimensions. NOTE: TVDB posters
     frequently carry burned-in title text — callers must vet with text detection
     before compositing a logo over one."""
-    chosen = _select_by_language(artworks.get("posters", []), _to_tvdb_lang(language))
+    _lang = _to_tvdb_lang(language)
+    chosen = _select_by_language(artworks.get("posters", []), [_lang] if _lang else None)
     if not chosen:
         return None
     url = chosen["url"]
