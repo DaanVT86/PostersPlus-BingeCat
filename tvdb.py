@@ -247,10 +247,18 @@ _LANG_2_TO_3 = {
 
 
 def _to_tvdb_lang(code: str | None) -> str | None:
+    """Map an app language/locale code to TVDB's 3-letter code.
+
+    TVDB does not tag artwork by region, so region-qualified locales collapse to
+    their base language (es-mx → spa): a Mexican-Spanish request still wants
+    Spanish artwork, and the alternative is matching nothing at all. The strict
+    region separation TMDB gives us simply isn't available from this provider.
+    """
     if not code:
         return code
-    c = code.strip().lower()
-    return _LANG_2_TO_3.get(c, c)
+    c = code.strip().lower().replace("_", "-")
+    base = c.split("-", 1)[0]
+    return _LANG_2_TO_3.get(base, base)
 
 
 # ---------------------------------------------------------------------------
@@ -525,10 +533,13 @@ def _logo_language_order(
 ) -> list[str]:
     """Ordered list of TVDB (3-letter) language codes to prefer, derived from the
     same priority rules TMDB uses so both sources agree on which languages count
-    as a match (and, crucially, which don't)."""
+    as a match (and, crucially, which don't).
+
+    Deduplicated because region collapsing can fold two distinct TMDB entries
+    onto one TVDB code — es-mx before es both become spa."""
     from tmdb import image_language_order
     order = image_language_order(logo_language or "en", original_language, logo_priority)
-    return [lang for lang in (_to_tvdb_lang(c) for c in order) if lang]
+    return list(dict.fromkeys(lang for lang in (_to_tvdb_lang(c) for c in order) if lang))
 
 
 async def fetch_tvdb_logo(
