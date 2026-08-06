@@ -1924,9 +1924,9 @@ async def fetch_v2_release_status(
                 kind = release.get("type")
                 if kind == 3 and (theatrical is None or parsed < theatrical):
                     theatrical = parsed
-                elif kind in (4, 6) and (digital is None or parsed > digital):
+                elif kind in (4, 6) and (digital is None or parsed < digital):
                     digital = parsed
-                elif kind == 5 and (physical is None or parsed > physical):
+                elif kind == 5 and (physical is None or parsed < physical):
                     physical = parsed
         raw = {
             "theatrical_date": theatrical.isoformat() if theatrical else None,
