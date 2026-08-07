@@ -13,10 +13,16 @@ def test_bingecat_presets_are_immutable_and_have_pinned_hashes():
         "clean-notch@1": "d7b5d56bd01620b8860499bcc6a06597357762784dff160ffe0c8c50e01f63ee",
         "prestige@1": "6345f175f12b7df5c0bc7831e449ba5bff6f7cd956c96607006674c8b61a12a8",
         "minimalist@1": "b761456d72e8d8669b583f724e43cec753e587629d01111ba33d6af1c4faa04f",
+        "clean-notch@2": "c2f6e00eb4d09b0d55135499a72e89f3dce91f449b4eec91a3143223ecc22664",
+        "minimalist@2": "65c724c240e1b297115454d7c48d3b145e79e8634d7ee172338f41384805d2b4",
     }
 
     assert set(BINGECAT_PRESET_REGISTRY) == set(expected_hashes)
-    assert [metadata.ref for metadata in list_public_presets()] == list(expected_hashes)
+    assert [metadata.ref for metadata in list_public_presets()] == [
+        "clean-notch@2",
+        "prestige@1",
+        "minimalist@2",
+    ]
     for ref, expected_hash in expected_hashes.items():
         preset = get_preset(ref)
         assert preset.ref == ref
@@ -69,6 +75,34 @@ def test_fixed_presets_keep_their_source_visuals_with_quality_disabled():
     assert prestige.rating_display_mode == 1  # legacy Prestige rating bar
     assert prestige.accent_bar_font_size_ratio == 0.08
     assert prestige.badge_display_mode == 0
+
+
+def test_latest_presets_apply_bingecat_layout_policy():
+    clean_notch = get_preset("clean-notch@2").config
+    minimalist = get_preset("minimalist@2").config
+    expected_movie_weights = dict(get_preset("prestige@1").config.movie_weights)
+    expected_tv_weights = dict(get_preset("prestige@1").config.tv_weights)
+
+    assert clean_notch.bottom_gradient == "medium"
+    assert clean_notch.rating_display_mode == 2
+    assert clean_notch.numeric_score_font_size_ratio == 0.08
+    assert clean_notch.score_out_of_10 is True
+    assert clean_notch.logo_max_w_ratio == 0.80
+    assert clean_notch.logo_bottom_ratio == 0.19
+    assert clean_notch.logo_bottom_anchor is True
+    assert clean_notch.sash_mode == "notch"
+    assert clean_notch.sash_badge_size_w == 0.50
+    assert clean_notch.sash_badge_size_h == 1.30
+    assert clean_notch.sash_badge_font_ratio == 0.55
+    assert clean_notch.sash_badge_frost_opacity == 1.0
+    assert minimalist.minimalist_mode_font_size_ratio == 0.065
+    assert minimalist.show_award_sash is False
+    assert minimalist.sash_mode == "hidden"
+
+    for config in (clean_notch, minimalist):
+        assert dict(config.movie_weights) == expected_movie_weights
+        assert dict(config.tv_weights) == expected_tv_weights
+        assert config.fallback_to_imdb is True
 
 
 def test_custom_palette_is_canonical_only_while_visually_active():
