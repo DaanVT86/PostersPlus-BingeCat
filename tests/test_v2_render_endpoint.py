@@ -425,6 +425,24 @@ def test_render_is_pure_and_deterministic_for_identical_tuple(tmp_path, monkeypa
                 "sash_length_ratio": 1.2,
             },
         ),
+        (
+            "clean-notch@2",
+            {
+                "rating_display_mode": 2,
+                "sash_mode": "notch",
+                "sash_badge_size_w": 0.5,
+                "sash_badge_size_h": 1.3,
+            },
+        ),
+        (
+            "minimalist@2",
+            {
+                "rating_display_mode": 3,
+                "minimalist_mode_font_size_ratio": 0.065,
+                "show_award_sash": False,
+                "sash_mode": "hidden",
+            },
+        ),
     ),
 )
 def test_fixed_preset_pixels_match_shared_legacy_compositor(
@@ -505,7 +523,10 @@ def test_fixed_preset_pixels_match_shared_legacy_compositor(
             continue
         if hasattr(legacy_config, field_name) and hasattr(adapted_config, field_name):
             assert getattr(adapted_config, field_name) == getattr(legacy_config, field_name), field_name
-    assert adapted_config.sash_priority == legacy_config.sash_priority
+    if spec.sash_mode == "hidden":
+        assert adapted_config.sash_priority == []
+    else:
+        assert adapted_config.sash_priority == legacy_config.sash_priority
     assert adapted_config.movie_weights == legacy_config.movie_weights
     assert adapted_config.tv_weights == legacy_config.tv_weights
     assert adapted_config.rating_text_color == legacy_config.rating_text_color
@@ -1360,9 +1381,9 @@ def test_presets_endpoint_is_authenticated_canonical_and_secret_free(monkeypatch
     assert payload["version"] == CONTRACT_VERSION
     assert payload["renderer_revision"] == RENDERER_REVISION
     assert [item["ref"] for item in payload["presets"]] == [
-        "clean-notch@1",
+        "clean-notch@2",
         "prestige@1",
-        "minimalist@1",
+        "minimalist@2",
     ]
     assert all(len(item["config_sha256"]) == 64 for item in payload["presets"])
     assert all(len(item["requirements_sha256"]) == 64 for item in payload["presets"])

@@ -4500,6 +4500,8 @@ async def get_poster(
             async def _tvdb():
                 return await tvdb.tvdb_logo(
                     client, media_type=type, logo_language=rcfg.logo_language,
+                    original_language=tmdb_data.get("original_language"),
+                    logo_priority=rcfg.logo_priority,
                     imdb_id=effective_imdb_id, tmdb_id=tmdb_id,
                 )
 

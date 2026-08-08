@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import source_art as source_art_module
 import tvdb as tvdb_module
 import v2_enrich as enrich_module
 from awards import _RateLimited
@@ -2183,6 +2184,48 @@ def test_locator_path_dns_peer_redirect_and_size_guards(tmp_path):
             _locator(), "poster", temp_dir=tmp_path, resolver=public,
             requester=cross_host_redirect,
         )
+
+
+def test_pinned_request_captures_peer_before_connection_close(monkeypatch):
+    class Socket:
+        @staticmethod
+        def getpeername():
+            return ("93.184.216.34", 443)
+
+    class Response:
+        status = 200
+
+        @staticmethod
+        def getheaders():
+            return (("content-type", "image/png"),)
+
+        @staticmethod
+        def read(_size):
+            return b""
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            self.sock = Socket()
+
+        def request(self, *_args, **_kwargs):
+            return None
+
+        def getresponse(self):
+            self.sock = None
+            return Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(source_art_module, "_PinnedHTTPSConnection", Connection)
+
+    response = source_art_module._request_pinned(
+        "https://image.tmdb.org/t/p/w500/poster.jpg",
+        "93.184.216.34",
+        "image.tmdb.org",
+    )
+
+    assert response.peer_ip == "93.184.216.34"
 
 
 def test_fetch_derivative_deletes_raw_temp_even_on_digest_mismatch(tmp_path):

@@ -199,8 +199,12 @@ def _request_pinned(
                 "Connection": "close",
             },
         )
-        response = connection.getresponse()
+        # Capture the verified peer while ``http.client`` still owns the
+        # socket.  A response with ``Connection: close`` clears
+        # ``connection.sock`` inside ``getresponse()`` before callers can
+        # inspect it, even though the request used the pinned address.
         peer_ip = str(connection.sock.getpeername()[0]) if connection.sock else ""
+        response = connection.getresponse()
         headers = {key.lower(): value.strip() for key, value in response.getheaders()}
         content_length = headers.get("content-length")
         if content_length:

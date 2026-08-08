@@ -1,0 +1,59 @@
+name: postersplus-staging
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: ./dockerfile
+      args:
+        BAKE_PPOCR_MODEL: "${BAKE_PPOCR_MODEL:-true}"
+    image: postersplus-bingecat:staging
+    container_name: postersplus-v2-staging
+    env_file:
+      - ${POSTERSPLUS_STAGING_CORE_ENV_FILE:-../env/core.env}
+    volumes:
+      - ${POSTERSPLUS_STAGING_CACHE_DIR:-../cache}:/app/cache
+    restart: unless-stopped
+    networks:
+      - private
+      - aicat_app_internal
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  cache:
+    image: redis:7-alpine
+    container_name: postersplus-v2-cache
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+    networks:
+      - private
+      - aicat_app_internal
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.3.0
+    container_name: postersplus-staging-cloudflared
+    env_file:
+      - ${POSTERSPLUS_STAGING_TUNNEL_ENV_FILE:-../env/tunnel.env}
+    command: tunnel --no-autoupdate run
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - private
+
+networks:
+  private:
+    driver: bridge
+    name: postersplus-staging-internal
+  aicat_app_internal:
+    external: true
+    name: aicat-app-internal

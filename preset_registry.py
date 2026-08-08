@@ -13,6 +13,7 @@ from render_spec import CanonicalRenderSpec, canonicalize_config
 
 
 _SUPPORTED_LOCALES = ("en", "pt", "nl", "de", "es")
+_ACTIVE_PRESET_REFS = ("clean-notch@2", "prestige@1", "minimalist@2")
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,49 @@ def _build_registry() -> dict[str, Preset]:
                 "badge_min_score": 2,
             },
         ),
+        "clean-notch@2": (
+            "Clean Notch",
+            {
+                **shared,
+                "bottom_gradient": "medium",
+                "rating_display_mode": 2,
+                "numeric_score_font_size_ratio": 0.080,
+                "numeric_score_y_offset": 0.90,
+                "score_out_of_10": True,
+                "logo_max_w_ratio": 0.80,
+                "logo_max_h_ratio": 0.25,
+                "logo_bottom_ratio": 0.19,
+                "logo_bottom_anchor": True,
+                "cinema_greyscale_skip_if_available": False,
+                "sash_mode": "notch",
+                "sash_badge_style": "frosted",
+                "sash_badge_size_w": 0.50,
+                "sash_badge_size_h": 1.30,
+                "sash_badge_inset": 0.0,
+                "sash_badge_font_ratio": 0.55,
+                "sash_badge_frost_opacity": 1.0,
+                "sash_priority": "wins,gg_wins,pic_noms,gg_noms,trending,trending_broad,foreign,cinema,premiere,new_release,just_added,season_finale,returning,new_season,short_film,mini_series,binge_ready,true_story,metacritic,festival,-studio,-director,-cast,-cult,-streaming,-physical,-production,-ended,-cancelled,-airing",
+            },
+        ),
+        "minimalist@2": (
+            "Minimalist",
+            {
+                **shared,
+                "rating_display_mode": 3,
+                "score_color_mode": 2,
+                "minimalist_append_mode": 3,
+                "minimalist_mode_font_size_ratio": 0.065,
+                "minimalist_mode_font_x_offset": 0.065,
+                "minimalist_mode_font_y_offset": 0.920,
+                "show_award_sash": False,
+                "sash_mode": "hidden",
+                "sash_priority": "wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,new_season,returning,premiere,just_added,season_finale,cult,foreign,new_release,metacritic,true_story,short_film,mini_series,binge_ready,trending_broad,-cinema,-streaming,-physical,-production,-ended,-cancelled,-airing",
+                "badge_height": 36,
+                "badge_anchor_x": 0.06,
+                "badge_anchor_y": 0.055,
+                "badge_min_score": 2,
+            },
+        ),
     }
     registry: dict[str, Preset] = {}
     for ref, (label, values) in configs.items():
@@ -161,7 +205,13 @@ _BINGECAT_PRESET_REGISTRY = _build_registry()
 
 
 def _validate_registry(registry: Mapping[str, Preset]) -> None:
-    expected_refs = {"clean-notch@1", "prestige@1", "minimalist@1"}
+    expected_refs = {
+        "clean-notch@1",
+        "prestige@1",
+        "minimalist@1",
+        "clean-notch@2",
+        "minimalist@2",
+    }
     if set(registry) != expected_refs:
         raise RuntimeError("BingeCat preset registry has an invalid version set")
     for ref, preset in registry.items():
@@ -188,4 +238,4 @@ def get_preset(ref: str) -> Preset:
 
 def list_public_presets() -> list[PresetMetadata]:
     """Return safe endpoint metadata in stable registry order."""
-    return [preset.metadata() for preset in BINGECAT_PRESET_REGISTRY.values()]
+    return [BINGECAT_PRESET_REGISTRY[ref].metadata() for ref in _ACTIVE_PRESET_REFS]

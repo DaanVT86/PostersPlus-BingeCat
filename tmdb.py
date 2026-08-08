@@ -1924,9 +1924,9 @@ async def fetch_v2_release_status(
                 kind = release.get("type")
                 if kind == 3 and (theatrical is None or parsed < theatrical):
                     theatrical = parsed
-                elif kind in (4, 6) and (digital is None or parsed > digital):
+                elif kind in (4, 6) and (digital is None or parsed < digital):
                     digital = parsed
-                elif kind == 5 and (physical is None or parsed > physical):
+                elif kind == 5 and (physical is None or parsed < physical):
                     physical = parsed
         raw = {
             "theatrical_date": theatrical.isoformat() if theatrical else None,
@@ -1994,11 +1994,16 @@ async def fetch_movie_release_info(
         logger.warning(f"fetch_movie_release_info failed for {tmdb_id}: {exc}")
         return None
 
-    today = _date.today()
-    has_physical = has_digital = has_theatrical = False
+    # Release-status decisions key off the EARLIEST date a film enters each
+    # window (its first availability anywhere), so a title already streaming or
+    # on disc in one region isn't held at "Cinema" just because a later regional
+    # digital/physical date is still pending.  ``latest_digital`` is tracked
+    # separately for the freshness "just added" sash, which wants the most
+    # recent digital date rather than the first.
     earliest_theatrical: _date | None = None
+    earliest_digital: _date | None = None
     latest_digital: _date | None = None
-    latest_physical: _date | None = None
+    earliest_physical: _date | None = None
 
     for entry in resp.json().get("results", []):
         for rd in entry.get("release_dates", []):
@@ -2007,9 +2012,11 @@ async def fetch_movie_release_info(
             if rdate is None:
                 continue
             if rtype == 5:
-                if latest_physical is None or rdate > latest_physical:
-                    latest_physical = rdate
+                if earliest_physical is None or rdate < earliest_physical:
+                    earliest_physical = rdate
             elif rtype in (4, 6):   # digital or TV broadcast
+                if earliest_digital is None or rdate < earliest_digital:
+                    earliest_digital = rdate
                 if latest_digital is None or rdate > latest_digital:
                     latest_digital = rdate
             elif rtype == 3:
@@ -2018,16 +2025,17 @@ async def fetch_movie_release_info(
 
     result = _compute_movie_status_from_dates(
         earliest_theatrical,
-        latest_digital,
-        latest_physical,
+        earliest_digital,
+        earliest_physical,
         tmdb_status,
     )
 
     info = {
         "status": result,
         "theatrical_date": earliest_theatrical.isoformat() if earliest_theatrical else None,
-        "digital_date": latest_digital.isoformat() if latest_digital else None,
-        "physical_date": latest_physical.isoformat() if latest_physical else None,
+        "digital_date": earliest_digital.isoformat() if earliest_digital else None,
+        "physical_date": earliest_physical.isoformat() if earliest_physical else None,
+        "digital_latest_date": latest_digital.isoformat() if latest_digital else None,
     }
     set_cached_movie_release_info(cache_key, info)
     return info
@@ -2045,7 +2053,9 @@ async def fetch_recent_movie_digital_release_date(
     info = await fetch_movie_release_info(client, tmdb_id, tmdb_key, tmdb_status)
     if not info:
         return None
-    digital = _parse_tmdb_date(info.get("digital_date"))
+    # "Just added" wants the most recent digital date; fall back to the plain
+    # digital_date for cache entries written before that field was tracked.
+    digital = _parse_tmdb_date(info.get("digital_latest_date") or info.get("digital_date"))
     if digital is None:
         return None
     age = (_date.today() - digital).days
