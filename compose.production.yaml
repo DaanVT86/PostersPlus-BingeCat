@@ -1,0 +1,52 @@
+name: postersplus-v2-production
+
+x-json-file-logging: &json-file-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: ./dockerfile
+      args:
+        BAKE_PPOCR_MODEL: "${BAKE_PPOCR_MODEL:-true}"
+    image: "${POSTERSPLUS_PRODUCTION_IMAGE:-postersplus-bingecat:v2-production}"
+    container_name: postersplus-v2-core
+    env_file:
+      - ${POSTERSPLUS_PRODUCTION_CORE_ENV_FILE:-/opt/postersplus/env/postersplus.env}
+      - ${POSTERSPLUS_PRODUCTION_PRIVATE_ENV_FILE:-/opt/postersplus/env/postersplus-v2-private.env}
+    ports:
+      - "127.0.0.1:${POSTERSPLUS_PRODUCTION_HEALTH_PORT:-18084}:8000"
+    volumes:
+      - ${POSTERSPLUS_PRODUCTION_CACHE_DIR:-/opt/postersplus/cache}:/app/cache
+    cpu_shares: 2048
+    mem_reservation: 2g
+    mem_limit: 12g
+    pids_limit: 1024
+    stop_grace_period: 45s
+    logging: *json-file-logging
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).read()
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+    networks:
+      aicat_app_internal:
+        aliases:
+          # Deliberately differs from the currently configured BingeCat Core
+          # hostname. The rollout switches BingeCat explicitly after its go.
+          - ${POSTERSPLUS_PRODUCTION_NETWORK_ALIAS:-postersplus-v2-core}
+
+networks:
+  aicat_app_internal:
+    external: true
+    name: aicat-app-internal

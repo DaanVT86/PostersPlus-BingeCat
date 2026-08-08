@@ -19,8 +19,8 @@ production app repo.
 
 ## Repo And Worktrees
 
-- Local service worktree: `/root/bingecatwork/postersplus-bingecat`
-- Production service checkout on OVH: `/opt/postersplus/repo`
+- Local service worktrees: `/root/bingecatwork/postersplus-*`
+- Private production Core checkout on `netcupvps`: `/opt/postersplus/repo`
 - Origin remote: `https://github.com/DaanVT86/PostersPlus-BingeCat.git`
 - Upstream remote: `https://github.com/UmbraProjects/PostersPlus.git`
 - Default branch: `dev`
@@ -30,55 +30,58 @@ source project.
 
 ## Runtime Topology
 
-PosterPlus runs on `ovhdedi` as its own Docker Compose stack:
+PosterPlus has two deliberately separate production roles:
 
-- Stack root: `/opt/postersplus`
-- Compose file: `/opt/postersplus/docker-compose.yml`
-- Runtime env: `/opt/postersplus/env/postersplus.env`
-- Cache volume path: `/opt/postersplus/cache`
-- App container: `postersplus-app`
-- Tunnel container: `postersplus-cloudflared`
-- Public URL: `https://posterplus.bingecat.com`
-- Local app bind on OVH: `127.0.0.1:18083 -> 8000`
+- The existing public legacy instance continues to own
+  `https://posterplus.bingecat.com`. Never stop, replace, reuse its tunnel
+  token, or attach another connector without an explicit public migration.
+- The BingeCat v2 Core runs privately on `netcupvps` from `/opt/postersplus`.
+  Its tracked compose file is `compose.production.yaml`, its container is
+  `postersplus-v2-core`, its pre-go Docker alias is `postersplus-v2-core`, and
+  its operator-only bind is `127.0.0.1:18084 -> 8000`.
 
-The compose file, runtime env, and cache directory are intentionally outside
-the git checkout. Do not commit secrets, `.env` files, cache DBs, generated
-posters, tunnel tokens, or API keys.
+The private stack has no `cloudflared` service. BingeCat owns the public
+content-addressed WebP URLs; Core only serves signed enrich/render requests on
+the external Docker network `aicat-app-internal`.
 
-The old Oracle VPS PostersPlus containers are stopped and should remain stopped
-unless the user explicitly asks for rollback work.
+Runtime env and cache data remain outside the checkout under
+`/opt/postersplus/env` and `/opt/postersplus/cache`. Do not commit secrets,
+`.env` files, cache DBs, generated posters, tunnel tokens, or API keys.
 
 ## Runtime Config
 
-Current runtime config is stored on OVH, not in git:
+Current private Core config is stored on Netcup, not in git:
 
 - `TMDB_API_KEY`: app-wide key configured in `/opt/postersplus/env/postersplus.env`
 - `MDBLIST_API_KEY`: copied from the BingeCat app-wide MDBList setting
 - `COMPOSITE_MAX_ENTRIES=10000`
 - `ACCESS_KEY`: existing PostersPlus access key
-- `TUNNEL_TOKEN`: existing Cloudflare tunnel token
+- `POSTERSPLUS_BINGECAT_REQUEST_SECRET`: exact shared private request secret
+
+The private Core does not require or consume a Cloudflare tunnel token.
 
 AIOStreams quality badge settings are currently blank unless the user provides
 `AIOSTREAMS_URL` and `AIOSTREAMS_AUTH`.
 
 ## Deploying This Service
 
-Deploy only this service with:
+Deploy only the private Core with an exact pushed ref:
 
 ```bash
-ssh ovhdedi /opt/postersplus/deploy.sh
+ssh netcupvps 'POSTERSPLUS_DEPLOY=1 /opt/postersplus/repo/deploy/netcup/deploy-production.sh origin/dev'
 ```
 
-That script pulls `origin/dev`, rebuilds the PostersPlus image, restarts the
-PosterPlus compose stack, and checks local health. It does not deploy the main
-BingeCat app.
+The wrapper refuses BingeCat's currently configured live alias during pre-go,
+builds an SHA-tagged image, starts only the private Core service, and verifies
+Docker plus localhost health. It does not deploy/recreate BingeCat and cannot
+modify the legacy public PosterPlus tunnel.
 
 Useful checks:
 
 ```bash
-ssh ovhdedi 'curl -fsS http://127.0.0.1:18083/health'
+ssh netcupvps 'curl -fsS http://127.0.0.1:18084/health'
 curl -fsS https://posterplus.bingecat.com/health
-ssh ovhdedi 'sudo docker compose --env-file /opt/postersplus/env/postersplus.env -f /opt/postersplus/docker-compose.yml ps'
+ssh netcupvps 'docker inspect postersplus-v2-core --format "{{.State.Health.Status}}"'
 ```
 
 ## Development Guidance
@@ -103,5 +106,6 @@ python3 -m pytest tests
 python3 -m compileall .
 ```
 
-For deployment-sensitive changes, also rebuild locally or on OVH and verify
-`/health` through both the local OVH bind and the public Cloudflare URL.
+For deployment-sensitive changes, validate the production Compose model,
+rebuild on Netcup, verify private `/health`, and separately confirm that the
+legacy public Cloudflare URL remains healthy and unchanged.
