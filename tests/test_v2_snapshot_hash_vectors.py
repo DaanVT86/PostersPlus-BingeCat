@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ FIXTURE = (
     / "fixtures"
     / "postersplus_v2_snapshot_hash_vectors.json"
 )
+NOW = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
 
 
 def _unique_object(pairs):
@@ -126,5 +128,55 @@ def test_v2_trending_thresholds_are_independent_of_legacy_environment(
     assert discovery.pick_sash(narrow, ["trending"]) == ("#40 Today", "trending")
     assert discovery.pick_sash(broad, ["trending_broad"]) == (
         "#100 Today",
+        "trending",
+    )
+
+
+def test_most_popular_rank_is_localized_and_changes_visible_snapshot_identity():
+    import discovery
+
+    spec = canonicalize_config({
+        "rating_display_mode": 0,
+        "show_award_sash": True,
+        "sash_mode": "notch",
+        "sash_priority": ["most_popular"],
+        "use_original_art": True,
+        "textless": True,
+    })
+    observed = NOW - timedelta(hours=1)
+    facts_without_rank = ImmutableRenderSnapshot.model_validate({
+        "evaluated_at": NOW,
+        "titles_by_locale": {"en": "The Matrix", "nl": "The Matrix"},
+        "facts": {"values": {}, "provenance": []},
+    })
+    facts_with_rank = ImmutableRenderSnapshot.model_validate({
+        "evaluated_at": NOW,
+        "titles_by_locale": {"en": "The Matrix", "nl": "The Matrix"},
+        "facts": {
+            "values": {"most_popular_rank": 4},
+            "provenance": [{
+                "fields": ["most_popular_rank"],
+                "source": "bingecat.tmdb_most_popular",
+                "observed_at": observed,
+                "checked_at": observed,
+                "expires_at": NOW + timedelta(days=1),
+            }],
+        },
+    })
+    without_hash = canonical_snapshot_sha256(
+        facts_without_rank,
+        media=MediaIdentity(media_type="movie", tmdb_id=603),
+        spec=spec,
+        locale="nl",
+    )
+    with_hash = canonical_snapshot_sha256(
+        facts_with_rank,
+        media=MediaIdentity(media_type="movie", tmdb_id=603),
+        spec=spec,
+        locale="nl",
+    )
+    assert with_hash != without_hash
+    assert discovery.pick_sash(discovery.DiscoveryMeta(most_popular_rank=4), ["most_popular"]) == (
+        "#4 Today",
         "trending",
     )

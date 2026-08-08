@@ -278,6 +278,7 @@ _SASH_TYPES: dict[str, str] = {
     "studio":          "prestige",  # purple — production credit
     "director":        "prestige",  # purple — production credit
     "cast":            "cast",      # green — talent credit
+    "most_popular":    "trending",  # blue — BingeCat's shared TMDB popularity list
     "trending":        "trending",  # blue
     "trending_broad":  "trending",  # blue — lower-priority ranks 41-100
     "new_season":      "alert",     # red — timely TV lifecycle signal
@@ -395,6 +396,7 @@ class DiscoveryMeta:
     original_language: str | None = None   # ISO 639-1 code, e.g. "ko", "fr"
 
     # Social proof
+    most_popular_rank: int | None = None
     trending_rank: int | None = None
     # Private v2 renders pin their thresholds into the immutable contract;
     # legacy callers leave these unset and retain runtime-configurable values.
@@ -694,6 +696,13 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
         threshold = meta.trending_fetch_count or _cfg.TRENDING_FETCH_COUNT
         return f"#{meta.trending_rank} Today" if meta.trending_rank and meta.trending_rank <= threshold else None
 
+    if slot == "most_popular":
+        return (
+            f"#{meta.most_popular_rank} Today"
+            if meta.most_popular_rank and meta.most_popular_rank <= 20
+            else None
+        )
+
     if slot == "trending_broad":
         narrow = meta.trending_fetch_count or _cfg.TRENDING_FETCH_COUNT
         broad = meta.trending_broad_fetch_count or _cfg.TRENDING_BROAD_FETCH_COUNT
@@ -766,6 +775,7 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
 # ---------------------------------------------------------------------------
 
 ALL_PRIORITY_SLOTS: list[str] = [
+    "most_popular",
     "wins",
     "gg_wins",
     "festival",

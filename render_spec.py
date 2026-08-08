@@ -21,7 +21,7 @@ _VERSION = 1
 _SASH_SLOTS = frozenset(
     {
         "wins", "gg_wins", "festival", "pic_noms", "gg_noms", "studio",
-        "director", "cast", "trending", "new_season", "returning",
+        "director", "cast", "most_popular", "trending", "new_season", "returning",
         "premiere", "just_added", "season_finale", "cult", "foreign",
         "new_release", "metacritic", "true_story", "short_film",
         "mini_series", "binge_ready", "trending_broad", "cinema",

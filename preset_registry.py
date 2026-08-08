@@ -13,7 +13,7 @@ from render_spec import CanonicalRenderSpec, canonicalize_config
 
 
 _SUPPORTED_LOCALES = ("en", "pt", "nl", "de", "es")
-_ACTIVE_PRESET_REFS = ("clean-notch@2", "prestige@1", "minimalist@2")
+_ACTIVE_PRESET_REFS = ("clean-notch@3", "prestige@2", "minimalist@3")
 
 
 @dataclass(frozen=True)
@@ -194,6 +194,17 @@ def _build_registry() -> dict[str, Preset]:
             },
         ),
     }
+    for new_ref, legacy_ref in (
+        ("clean-notch@3", "clean-notch@2"),
+        ("prestige@2", "prestige@1"),
+        ("minimalist@3", "minimalist@2"),
+    ):
+        label, legacy_values = configs[legacy_ref]
+        legacy_priority = str(legacy_values.get("sash_priority") or _PRIORITY)
+        configs[new_ref] = (
+            label,
+            {**legacy_values, "sash_priority": f"most_popular,{legacy_priority}"},
+        )
     registry: dict[str, Preset] = {}
     for ref, (label, values) in configs.items():
         preset_id, version = ref.rsplit("@", 1)
@@ -211,6 +222,9 @@ def _validate_registry(registry: Mapping[str, Preset]) -> None:
         "minimalist@1",
         "clean-notch@2",
         "minimalist@2",
+        "clean-notch@3",
+        "prestige@2",
+        "minimalist@3",
     }
     if set(registry) != expected_refs:
         raise RuntimeError("BingeCat preset registry has an invalid version set")

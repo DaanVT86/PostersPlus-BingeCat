@@ -461,6 +461,7 @@ _SLOT_FACT_FIELDS = {
     "studio": "matched_studios",
     "director": "matched_directors",
     "cast": "matched_cast",
+    "most_popular": "most_popular_rank",
     "trending": "trending_rank",
     "trending_broad": "trending_rank",
     "new_season": "is_new_season",
@@ -525,6 +526,8 @@ def _selected_sash_fact(
             matched = bool(facts.matched_directors)
         elif slot == "cast":
             matched = bool(facts.matched_cast)
+        elif slot == "most_popular":
+            matched = bool(facts.most_popular_rank)
         elif slot == "trending":
             matched = bool(
                 facts.trending_rank
@@ -1013,6 +1016,9 @@ def _discovery_meta(
         ),
         original_language=(
             facts.original_language if "original_language" in used_fields else None
+        ),
+        most_popular_rank=(
+            facts.most_popular_rank if "most_popular_rank" in used_fields else None
         ),
         trending_rank=(facts.trending_rank if "trending_rank" in used_fields else None),
         trending_fetch_count=V2_TRENDING_FETCH_COUNT,

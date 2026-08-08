@@ -15,13 +15,16 @@ def test_bingecat_presets_are_immutable_and_have_pinned_hashes():
         "minimalist@1": "b761456d72e8d8669b583f724e43cec753e587629d01111ba33d6af1c4faa04f",
         "clean-notch@2": "c2f6e00eb4d09b0d55135499a72e89f3dce91f449b4eec91a3143223ecc22664",
         "minimalist@2": "65c724c240e1b297115454d7c48d3b145e79e8634d7ee172338f41384805d2b4",
+        "clean-notch@3": "4f27590eecd267fb4f8e1e9ba692ac1e4f50c46cf81542321a3870bfd4577656",
+        "prestige@2": "980a4e5f7feabd8c5e5044319a38deafc9f9e9dbd8dc2215d785417f35b0b56b",
+        "minimalist@3": "cdb4a6967d738fe632ef7fc3fe4961c1b1e27b64f4067ec72062cf96d8dcce7b",
     }
 
     assert set(BINGECAT_PRESET_REGISTRY) == set(expected_hashes)
     assert [metadata.ref for metadata in list_public_presets()] == [
-        "clean-notch@2",
-        "prestige@1",
-        "minimalist@2",
+        "clean-notch@3",
+        "prestige@2",
+        "minimalist@3",
     ]
     for ref, expected_hash in expected_hashes.items():
         preset = get_preset(ref)
@@ -103,6 +106,14 @@ def test_latest_presets_apply_bingecat_layout_policy():
         assert dict(config.movie_weights) == expected_movie_weights
         assert dict(config.tv_weights) == expected_tv_weights
         assert config.fallback_to_imdb is True
+
+
+def test_latest_presets_put_most_popular_first_and_legacy_refs_remain_stable():
+    for ref in ("clean-notch@3", "prestige@2", "minimalist@3"):
+        assert get_preset(ref).config.sash_priority[0] == "most_popular"
+    assert get_preset("clean-notch@2").config.sash_priority[0] == "wins"
+    assert get_preset("prestige@1").config.sash_priority[0] == "wins"
+    assert get_preset("minimalist@2").config.sash_mode == "hidden"
 
 
 def test_custom_palette_is_canonical_only_while_visually_active():

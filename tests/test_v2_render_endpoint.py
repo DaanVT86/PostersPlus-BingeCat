@@ -1381,9 +1381,9 @@ def test_presets_endpoint_is_authenticated_canonical_and_secret_free(monkeypatch
     assert payload["version"] == CONTRACT_VERSION
     assert payload["renderer_revision"] == RENDERER_REVISION
     assert [item["ref"] for item in payload["presets"]] == [
-        "clean-notch@2",
-        "prestige@1",
-        "minimalist@2",
+        "clean-notch@3",
+        "prestige@2",
+        "minimalist@3",
     ]
     assert all(len(item["config_sha256"]) == 64 for item in payload["presets"])
     assert all(len(item["requirements_sha256"]) == 64 for item in payload["presets"])

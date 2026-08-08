@@ -77,6 +77,7 @@ FactField = Literal[
     "matched_studios",
     "matched_directors",
     "matched_cast",
+    "most_popular_rank",
     "trending_rank",
     "release_status",
     "is_short_film",
@@ -284,6 +285,7 @@ class NormalizedFacts(StrictModel):
     matched_studios: tuple[Label, ...] | None = Field(default=None, max_length=32)
     matched_directors: tuple[Label, ...] | None = Field(default=None, max_length=32)
     matched_cast: tuple[Label, ...] | None = Field(default=None, max_length=64)
+    most_popular_rank: Annotated[int, Field(strict=True, ge=1, le=20)] | None = None
     trending_rank: Annotated[int, Field(strict=True, ge=1, le=1_000_000)] | None = None
     release_status: Literal[
         "cinema",

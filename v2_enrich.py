@@ -227,6 +227,7 @@ _SLOT_FACT_FIELDS: dict[str, str] = {
     "studio": "matched_studios",
     "director": "matched_directors",
     "cast": "matched_cast",
+    "most_popular": "most_popular_rank",
     "trending": "trending_rank",
     "trending_broad": "trending_rank",
     "new_season": "is_new_season",
