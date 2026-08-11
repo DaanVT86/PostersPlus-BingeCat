@@ -254,3 +254,100 @@ def test_invalid_and_oversized_webp_are_rejected(monkeypatch):
     monkeypatch.setattr(main._cfg, "VANILLA_RENDER_MAX_BYTES", 1_000_000)
     with pytest.raises(ValueError):
         main._validate_vanilla_webp(b"RIFF" + b"\x00" * 20 + b"WEBP")
+
+
+def test_duplicate_enrichment_requests_are_coalesced(monkeypatch):
+    calls = 0
+
+    async def build(media, preset_ref, locale):
+        nonlocal calls
+        calls += 1
+        import asyncio
+        await asyncio.sleep(0.01)
+        return {"snapshot_sha256": "a" * 64}
+
+    monkeypatch.setattr(main, "get_cached_vanilla_snapshot", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_vanilla_snapshot", lambda *_args: None)
+    monkeypatch.setattr(main, "_build_vanilla_enrichment", build)
+    main._vanilla_enrich_inflight.clear()
+
+    async def run():
+        import asyncio
+        return await asyncio.gather(*[
+            main._coalesced_vanilla_enrichment(
+                {"media_type": "movie", "tmdb_id": 603, "imdb_id": "tt0133093"},
+                "prestige@2",
+                "en",
+            )
+            for _ in range(20)
+        ])
+
+    import asyncio
+    results = asyncio.run(run())
+    assert len(results) == 20
+    assert calls == 1
+
+
+def test_enrichment_deadline_returns_retryable_no_store(monkeypatch):
+    async def parsed(_request):
+        return _payload()
+
+    async def slow(*_args):
+        import asyncio
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(main, "_vanilla_payload", parsed)
+    monkeypatch.setattr(main, "_coalesced_vanilla_enrichment", slow)
+    monkeypatch.setattr(main._cfg, "VANILLA_RENDER_TIMEOUT_SECONDS", 0.001)
+    main._vanilla_enrich_semaphore = None
+
+    import asyncio
+    response = asyncio.run(main.vanilla_enrich(object()))
+    assert response.status_code == 503
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["retry-after"] == "5"
+
+
+def test_render_concurrency_is_bounded(monkeypatch):
+    active = 0
+    maximum = 0
+    image_body = _webp_bytes()
+
+    async def fake_get_poster(_request: Request, **_kwargs: object) -> Response:
+        nonlocal active, maximum
+        import asyncio
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return Response(image_body, media_type="image/webp")
+
+    monkeypatch.setattr(main, "get_poster", fake_get_poster)
+    monkeypatch.setattr(main._cfg, "POSTERSPLUS_V2_REQUEST_SECRET", "secret")
+    monkeypatch.setattr(main._cfg, "SERVER_TMDB_KEY", "server-tmdb")
+    monkeypatch.setattr(main._cfg, "SERVER_MDBLIST_KEYS", ["server-mdblist"])
+    monkeypatch.setattr(main._cfg, "VANILLA_RENDER_CONCURRENCY", 2)
+    main._vanilla_render_semaphore = None
+    main._vanilla_nonces.clear()
+
+    payload = _payload()
+    payload.update({
+        "locale": "en", "output_format": "webp", "snapshot_sha256": "a" * 64,
+        "config_sha256": PRESETS["prestige@2"].config_sha256,
+    })
+
+    async def run():
+        import asyncio
+        requests = [
+            _signed_request(
+                "/v2/vanilla/render",
+                json.dumps(payload, separators=(",", ":")).encode(),
+            )
+            for _ in range(10)
+        ]
+        return await asyncio.gather(*[main.vanilla_render(request) for request in requests])
+
+    import asyncio
+    responses = asyncio.run(run())
+    assert all(response.status_code == 200 for response in responses)
+    assert maximum == 2
