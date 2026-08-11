@@ -90,6 +90,7 @@ def _cached_enrichment(ref: str = "prestige@2") -> dict:
         "schema": "postersplus_vanilla_snapshot",
         "version": 1,
         "media": media,
+        "most_popular_rank": None,
         "locale": "en",
         "title": "The Matrix",
         "release_year": "1999",
@@ -199,7 +200,7 @@ def test_fixed_slice_accepts_movie_and_series_for_every_preset(preset_ref, media
     payload = _payload(preset_ref)
     payload["media"] = media
 
-    parsed_media, parsed_ref, locale = main._validate_vanilla_request(
+    parsed_media, parsed_ref, locale, most_popular_rank = main._validate_vanilla_request(
         payload,
         render=False,
     )
@@ -207,6 +208,7 @@ def test_fixed_slice_accepts_movie_and_series_for_every_preset(preset_ref, media
     assert parsed_media == media
     assert parsed_ref == preset_ref
     assert locale == "en"
+    assert most_popular_rank is None
 
 
 def test_signature_and_query_are_rejected(monkeypatch):
@@ -270,14 +272,64 @@ def test_invalid_preset_and_user_credentials_are_rejected_before_provider_io(mon
 
 
 def test_enrich_locale_defaults_to_first_requested_locale():
-    media, preset_ref, locale = main._validate_vanilla_request(_payload(), render=False)
+    media, preset_ref, locale, most_popular_rank = main._validate_vanilla_request(
+        _payload(), render=False
+    )
     assert media["tmdb_id"] == 603
     assert preset_ref == "prestige@2"
     assert locale == "en"
+    assert most_popular_rank is None
 
     compatibility_payload = _payload()
     compatibility_payload["schema"] = "bingecat_postersplus_vanilla"
     assert main._validate_vanilla_request(compatibility_payload, render=False)[2] == "en"
+
+
+@pytest.mark.parametrize("rank", [None, 1, 20])
+def test_most_popular_rank_contract_accepts_only_bounded_integers(rank):
+    payload = _payload()
+    payload["most_popular_rank"] = rank
+
+    assert main._validate_vanilla_request(payload, render=False)[3] == rank
+
+
+@pytest.mark.parametrize("rank", [True, "1", 0, 21])
+def test_most_popular_rank_contract_rejects_invalid_values(rank):
+    payload = _payload()
+    payload["most_popular_rank"] = rank
+
+    with pytest.raises(HTTPException) as exc_info:
+        main._validate_vanilla_request(payload, render=False)
+    assert exc_info.value.status_code == 400
+
+
+def test_most_popular_rank_is_part_of_snapshot_cache_identity():
+    media = _payload()["media"]
+
+    assert len({
+        main._vanilla_snapshot_key(media, "prestige@2", "en", rank)
+        for rank in (None, 1, 2)
+    }) == 3
+
+
+def test_cached_enrichment_cannot_cross_most_popular_rank_identities():
+    value = _cached_enrichment()
+    value["snapshot"]["most_popular_rank"] = 1
+    value["snapshot"]["discovery_meta"]["most_popular_rank"] = 1
+    value["snapshot_sha256"] = hashlib.sha256(
+        main._vanilla_json(value["snapshot"])
+    ).hexdigest()
+    media = _payload()["media"]
+
+    assert main._valid_cached_vanilla_enrichment(
+        value, media, "prestige@2", "en", 1
+    )
+    assert not main._valid_cached_vanilla_enrichment(
+        value, media, "prestige@2", "en", 2
+    )
+    assert main.pick_sash(
+        main.DiscoveryMeta(most_popular_rank=1), ["most_popular"]
+    ) == ("#1 Today", "trending")
 
 
 def test_render_passes_server_keys_and_returns_contract_metadata(monkeypatch):
@@ -399,7 +451,7 @@ def test_invalid_and_oversized_webp_are_rejected(monkeypatch):
 def test_duplicate_enrichment_requests_are_coalesced(monkeypatch):
     calls = 0
 
-    async def build(media, preset_ref, locale):
+    async def build(media, preset_ref, locale, most_popular_rank=None):
         nonlocal calls
         calls += 1
         import asyncio
@@ -450,7 +502,7 @@ def test_enrichment_fails_closed_when_snapshot_persistence_fails(monkeypatch):
 def test_timed_out_enrichment_waiter_does_not_cancel_owner(monkeypatch):
     calls = 0
 
-    async def build(media, preset_ref, locale):
+    async def build(media, preset_ref, locale, most_popular_rank=None):
         nonlocal calls
         calls += 1
         import asyncio
@@ -542,9 +594,12 @@ def test_enrichment_uses_persisted_mdblist_cache_without_live_key(monkeypatch):
         {"media_type": "movie", "tmdb_id": 603, "imdb_id": "tt0133093"},
         "prestige@2",
         "en",
+        1,
     ))
 
     assert result["snapshot"]["ratings"] == {"imdb": 87.0}
+    assert result["snapshot"]["most_popular_rank"] == 1
+    assert result["snapshot"]["discovery_meta"]["most_popular_rank"] == 1
     assert result["renderer_revision"] == RENDERER_REVISION
 
 
@@ -784,6 +839,8 @@ def test_render_concurrency_is_bounded_across_distinct_identities(monkeypatch):
             "schema": "postersplus_vanilla_snapshot",
             "version": 1,
             "media": media,
+            "most_popular_rank": None,
+            "discovery_meta": asdict(main.DiscoveryMeta()),
         }
         snapshot_sha256 = hashlib.sha256(main._vanilla_json(snapshot)).hexdigest()
         document = {
