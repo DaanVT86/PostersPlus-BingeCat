@@ -7,13 +7,14 @@ import hmac
 import re
 import time
 from collections.abc import Mapping
-from uuid import UUID, uuid4
+from uuid import RFC_4122, UUID, uuid4
 
 
 AUTH_VERSION = "v1"
 CLOCK_SKEW_SECONDS = 60
 MAX_BODY_BYTES = 256 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_TIMESTAMP = re.compile(r"^(?:0|[1-9][0-9]{0,11})$")
 
 
 class AuthError(ValueError):
@@ -40,6 +41,8 @@ def sign_request(
         request_uuid = UUID(str(request_id)) if request_id is not None else uuid4()
     except (TypeError, ValueError) as exc:
         raise AuthError("authentication failed") from exc
+    if request_uuid.version != 4 or request_uuid.variant != RFC_4122:
+        raise AuthError("authentication failed")
     request_timestamp = int(time.time() if timestamp is None else timestamp)
     digest = hashlib.sha256(body).hexdigest()
     canonical = "\n".join(
@@ -103,7 +106,11 @@ def verify_request(
     if caller != "bingecat" or audience != "postersplus":
         raise AuthError("authentication failed")
     try:
-        UUID(request_id)
+        parsed_request_id = UUID(request_id)
+        if parsed_request_id.version != 4 or parsed_request_id.variant != RFC_4122:
+            raise ValueError
+        if not _TIMESTAMP.fullmatch(timestamp_raw):
+            raise ValueError
         timestamp = int(timestamp_raw)
     except (TypeError, ValueError) as exc:
         raise AuthError("authentication failed") from exc

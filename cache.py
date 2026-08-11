@@ -52,6 +52,7 @@ def _ttl_jitter(cache_key: str, window: float) -> float:
 _local = threading.local()
 _db_lock = threading.Lock()     # serialises writes within this process
 _initialised = False
+VANILLA_SNAPSHOT_CACHE_TTL_SECONDS = 7 * 86400
 
 
 def _apply_conn_pragmas(conn: sqlite3.Connection) -> None:
@@ -212,6 +213,18 @@ def init_db() -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_final_poster_cached_at "
         "ON final_poster_cache(cached_at)"
+    )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS vanilla_snapshot_cache (
+            cache_key     TEXT PRIMARY KEY,
+            snapshot_json BLOB    NOT NULL,
+            cached_at     INTEGER NOT NULL
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vanilla_snapshot_cached_at "
+        "ON vanilla_snapshot_cache(cached_at)"
     )
 
     # Digital release cache.
@@ -400,7 +413,7 @@ def get_cached_final_poster(cache_key: str) -> bytes | None:
         return None
 
 
-def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes, request_params: str = None, ttl_override: int = None) -> None:
+def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes, request_params: str = None, ttl_override: int = None) -> bool:
     """Store a fully composited JPEG poster into L1 (RAM) and L2 (SQLite)."""
     # L1: always store the freshly-rendered composite so the next hit skips SQLite
     if COMPOSITE_MEM_ENTRIES > 0:
@@ -439,8 +452,10 @@ def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes, request_params: s
                     )
                     logger.info(f"Composite cache cap: evicted {overflow} oldest entries")
             get_db().commit()
+        return True
     except Exception as exc:
         logger.error(f"Final poster cache write error: {exc}")
+        return False
 
 def delete_cached_final_poster(cache_key: str) -> None:
     """Remove a composited poster from both L1 (RAM) and L2 (SQLite) caches."""
@@ -460,17 +475,13 @@ def get_cached_vanilla_snapshot(cache_key: str) -> bytes | None:
     conn = None
     try:
         conn = get_db()
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS vanilla_snapshot_cache "
-            "(cache_key TEXT PRIMARY KEY, snapshot_json BLOB NOT NULL, cached_at INTEGER NOT NULL)"
-        )
         row = conn.execute(
             "SELECT snapshot_json, cached_at FROM vanilla_snapshot_cache WHERE cache_key = ?",
             (cache_key,),
         ).fetchone()
         if not row:
             return None
-        if time.time() - int(row[1]) > 7 * 86400:
+        if time.time() - int(row[1]) > VANILLA_SNAPSHOT_CACHE_TTL_SECONDS:
             with _db_lock:
                 conn.execute("DELETE FROM vanilla_snapshot_cache WHERE cache_key = ?", (cache_key,))
                 conn.commit()
@@ -483,8 +494,10 @@ def get_cached_vanilla_snapshot(cache_key: str) -> bytes | None:
         return None
 
 
-def set_cached_vanilla_snapshot(cache_key: str, snapshot_json: bytes) -> None:
+def set_cached_vanilla_snapshot(cache_key: str, snapshot_json: bytes) -> bool:
     """Persist an enrichment snapshot without sharing the final-artifact table."""
+    if not isinstance(snapshot_json, bytes):
+        raise TypeError("vanilla snapshot must be bytes")
     if len(snapshot_json) > 256 * 1024:
         raise ValueError("vanilla snapshot exceeds bounded size")
     conn = None
@@ -492,18 +505,16 @@ def set_cached_vanilla_snapshot(cache_key: str, snapshot_json: bytes) -> None:
         with _db_lock:
             conn = get_db()
             conn.execute(
-                "CREATE TABLE IF NOT EXISTS vanilla_snapshot_cache "
-                "(cache_key TEXT PRIMARY KEY, snapshot_json BLOB NOT NULL, cached_at INTEGER NOT NULL)"
-            )
-            conn.execute(
                 "INSERT OR REPLACE INTO vanilla_snapshot_cache(cache_key, snapshot_json, cached_at) VALUES (?, ?, ?)",
                 (cache_key, snapshot_json, int(time.time())),
             )
             conn.commit()
+        return True
     except Exception as exc:
         if conn is not None:
             conn.rollback()
         logger.warning("Vanilla snapshot cache write failed: %s", exc)
+        return False
 
 def invalidate_final_posters(tmdb_id: str, media_type: str | None = None) -> None:
     """Invalidate all composited posters for a specific TMDB ID.
@@ -561,7 +572,7 @@ def get_cache_stats() -> dict:
         db = get_db()
         for table in (
             "rating_cache", "quality_cache", "trending_cache",
-            "tmdb_metadata_cache", "final_poster_cache",
+            "tmdb_metadata_cache", "final_poster_cache", "vanilla_snapshot_cache",
             "digital_release_cache", "release_status_cache",
             "movie_release_info_cache", "text_detection_cache",
         ):
@@ -617,6 +628,15 @@ def prune_caches() -> None:
             )
             if r.rowcount:
                 logger.info(f"Pruned {r.rowcount} expired composite cache entries")
+
+            r = db.execute(
+                "DELETE FROM vanilla_snapshot_cache WHERE cached_at < ?",
+                (now - VANILLA_SNAPSHOT_CACHE_TTL_SECONDS,),
+            )
+            if r.rowcount:
+                logger.info(
+                    f"Pruned {r.rowcount} expired vanilla snapshot cache entries"
+                )
 
             # Ratings / quality / metadata — use the most generous TTL so we
             # never evict something that could still be considered fresh.

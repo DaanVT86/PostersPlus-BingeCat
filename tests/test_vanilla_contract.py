@@ -2,6 +2,8 @@ import hashlib
 import hmac
 import io
 import json
+from dataclasses import asdict
+from urllib.parse import urlencode
 from uuid import uuid4
 
 import pytest
@@ -15,7 +17,9 @@ from preset_registry import (
     EXPECTED_CONFIG_HASHES,
     EXPECTED_REQUIREMENTS_HASHES,
     PRESETS,
+    RENDERER_REVISION,
     public_registry,
+    query_params,
 )
 from v2_auth import AuthError, sign_request, verify_request
 
@@ -72,6 +76,57 @@ def _webp_bytes() -> bytes:
     return output.getvalue()
 
 
+def _cached_enrichment(ref: str = "prestige@2") -> dict:
+    media = _payload(ref)["media"]
+    snapshot = {
+        "schema": "postersplus_vanilla_snapshot",
+        "version": 1,
+        "media": media,
+        "locale": "en",
+        "title": "The Matrix",
+        "release_year": "1999",
+        "genre_ids": [28, 878],
+        "genre": "Science Fiction",
+        "poster_path": None,
+        "backdrop_path": None,
+        "is_textless": False,
+        "logos": [],
+        "ratings": {"imdb": 87.0},
+        "release_date": "1999-03-31",
+        "age_rating": 16,
+        "award_wins": [],
+        "award_noms": [],
+        "festival_label": None,
+        "is_cult": False,
+        "is_true_story": False,
+        "is_metacritic": False,
+        "is_digital_release": False,
+        "trending_rank": None,
+        "release_status": None,
+        "recent_digital_release_date": None,
+        "tmdb_data": {
+            "credits": {"cast": [], "crew": []},
+            "production_companies": [],
+            "original_language": "en",
+            "original_title": "The Matrix",
+            "poster_langs": {},
+            "imdb_id": "tt0133093",
+        },
+        "discovery_meta": asdict(main.DiscoveryMeta()),
+    }
+    return {
+        "schema": "bingecat_postersplus_v2",
+        "version": 1,
+        "media": media,
+        "preset_ref": ref,
+        "locale": "en",
+        "snapshot": snapshot,
+        "snapshot_sha256": hashlib.sha256(main._vanilla_json(snapshot)).hexdigest(),
+        "config_sha256": PRESETS[ref].config_sha256,
+        "renderer_revision": RENDERER_REVISION,
+    }
+
+
 def test_registry_is_exactly_the_fixed_refs_and_hashes_are_stable():
     assert tuple(PRESETS) == ACTIVE_PRESET_REFS
     assert EXPECTED_CONFIG_HASHES == {
@@ -107,6 +162,46 @@ def test_public_registry_has_no_secret_bearing_fields():
     encoded = json.dumps(public_registry()).lower()
     for field in ("access_key", "api_key", "apikey", "mdblist_key", "secret", "token", "password"):
         assert field not in encoded
+
+
+@pytest.mark.parametrize("preset_ref", ACTIVE_PRESET_REFS)
+def test_registry_query_preserves_effective_vanilla_sash_policy(preset_ref):
+    config = PRESETS[preset_ref].canonical_config
+    parsed = main.build_request_config(query_params(preset_ref))
+    excluded = set(config["sash_exclusions"])
+    expected = [
+        slot
+        for slot in config["sash_priority"]
+        if slot not in excluded and slot in main.ALL_PRIORITY_SLOTS
+    ]
+
+    assert parsed.sash_priority == expected
+    assert parsed.minimalist_append_mode == min(
+        int(config["minimalist_append_mode"]),
+        2,
+    )
+
+
+@pytest.mark.parametrize("preset_ref", ACTIVE_PRESET_REFS)
+@pytest.mark.parametrize(
+    "media",
+    [
+        {"media_type": "movie", "tmdb_id": 603, "imdb_id": "tt0133093"},
+        {"media_type": "series", "tmdb_id": 1396, "imdb_id": "tt0903747"},
+    ],
+)
+def test_fixed_slice_accepts_movie_and_series_for_every_preset(preset_ref, media):
+    payload = _payload(preset_ref)
+    payload["media"] = media
+
+    parsed_media, parsed_ref, locale = main._validate_vanilla_request(
+        payload,
+        render=False,
+    )
+
+    assert parsed_media == media
+    assert parsed_ref == preset_ref
+    assert locale == "en"
 
 
 def test_signed_private_contract_requires_bingecat_and_postersplus():
@@ -183,6 +278,24 @@ def test_invalid_preset_and_user_credentials_are_rejected_before_provider_io():
         main._validate_vanilla_request(legacy_schema, render=False)
     assert exc_info.value.status_code == 400
 
+    extra = _payload()
+    extra["unexpected"] = True
+    with pytest.raises(HTTPException) as exc_info:
+        main._validate_vanilla_request(extra, render=False)
+    assert exc_info.value.status_code == 400
+
+    missing_media_field = _payload()
+    del missing_media_field["media"]["imdb_id"]
+    with pytest.raises(HTTPException) as exc_info:
+        main._validate_vanilla_request(missing_media_field, render=False)
+    assert exc_info.value.status_code == 400
+
+    bool_version = _payload()
+    bool_version["version"] = True
+    with pytest.raises(HTTPException) as exc_info:
+        main._validate_vanilla_request(bool_version, render=False)
+    assert exc_info.value.status_code == 400
+
     invalid = _payload("legacy@1")
     with pytest.raises(HTTPException) as exc_info:
         main._validate_vanilla_request(invalid, render=False)
@@ -209,13 +322,15 @@ def test_enrich_locale_defaults_to_first_requested_locale():
 
 
 def test_render_passes_server_keys_and_returns_contract_metadata(monkeypatch):
+    cached_enrichment = _cached_enrichment()
     body_payload = _payload()
     body_payload.update({
         "locale": "en",
         "output_format": "webp",
-        "snapshot_sha256": "a" * 64,
+        "snapshot_sha256": cached_enrichment["snapshot_sha256"],
         "config_sha256": PRESETS["prestige@2"].config_sha256,
     })
+    body_payload.pop("locales")
     body = json.dumps(body_payload, separators=(",", ":")).encode()
     request = _signed_request("/v2/vanilla/render", body)
     captured: dict[str, object] = {}
@@ -224,6 +339,7 @@ def test_render_passes_server_keys_and_returns_contract_metadata(monkeypatch):
     async def fake_get_poster(inner_request: Request, **kwargs: object) -> Response:
         captured["query"] = dict(inner_request.query_params)
         captured["kwargs"] = kwargs
+        captured["snapshot"] = inner_request.state.posterplus_vanilla_snapshot
         return Response(image_body, media_type="image/webp")
 
     monkeypatch.setattr(main, "get_poster", fake_get_poster)
@@ -231,6 +347,14 @@ def test_render_passes_server_keys_and_returns_contract_metadata(monkeypatch):
     monkeypatch.setattr(main._cfg, "ACCESS_KEY", "server-access")
     monkeypatch.setattr(main._cfg, "SERVER_TMDB_KEY", "server-tmdb")
     monkeypatch.setattr(main._cfg, "SERVER_MDBLIST_KEYS", ["server-mdblist"])
+    monkeypatch.setattr(
+        main,
+        "get_cached_vanilla_snapshot",
+        lambda _key: json.dumps(cached_enrichment).encode(),
+    )
+    monkeypatch.setattr(main, "get_cached_final_poster", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_final_poster", lambda *_args, **_kwargs: None)
+    main._vanilla_render_inflight.clear()
     main._vanilla_nonces.clear()
 
     import asyncio
@@ -239,6 +363,7 @@ def test_render_passes_server_keys_and_returns_contract_metadata(monkeypatch):
     assert response.body == image_body
     assert response.headers["content-type"] == "image/webp"
     assert response.headers["x-postersplus-content-sha256"] == hashlib.sha256(image_body).hexdigest()
+    assert response.headers["x-postersplus-renderer-revision"] == RENDERER_REVISION
     assert response.headers["etag"] == f'"{hashlib.sha256(image_body).hexdigest()}"'
     assert captured["query"]["badge_height"] == "28"
     assert captured["kwargs"]["tmdb_id"] == "603"
@@ -246,6 +371,63 @@ def test_render_passes_server_keys_and_returns_contract_metadata(monkeypatch):
     assert captured["kwargs"]["tmdb_key"] == "server-tmdb"
     assert captured["kwargs"]["mdblist_key"] == "server-mdblist"
     assert captured["kwargs"]["badge_height"] == "28"
+    assert captured["snapshot"] == cached_enrichment["snapshot"]
+
+
+def test_snapshot_backed_render_does_not_reproject_provider_facts(monkeypatch):
+    cached_enrichment = _cached_enrichment()
+    snapshot = cached_enrichment["snapshot"]
+    query = urlencode(query_params("prestige@2", locale="en")).encode("ascii")
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/poster",
+        "raw_path": b"/poster",
+        "query_string": query,
+        "headers": [],
+        "client": ("127.0.0.1", 0),
+        "server": ("localhost", 80),
+    }
+    request = Request(scope)
+    request.state.posterplus_vanilla_snapshot = snapshot
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("snapshot-backed render must not read live provider facts")
+
+    async def unexpected_async(*_args, **_kwargs):
+        unexpected()
+
+    monkeypatch.setattr(main, "get_cached_final_poster", unexpected)
+    monkeypatch.setattr(main, "get_cached_rating", unexpected)
+    monkeypatch.setattr(main, "_coalesced_fetch_poster_metadata", unexpected_async)
+    monkeypatch.setattr(main, "fetch_rating", unexpected_async)
+    monkeypatch.setattr(main, "fetch_trending_rank", unexpected_async)
+    monkeypatch.setattr(main, "fetch_release_status", unexpected_async)
+    monkeypatch.setattr(main, "fetch_recent_movie_digital_release_date", unexpected_async)
+    monkeypatch.setattr(main, "get_cached_quality", lambda *_args: [])
+    monkeypatch.setattr(main, "quality_source_configured", lambda: False)
+    monkeypatch.setattr(main.tvdb, "tvdb_enabled", lambda: False)
+    monkeypatch.setattr(main, "build_poster", lambda image, *_args, **_kwargs: image)
+    monkeypatch.setattr(main._cfg, "SERVER_TMDB_KEY", "server-tmdb")
+    monkeypatch.setattr(main._cfg, "SERVER_MDBLIST_KEYS", ["server-mdblist"])
+    monkeypatch.setattr(main._cfg, "IMAGE_FORMAT", "webp")
+    monkeypatch.setattr(main, "_HTTP_CLIENT", object())
+
+    import asyncio
+    response = asyncio.run(main.get_poster(
+        request,
+        tmdb_id="603",
+        imdb_id="tt0133093",
+        type="movie",
+        tmdb_key="server-tmdb",
+        mdblist_key="server-mdblist",
+    ))
+
+    assert response.status_code == 200
+    assert response.media_type == "image/webp"
+    assert response.body[:4] == b"RIFF"
 
 
 def test_invalid_and_oversized_webp_are_rejected(monkeypatch):
@@ -288,6 +470,237 @@ def test_duplicate_enrichment_requests_are_coalesced(monkeypatch):
     assert calls == 1
 
 
+def test_enrichment_fails_closed_when_snapshot_persistence_fails(monkeypatch):
+    async def build(*_args):
+        return {"snapshot_sha256": "a" * 64}
+
+    monkeypatch.setattr(main, "_build_vanilla_enrichment", build)
+    monkeypatch.setattr(main, "get_cached_vanilla_snapshot", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_vanilla_snapshot", lambda *_args: False)
+    main._vanilla_enrich_inflight.clear()
+    main._vanilla_enrich_semaphore = None
+
+    import asyncio
+    with pytest.raises(RuntimeError, match="snapshot persistence"):
+        asyncio.run(main._coalesced_vanilla_enrichment(
+            _payload()["media"],
+            "prestige@2",
+            "en",
+        ))
+
+
+def test_timed_out_enrichment_waiter_does_not_cancel_owner(monkeypatch):
+    calls = 0
+
+    async def build(media, preset_ref, locale):
+        nonlocal calls
+        calls += 1
+        import asyncio
+        await asyncio.sleep(0.02)
+        return {"snapshot_sha256": "a" * 64}
+
+    monkeypatch.setattr(main, "get_cached_vanilla_snapshot", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_vanilla_snapshot", lambda *_args: None)
+    monkeypatch.setattr(main, "_build_vanilla_enrichment", build)
+    main._vanilla_enrich_inflight.clear()
+    media = {"media_type": "movie", "tmdb_id": 603, "imdb_id": "tt0133093"}
+
+    async def run():
+        import asyncio
+        owner = asyncio.create_task(
+            main._coalesced_vanilla_enrichment(media, "prestige@2", "en")
+        )
+        await asyncio.sleep(0)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                main._coalesced_vanilla_enrichment(media, "prestige@2", "en"),
+                timeout=0.001,
+            )
+        return await owner
+
+    import asyncio
+    assert asyncio.run(run()) == {"snapshot_sha256": "a" * 64}
+    assert calls == 1
+
+
+def test_enrichment_mdblist_failure_is_not_persisted(monkeypatch):
+    async def metadata(*_args, **_kwargs):
+        return ([28], False, [], "1999", "The Matrix", "/poster.jpg", None, {})
+
+    async def failed_rating(*_args, **_kwargs):
+        return main.FETCH_FAILED
+
+    writes: list[bytes] = []
+    monkeypatch.setattr(main, "fetch_poster_metadata", metadata)
+    monkeypatch.setattr(main, "fetch_rating", failed_rating)
+    monkeypatch.setattr(main, "get_cached_rating", lambda _imdb_id: None)
+    monkeypatch.setattr(main, "get_cached_vanilla_snapshot", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_vanilla_snapshot", lambda _key, body: writes.append(body))
+    monkeypatch.setattr(main._cfg, "SERVER_TMDB_KEY", "server-tmdb")
+    monkeypatch.setattr(main._cfg, "SERVER_MDBLIST_KEYS", ["server-mdblist"])
+    monkeypatch.setattr(main, "_HTTP_CLIENT", object())
+    main._vanilla_enrich_inflight.clear()
+    main._mdblist_semaphore = None
+
+    import asyncio
+    with pytest.raises(RuntimeError):
+        asyncio.run(main._coalesced_vanilla_enrichment(
+            {"media_type": "movie", "tmdb_id": 603, "imdb_id": "tt0133093"},
+            "prestige@2",
+            "en",
+        ))
+    assert writes == []
+
+
+def test_enrichment_uses_persisted_mdblist_cache_without_live_key(monkeypatch):
+    async def metadata(*_args, **_kwargs):
+        return ([28], False, [], "1999", "The Matrix", "/poster.jpg", None, {})
+
+    async def unexpected_rating(*_args, **_kwargs):
+        raise AssertionError("warm persisted rating must not call MDBList")
+
+    async def no_provider_fact(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(main, "fetch_poster_metadata", metadata)
+    monkeypatch.setattr(main, "fetch_rating", unexpected_rating)
+    monkeypatch.setattr(main, "fetch_trending_rank", no_provider_fact)
+    monkeypatch.setattr(main, "fetch_release_status", no_provider_fact)
+    monkeypatch.setattr(main, "fetch_recent_movie_digital_release_date", no_provider_fact)
+    monkeypatch.setattr(
+        main,
+        "get_cached_rating",
+        lambda _imdb_id: (
+            {"imdb": 87.0}, "Science Fiction", "1999-03-31", [], [], True,
+            None, 16, False, False, False,
+        ),
+    )
+    monkeypatch.setattr(main._cfg, "SERVER_TMDB_KEY", "server-tmdb")
+    monkeypatch.setattr(main._cfg, "SERVER_MDBLIST_KEYS", [])
+    monkeypatch.setattr(main, "_HTTP_CLIENT", object())
+
+    import asyncio
+    result = asyncio.run(main._build_vanilla_enrichment(
+        {"media_type": "movie", "tmdb_id": 603, "imdb_id": "tt0133093"},
+        "prestige@2",
+        "en",
+    ))
+
+    assert result["snapshot"]["ratings"] == {"imdb": 87.0}
+    assert result["renderer_revision"] == RENDERER_REVISION
+
+
+def test_render_rejects_unknown_snapshot_before_render(monkeypatch):
+    payload = _payload()
+    payload.update({
+        "locale": "en", "output_format": "webp", "snapshot_sha256": "a" * 64,
+        "config_sha256": PRESETS["prestige@2"].config_sha256,
+    })
+    payload.pop("locales")
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    request = _signed_request("/v2/vanilla/render", body)
+    monkeypatch.setattr(main._cfg, "POSTERSPLUS_V2_REQUEST_SECRET", "secret")
+    monkeypatch.setattr(main, "get_cached_vanilla_snapshot", lambda _key: None)
+    main._vanilla_nonces.clear()
+
+    import asyncio
+    response = asyncio.run(main.vanilla_render(request))
+    assert response.status_code == 409
+    assert json.loads(response.body) == {"code": "snapshot_unavailable"}
+
+
+def test_render_uses_imdb_id_resolved_by_enrichment(monkeypatch):
+    request_media = {"media_type": "movie", "tmdb_id": 603, "imdb_id": None}
+    cached_enrichment = _cached_enrichment()
+    cached_enrichment["media"] = {
+        "media_type": "movie", "tmdb_id": 603, "imdb_id": "tt0133093",
+    }
+    cached_enrichment["snapshot"]["media"] = cached_enrichment["media"]
+    cached_enrichment["snapshot_sha256"] = hashlib.sha256(
+        main._vanilla_json(cached_enrichment["snapshot"])
+    ).hexdigest()
+    payload = _payload()
+    payload["media"] = request_media
+    payload.update({
+        "locale": "en", "output_format": "webp",
+        "snapshot_sha256": cached_enrichment["snapshot_sha256"],
+        "config_sha256": PRESETS["prestige@2"].config_sha256,
+    })
+    payload.pop("locales")
+    captured: dict[str, object] = {}
+
+    async def fake_get_poster(_request: Request, **kwargs: object) -> Response:
+        captured.update(kwargs)
+        return Response(_webp_bytes(), media_type="image/webp")
+
+    monkeypatch.setattr(main, "get_poster", fake_get_poster)
+    monkeypatch.setattr(main._cfg, "POSTERSPLUS_V2_REQUEST_SECRET", "secret")
+    monkeypatch.setattr(
+        main,
+        "get_cached_vanilla_snapshot",
+        lambda _key: json.dumps(cached_enrichment).encode(),
+    )
+    monkeypatch.setattr(main, "get_cached_final_poster", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_final_poster", lambda *_args, **_kwargs: None)
+    main._vanilla_render_inflight.clear()
+    main._vanilla_nonces.clear()
+
+    import asyncio
+    response = asyncio.run(main.vanilla_render(_signed_request(
+        "/v2/vanilla/render",
+        json.dumps(payload, separators=(",", ":")).encode(),
+    )))
+
+    assert response.status_code == 200
+    assert captured["imdb_id"] == "tt0133093"
+
+
+def test_render_accepts_snapshot_without_resolved_imdb_id(monkeypatch):
+    cached_enrichment = _cached_enrichment()
+    media = {"media_type": "movie", "tmdb_id": 603, "imdb_id": None}
+    cached_enrichment["media"] = media
+    cached_enrichment["snapshot"]["media"] = media
+    cached_enrichment["snapshot"]["tmdb_data"]["imdb_id"] = None
+    cached_enrichment["snapshot_sha256"] = hashlib.sha256(
+        main._vanilla_json(cached_enrichment["snapshot"])
+    ).hexdigest()
+    payload = _payload()
+    payload["media"] = media
+    payload.update({
+        "locale": "en",
+        "output_format": "webp",
+        "snapshot_sha256": cached_enrichment["snapshot_sha256"],
+        "config_sha256": PRESETS["prestige@2"].config_sha256,
+    })
+    payload.pop("locales")
+    captured: dict[str, object] = {}
+
+    async def fake_get_poster(_request: Request, **kwargs: object) -> Response:
+        captured.update(kwargs)
+        return Response(_webp_bytes(), media_type="image/webp")
+
+    monkeypatch.setattr(main, "get_poster", fake_get_poster)
+    monkeypatch.setattr(main._cfg, "POSTERSPLUS_V2_REQUEST_SECRET", "secret")
+    monkeypatch.setattr(
+        main,
+        "get_cached_vanilla_snapshot",
+        lambda _key: json.dumps(cached_enrichment).encode(),
+    )
+    monkeypatch.setattr(main, "get_cached_final_poster", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_final_poster", lambda *_args, **_kwargs: None)
+    main._vanilla_render_inflight.clear()
+    main._vanilla_nonces.clear()
+
+    import asyncio
+    response = asyncio.run(main.vanilla_render(_signed_request(
+        "/v2/vanilla/render",
+        json.dumps(payload, separators=(",", ":")).encode(),
+    )))
+
+    assert response.status_code == 200
+    assert captured["imdb_id"] == ""
+
+
 def test_enrichment_deadline_returns_retryable_no_store(monkeypatch):
     async def parsed(_request):
         return _payload()
@@ -308,10 +721,137 @@ def test_enrichment_deadline_returns_retryable_no_store(monkeypatch):
     assert response.headers["retry-after"] == "5"
 
 
-def test_render_concurrency_is_bounded(monkeypatch):
+def test_duplicate_render_requests_are_coalesced_and_warm_cached(monkeypatch):
+    active = 0
+    maximum = 0
+    calls = 0
+    image_body = _webp_bytes()
+    cached_enrichment = _cached_enrichment()
+    render_cache: dict[str, bytes] = {}
+
+    async def fake_get_poster(_request: Request, **_kwargs: object) -> Response:
+        nonlocal active, maximum, calls
+        import asyncio
+        calls += 1
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return Response(image_body, media_type="image/webp")
+
+    monkeypatch.setattr(main, "get_poster", fake_get_poster)
+    monkeypatch.setattr(main._cfg, "POSTERSPLUS_V2_REQUEST_SECRET", "secret")
+    monkeypatch.setattr(main._cfg, "SERVER_TMDB_KEY", "server-tmdb")
+    monkeypatch.setattr(main._cfg, "SERVER_MDBLIST_KEYS", ["server-mdblist"])
+    monkeypatch.setattr(
+        main,
+        "get_cached_vanilla_snapshot",
+        lambda _key: json.dumps(cached_enrichment).encode(),
+    )
+    monkeypatch.setattr(main, "get_cached_final_poster", render_cache.get)
+    monkeypatch.setattr(
+        main,
+        "set_cached_final_poster",
+        lambda key, body, **_kwargs: render_cache.__setitem__(key, body),
+    )
+    monkeypatch.setattr(main._cfg, "VANILLA_RENDER_CONCURRENCY", 2)
+    main._vanilla_render_semaphore = None
+    main._vanilla_render_inflight.clear()
+    main._vanilla_nonces.clear()
+
+    payload = _payload()
+    payload.update({
+        "locale": "en", "output_format": "webp",
+        "snapshot_sha256": cached_enrichment["snapshot_sha256"],
+        "config_sha256": PRESETS["prestige@2"].config_sha256,
+    })
+    payload.pop("locales")
+
+    async def run():
+        import asyncio
+        requests = [
+            _signed_request(
+                "/v2/vanilla/render",
+                json.dumps(payload, separators=(",", ":")).encode(),
+            )
+            for _ in range(10)
+        ]
+        responses = await asyncio.gather(*[
+            main.vanilla_render(request) for request in requests
+        ])
+        warm = await main.vanilla_render(_signed_request(
+            "/v2/vanilla/render",
+            json.dumps(payload, separators=(",", ":")).encode(),
+        ))
+        return responses, warm
+
+    import asyncio
+    responses, warm = asyncio.run(run())
+    assert all(response.status_code == 200 for response in responses)
+    assert warm.status_code == 200
+    assert warm.body == image_body
+    assert maximum == 1
+    assert calls == 1
+
+
+def test_render_fails_closed_when_final_cache_persistence_fails(monkeypatch):
+    deleted: list[str] = []
+    monkeypatch.setattr(main, "get_cached_final_poster", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_final_poster", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(main, "delete_cached_final_poster", deleted.append)
+    main._vanilla_render_inflight.clear()
+
+    async def render() -> bytes:
+        return _webp_bytes()
+
+    import asyncio
+    with pytest.raises(RuntimeError, match="render persistence"):
+        asyncio.run(main._coalesced_vanilla_render("render-key", render))
+    assert deleted == ["render-key"]
+
+
+def test_render_concurrency_is_bounded_across_distinct_identities(monkeypatch):
     active = 0
     maximum = 0
     image_body = _webp_bytes()
+    documents: dict[str, bytes] = {}
+    payloads: list[dict] = []
+    for offset in range(10):
+        media = {
+            "media_type": "movie",
+            "tmdb_id": 603 + offset,
+            "imdb_id": f"tt{133093 + offset:07d}",
+        }
+        snapshot = {
+            "schema": "postersplus_vanilla_snapshot",
+            "version": 1,
+            "media": media,
+        }
+        snapshot_sha256 = hashlib.sha256(main._vanilla_json(snapshot)).hexdigest()
+        document = {
+            "schema": "bingecat_postersplus_v2",
+            "version": 1,
+            "media": media,
+            "preset_ref": "prestige@2",
+            "locale": "en",
+            "snapshot": snapshot,
+            "snapshot_sha256": snapshot_sha256,
+            "config_sha256": PRESETS["prestige@2"].config_sha256,
+            "renderer_revision": RENDERER_REVISION,
+        }
+        documents[
+            main._vanilla_snapshot_key(media, "prestige@2", "en")
+        ] = json.dumps(document).encode()
+        payloads.append({
+            "schema": "bingecat_postersplus_vanilla",
+            "version": 1,
+            "media": media,
+            "preset_ref": "prestige@2",
+            "snapshot_sha256": snapshot_sha256,
+            "config_sha256": PRESETS["prestige@2"].config_sha256,
+            "locale": "en",
+            "output_format": "webp",
+        })
 
     async def fake_get_poster(_request: Request, **_kwargs: object) -> Response:
         nonlocal active, maximum
@@ -324,17 +864,13 @@ def test_render_concurrency_is_bounded(monkeypatch):
 
     monkeypatch.setattr(main, "get_poster", fake_get_poster)
     monkeypatch.setattr(main._cfg, "POSTERSPLUS_V2_REQUEST_SECRET", "secret")
-    monkeypatch.setattr(main._cfg, "SERVER_TMDB_KEY", "server-tmdb")
-    monkeypatch.setattr(main._cfg, "SERVER_MDBLIST_KEYS", ["server-mdblist"])
     monkeypatch.setattr(main._cfg, "VANILLA_RENDER_CONCURRENCY", 2)
+    monkeypatch.setattr(main, "get_cached_vanilla_snapshot", documents.get)
+    monkeypatch.setattr(main, "get_cached_final_poster", lambda _key: None)
+    monkeypatch.setattr(main, "set_cached_final_poster", lambda *_args, **_kwargs: None)
     main._vanilla_render_semaphore = None
+    main._vanilla_render_inflight.clear()
     main._vanilla_nonces.clear()
-
-    payload = _payload()
-    payload.update({
-        "locale": "en", "output_format": "webp", "snapshot_sha256": "a" * 64,
-        "config_sha256": PRESETS["prestige@2"].config_sha256,
-    })
 
     async def run():
         import asyncio
@@ -343,9 +879,11 @@ def test_render_concurrency_is_bounded(monkeypatch):
                 "/v2/vanilla/render",
                 json.dumps(payload, separators=(",", ":")).encode(),
             )
-            for _ in range(10)
+            for payload in payloads
         ]
-        return await asyncio.gather(*[main.vanilla_render(request) for request in requests])
+        return await asyncio.gather(*[
+            main.vanilla_render(request) for request in requests
+        ])
 
     import asyncio
     responses = asyncio.run(run())

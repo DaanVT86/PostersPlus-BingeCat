@@ -13,6 +13,13 @@ SCHEMA = "bingecat_postersplus_vanilla"
 VERSION = 1
 SUPPORTED_LOCALES = ("en", "pt", "nl", "de", "es")
 ACTIVE_PRESET_REFS = ("clean-notch@3", "prestige@2", "minimalist@3")
+# This revision identifies the exact c831989 vanilla renderer plus this pinned
+# contract registry. Bump it whenever renderer code or shipped render assets
+# change; immutable BingeCat identities intentionally fail closed otherwise.
+# SHA-256 seed: c831989a656ed3b153382bdb9b85ff9f4a024e67:
+# bingecat-postersplus-vanilla-v1:sash-exclusions-v1:identity-render-cache-v1:
+# snapshot-render-inputs-v1
+RENDERER_REVISION = "fd979d24a31d680443dce18c44f4643078387b3676c82b42220b7ae7c2bea64b"
 EXPECTED_CONFIG_HASHES = {
     "clean-notch@3": "3e6549607745bb14293c0630e4fc756fcf7a930fe70cde6d12b5851f92c82404",
     "prestige@2": "97b362bdcfb73a5ec2583b2992fbb473de41a80afe6dd0fa0f6a5c872d6115f7",
@@ -233,12 +240,17 @@ def query_params(ref: str, *, locale: str = "en") -> dict[str, str]:
             params[key] = str(value)
     params["movie_weights"] = ",".join(f"{key}:{value}" for key, value in config["movie_weights"])
     params["tv_weights"] = ",".join(f"{key}:{value}" for key, value in config["tv_weights"])
-    params["sash_priority"] = ",".join(config["sash_priority"])
+    excluded = set(config["sash_exclusions"])
+    sash_tokens = [
+        slot for slot in config["sash_priority"] if slot not in excluded
+    ]
+    sash_tokens.extend(f"-{slot}" for slot in config["sash_exclusions"])
+    params["sash_priority"] = ",".join(sash_tokens)
     return params
 
 
 __all__ = [
     "ACTIVE_PRESET_REFS", "EXPECTED_CONFIG_HASHES", "EXPECTED_REQUIREMENTS_HASHES",
-    "PRESET_REGISTRY", "Preset", "SCHEMA", "SUPPORTED_LOCALES", "VERSION",
+    "PRESET_REGISTRY", "Preset", "RENDERER_REVISION", "SCHEMA", "SUPPORTED_LOCALES", "VERSION",
     "PRESETS", "get_preset", "list_public_presets", "public_registry", "query_params",
 ]

@@ -1,5 +1,6 @@
 #main.py
 import asyncio
+from collections.abc import Awaitable, Callable
 import hashlib
 import hmac
 import io
@@ -14,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 import zoneinfo
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from urllib.parse import parse_qsl, urlencode
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, HTMLResponse
@@ -127,6 +128,7 @@ _render_inflight: dict[str, "asyncio.Future[bytes]"] = {}
 # Private vanilla-backed contract state.  These are process-local admission
 # primitives; durable provider/final bytes remain in the existing SQLite cache.
 _vanilla_enrich_inflight: dict[str, "asyncio.Future[dict]"] = {}
+_vanilla_render_inflight: dict[str, "asyncio.Future[bytes]"] = {}
 _vanilla_enrich_semaphore: "asyncio.Semaphore | None" = None
 _vanilla_render_semaphore: "asyncio.Semaphore | None" = None
 _vanilla_nonces: dict[tuple[str, str], float] = {}
@@ -632,6 +634,7 @@ import tvdb
 import anime
 from preset_registry import (
     PRESETS,
+    RENDERER_REVISION as VANILLA_RENDERER_REVISION,
     SCHEMA as VANILLA_SCHEMA,
     SUPPORTED_LOCALES as VANILLA_SUPPORTED_LOCALES,
     VERSION as VANILLA_VERSION,
@@ -2835,15 +2838,27 @@ async def _vanilla_payload(request: Request) -> dict:
 
 
 def _validate_vanilla_request(value: dict, *, render: bool) -> tuple[dict, str, str]:
-    if value.get("schema") != VANILLA_SCHEMA or value.get("version") != VANILLA_VERSION:
+    required_fields = {
+        "schema", "version", "media", "preset_ref",
+        "snapshot_sha256", "config_sha256", "locale", "output_format",
+    } if render else {"schema", "version", "media", "preset_ref", "locales"}
+    allowed_fields = required_fields if render else required_fields | {"locale"}
+    if not required_fields.issubset(value) or not set(value).issubset(allowed_fields):
+        raise HTTPException(status_code=400, detail="invalid contract fields", headers={"Cache-Control": "no-store"})
+    version = value.get("version")
+    if (
+        value.get("schema") != VANILLA_SCHEMA
+        or isinstance(version, bool)
+        or version != VANILLA_VERSION
+    ):
         raise HTTPException(status_code=400, detail="invalid contract schema", headers={"Cache-Control": "no-store"})
     media = value.get("media")
-    if not isinstance(media, dict) or len(media) > 4:
+    if not isinstance(media, dict) or set(media) != {"media_type", "tmdb_id", "imdb_id"}:
         raise HTTPException(status_code=400, detail="invalid media", headers={"Cache-Control": "no-store"})
     media_type = media.get("media_type")
     tmdb_id = media.get("tmdb_id")
     imdb_id = media.get("imdb_id")
-    if media_type not in {"movie", "series"} or isinstance(tmdb_id, bool) or not isinstance(tmdb_id, int) or not 0 < tmdb_id <= 10_000_000_000:
+    if media_type not in {"movie", "series"} or isinstance(tmdb_id, bool) or not isinstance(tmdb_id, int) or not 0 < tmdb_id <= 9_999_999_999:
         raise HTTPException(status_code=400, detail="invalid media", headers={"Cache-Control": "no-store"})
     if imdb_id is not None and (not isinstance(imdb_id, str) or not _IMDB_ID_RE.fullmatch(imdb_id)):
         raise HTTPException(status_code=400, detail="invalid media", headers={"Cache-Control": "no-store"})
@@ -2889,6 +2904,25 @@ def _vanilla_snapshot_key(media: dict, preset_ref: str, locale: str) -> str:
     return hashlib.sha256(_vanilla_json({"media": media, "preset_ref": preset_ref, "locale": locale})).hexdigest()
 
 
+def _vanilla_render_key(
+    media: dict,
+    preset_ref: str,
+    locale: str,
+    snapshot_sha256: str,
+    config_sha256: str,
+) -> str:
+    identity = {
+        "media": media,
+        "preset_ref": preset_ref,
+        "locale": locale,
+        "snapshot_sha256": snapshot_sha256,
+        "config_sha256": config_sha256,
+        "renderer_revision": VANILLA_RENDERER_REVISION,
+        "output_format": "webp",
+    }
+    return "vanilla-v1:" + hashlib.sha256(_vanilla_json(identity)).hexdigest()
+
+
 def _validate_vanilla_webp(body: bytes) -> None:
     if len(body) < 12 or len(body) > _cfg.VANILLA_RENDER_MAX_BYTES:
         raise ValueError("invalid webp size")
@@ -2904,6 +2938,99 @@ def _validate_vanilla_webp(body: bytes) -> None:
             image.verify()
     except (OSError, ValueError) as exc:
         raise ValueError("invalid webp") from exc
+
+
+def _vanilla_tmdb_snapshot(value: dict) -> dict:
+    """Keep only bounded vanilla fields consumed by the existing renderer."""
+
+    credits = value.get("credits") if isinstance(value.get("credits"), dict) else {}
+    cast = credits.get("cast") if isinstance(credits.get("cast"), list) else []
+    crew = credits.get("crew") if isinstance(credits.get("crew"), list) else []
+    companies = (
+        value.get("production_companies")
+        if isinstance(value.get("production_companies"), list)
+        else []
+    )
+    poster_langs = (
+        value.get("poster_langs")
+        if isinstance(value.get("poster_langs"), dict)
+        else {}
+    )
+    seasons = value.get("seasons") if isinstance(value.get("seasons"), list) else []
+
+    def episode(raw: object) -> dict | None:
+        if not isinstance(raw, dict):
+            return None
+        return {
+            key: raw.get(key)
+            for key in ("air_date", "episode_number", "season_number")
+        }
+
+    return {
+        "credits": {
+            "cast": [
+                {"name": str(item.get("name") or "")[:160]}
+                for item in cast[:10]
+                if isinstance(item, dict)
+            ],
+            "crew": [
+                {
+                    "job": "Director",
+                    "name": str(item.get("name") or "")[:160],
+                }
+                for item in crew
+                if isinstance(item, dict) and item.get("job") == "Director"
+            ][:32],
+        },
+        "production_companies": [
+            {"name": str(item.get("name") or "")[:160]}
+            for item in companies[:64]
+            if isinstance(item, dict)
+        ],
+        "original_language": value.get("original_language"),
+        "original_title": value.get("original_title"),
+        "runtime": value.get("runtime"),
+        "number_of_seasons": value.get("number_of_seasons"),
+        "number_of_episodes": value.get("number_of_episodes"),
+        "tmdb_status": value.get("tmdb_status"),
+        "vote_count": value.get("vote_count"),
+        "text_backdrop_path": value.get("text_backdrop_path"),
+        "original_poster_path": value.get("original_poster_path"),
+        "poster_langs": {
+            str(key)[:16]: str(path)[:256]
+            for key, path in sorted(poster_langs.items())[:64]
+        },
+        "imdb_id": value.get("imdb_id"),
+        "tmdb_release_date": value.get("tmdb_release_date"),
+        "last_air_date": value.get("last_air_date"),
+        "next_episode": episode(value.get("next_episode")),
+        "last_episode": episode(value.get("last_episode")),
+        "seasons": [
+            {
+                "air_date": item.get("air_date"),
+                "season_number": item.get("season_number"),
+            }
+            for item in seasons[:64]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _vanilla_logo_snapshot(logos: list) -> list[dict]:
+    result: list[dict] = []
+    for item in logos[:32]:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("file_path")
+        if not isinstance(path, str) or not path or len(path) > 256:
+            continue
+        result.append({
+            "file_path": path,
+            "iso_639_1": item.get("iso_639_1"),
+            "iso_3166_1": item.get("iso_3166_1"),
+            "vote_average": item.get("vote_average"),
+        })
+    return result
 
 
 async def _build_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -> dict:
@@ -2922,11 +3049,23 @@ async def _build_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -
     genre = "Unknown"
     release_date = None
     age_rating = None
-    if resolved_imdb and _cfg.SERVER_MDBLIST_KEYS:
+    award_wins: list[str] = []
+    award_noms: list[str] = []
+    festival_label = None
+    is_cult = False
+    is_true_story = False
+    is_metacritic = False
+    if resolved_imdb:
         cached = get_cached_rating(resolved_imdb)
         if cached:
-            ratings, genre, release_date, _wins, _noms, _awards, _festival, age_rating, _cult, _story, _meta = cached
+            (
+                ratings, genre, release_date, award_wins, award_noms,
+                _awards_fetched, festival_label, age_rating, is_cult,
+                is_true_story, is_metacritic,
+            ) = cached
         else:
+            if not _cfg.SERVER_MDBLIST_KEYS:
+                raise RuntimeError("MDBList provider unavailable")
             global _mdblist_semaphore
             if _mdblist_semaphore is None:
                 _mdblist_semaphore = asyncio.Semaphore(_cfg.MDBLIST_CONCURRENCY)
@@ -2938,9 +3077,99 @@ async def _build_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -
                     genre_ids,
                     "tv" if media_type == "series" else "movie",
                 )
-            if isinstance(result, tuple):
-                ratings, genre, release_date, _keywords, age_rating = result
-                set_cached_rating(resolved_imdb, ratings, genre, release_date, [], [], age_rating=age_rating)
+            if result is FETCH_FAILED or isinstance(result, _RateLimited):
+                raise RuntimeError("MDBList provider unavailable")
+            ratings, genre, release_date, keywords, age_rating = result
+            award_wins, award_noms = parse_mdblist_awards(
+                keywords,
+                tmdb_id=str(media["tmdb_id"]),
+            )
+            keyword_names = {
+                str(keyword.get("name") or "").lower().strip()
+                for keyword in keywords
+                if isinstance(keyword, dict)
+            }
+            festival_label = next(
+                (
+                    label
+                    for keyword, label in FESTIVAL_KEYWORDS.items()
+                    if keyword in keyword_names
+                ),
+                None,
+            )
+            is_cult = bool({"cult-classic", "cult-film"} & keyword_names)
+            is_true_story = "based-on-true-story" in keyword_names
+            is_metacritic = "metacritic-must-see" in keyword_names
+            set_cached_rating(
+                resolved_imdb,
+                ratings,
+                genre,
+                release_date,
+                award_wins,
+                award_noms,
+                awards_fetched=True,
+                festival_label=festival_label,
+                age_rating=age_rating,
+                is_cult=is_cult,
+                is_true_story=is_true_story,
+                is_metacritic=is_metacritic,
+            )
+    preset = get_preset(preset_ref)
+    canonical_config = preset.canonical_config
+    active_slots = set(canonical_config["sash_priority"]) - set(
+        canonical_config["sash_exclusions"]
+    )
+    provider_type = "tv" if media_type == "series" else "movie"
+    status_slots = {
+        "release_status", "cinema", "streaming", "physical", "production",
+        "ended", "cancelled", "airing",
+    }
+    trending_rank, release_status, recent_digital_release_date = await asyncio.gather(
+        fetch_trending_rank(
+            _HTTP_CLIENT,
+            str(media["tmdb_id"]),
+            _cfg.SERVER_TMDB_KEY,
+            provider_type,
+        ) if {"trending", "trending_broad"} & active_slots else _resolved(None),
+        fetch_release_status(
+            _HTTP_CLIENT,
+            str(media["tmdb_id"]),
+            _cfg.SERVER_TMDB_KEY,
+            provider_type,
+            tmdb_data.get("tmdb_status"),
+        ) if status_slots & active_slots else _resolved(None),
+        fetch_recent_movie_digital_release_date(
+            _HTTP_CLIENT,
+            str(media["tmdb_id"]),
+            _cfg.SERVER_TMDB_KEY,
+            tmdb_data.get("tmdb_status"),
+        ) if media_type == "movie" and "just_added" in active_slots else _resolved(None),
+    )
+    digital_release = bool(resolved_imdb and is_digital_release(resolved_imdb))
+    if release_status in ("Cinema", "Production") and digital_release:
+        release_status = "Streaming"
+    if (
+        canonical_config["release_status_cinema_only"]
+        and release_status not in ("Cinema", "Production")
+    ):
+        release_status = None
+    bounded_tmdb_data = _vanilla_tmdb_snapshot(tmdb_data)
+    discovery_meta = extract_discovery_meta(
+        tmdb_data=bounded_tmdb_data,
+        media_type=provider_type,
+        award_wins=award_wins,
+        award_noms=award_noms,
+        trending_rank=trending_rank,
+        release_date=release_date,
+        keywords=[],
+        festival_label_override=festival_label,
+        is_cult_override=is_cult,
+        is_true_story_override=is_true_story,
+        is_metacritic_override=is_metacritic,
+        is_digital_release_override=digital_release,
+        release_status_override=release_status,
+        recent_digital_release_date=recent_digital_release_date,
+    )
     snapshot = {
         "schema": "postersplus_vanilla_snapshot",
         "version": 1,
@@ -2953,13 +3182,25 @@ async def _build_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -
         "poster_path": poster_path,
         "backdrop_path": backdrop_path,
         "is_textless": bool(is_textless),
-        "logos": list(logos)[:32],
+        "logos": _vanilla_logo_snapshot(logos),
         "ratings": ratings,
         "release_date": release_date,
         "age_rating": age_rating,
+        "award_wins": award_wins,
+        "award_noms": award_noms,
+        "festival_label": festival_label,
+        "is_cult": is_cult,
+        "is_true_story": is_true_story,
+        "is_metacritic": is_metacritic,
+        "is_digital_release": digital_release,
+        "trending_rank": trending_rank,
+        "release_status": release_status,
+        "recent_digital_release_date": recent_digital_release_date,
+        "tmdb_data": bounded_tmdb_data,
+        "discovery_meta": asdict(discovery_meta),
     }
     snapshot_sha256 = hashlib.sha256(_vanilla_json(snapshot)).hexdigest()
-    config_sha256 = str(get_preset(preset_ref)["config_sha256"])
+    config_sha256 = str(preset["config_sha256"])
     return {
         "schema": "bingecat_postersplus_v2",
         "version": 1,
@@ -2969,52 +3210,161 @@ async def _build_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -
         "snapshot": snapshot,
         "snapshot_sha256": snapshot_sha256,
         "config_sha256": config_sha256,
-        "renderer_revision": hashlib.sha256(_server_render_signature().encode()).hexdigest(),
+        "renderer_revision": VANILLA_RENDERER_REVISION,
     }
 
 
+def _valid_cached_vanilla_enrichment(
+    value: object,
+    media: dict,
+    preset_ref: str,
+    locale: str,
+) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "schema", "version", "media", "preset_ref", "locale", "snapshot",
+        "snapshot_sha256", "config_sha256", "renderer_revision",
+    }:
+        return False
+    response_media = value.get("media")
+    snapshot = value.get("snapshot")
+    if (
+        not isinstance(response_media, dict)
+        or set(response_media) != {"media_type", "tmdb_id", "imdb_id"}
+        or not isinstance(snapshot, dict)
+    ):
+        return False
+    request_imdb = media.get("imdb_id")
+    response_imdb = response_media.get("imdb_id")
+    if (
+        value.get("schema") != "bingecat_postersplus_v2"
+        or value.get("version") != 1
+        or value.get("preset_ref") != preset_ref
+        or value.get("locale") != locale
+        or response_media.get("media_type") != media["media_type"]
+        or response_media.get("tmdb_id") != media["tmdb_id"]
+        or (
+            response_imdb is not None
+            and (
+                not isinstance(response_imdb, str)
+                or not _IMDB_ID_RE.fullmatch(response_imdb)
+            )
+        )
+        or (request_imdb is not None and response_media.get("imdb_id") != request_imdb)
+        or snapshot.get("media") != response_media
+        or value.get("config_sha256") != get_preset(preset_ref).config_sha256
+        or value.get("renderer_revision") != VANILLA_RENDERER_REVISION
+    ):
+        return False
+    snapshot_sha256 = value.get("snapshot_sha256")
+    return (
+        isinstance(snapshot_sha256, str)
+        and hmac.compare_digest(
+            snapshot_sha256,
+            hashlib.sha256(_vanilla_json(snapshot)).hexdigest(),
+        )
+    )
+
+
 async def _coalesced_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -> dict:
+    global _vanilla_enrich_semaphore
+
     key = _vanilla_snapshot_key(media, preset_ref, locale)
     cached = get_cached_vanilla_snapshot(key)
     if cached:
         try:
             value = json.loads(cached)
-            if isinstance(value, dict):
+            if _valid_cached_vanilla_enrichment(value, media, preset_ref, locale):
                 return value
         except (ValueError, TypeError):
             pass
     existing = _vanilla_enrich_inflight.get(key)
     if existing is not None:
-        return await existing
-    future: "asyncio.Future[dict]" = asyncio.get_running_loop().create_future()
-    _vanilla_enrich_inflight[key] = future
-    try:
-        value = await _build_vanilla_enrichment(media, preset_ref, locale)
+        return await asyncio.shield(existing)
+
+    async def build() -> dict:
+        global _vanilla_enrich_semaphore
+
+        if _vanilla_enrich_semaphore is None:
+            _vanilla_enrich_semaphore = asyncio.Semaphore(
+                _cfg.VANILLA_RENDER_CONCURRENCY
+            )
+        async with _vanilla_enrich_semaphore:
+            value = await asyncio.wait_for(
+                _build_vanilla_enrichment(media, preset_ref, locale),
+                timeout=_cfg.VANILLA_RENDER_TIMEOUT_SECONDS,
+            )
         encoded = _vanilla_json(value)
-        set_cached_vanilla_snapshot(key, encoded)
-        future.set_result(value)
+        if set_cached_vanilla_snapshot(key, encoded) is False:
+            raise RuntimeError("vanilla snapshot persistence failed")
         return value
-    except BaseException as exc:
-        if not future.done():
-            future.set_exception(exc)
-        raise
-    finally:
-        _vanilla_enrich_inflight.pop(key, None)
+
+    task = asyncio.create_task(build())
+    _vanilla_enrich_inflight[key] = task
+
+    def cleanup(finished: "asyncio.Future[dict]") -> None:
+        if _vanilla_enrich_inflight.get(key) is finished:
+            _vanilla_enrich_inflight.pop(key, None)
+        if not finished.cancelled():
+            finished.exception()
+
+    task.add_done_callback(cleanup)
+    return await asyncio.shield(task)
+
+
+async def _coalesced_vanilla_render(
+    cache_key: str,
+    render: Callable[[], Awaitable[bytes]],
+) -> bytes:
+    cached = get_cached_final_poster(cache_key)
+    if cached is not None:
+        try:
+            _validate_vanilla_webp(cached)
+            return cached
+        except ValueError:
+            delete_cached_final_poster(cache_key)
+
+    existing = _vanilla_render_inflight.get(cache_key)
+    if existing is not None:
+        return await asyncio.shield(existing)
+
+    async def build() -> bytes:
+        body = await asyncio.wait_for(
+            render(),
+            timeout=_cfg.VANILLA_RENDER_TIMEOUT_SECONDS,
+        )
+        _validate_vanilla_webp(body)
+        stored = set_cached_final_poster(
+            cache_key,
+            body,
+            request_params="bingecat_postersplus_vanilla:v1",
+        )
+        if stored is False:
+            delete_cached_final_poster(cache_key)
+            raise RuntimeError("vanilla render persistence failed")
+        return body
+
+    task = asyncio.create_task(build())
+    _vanilla_render_inflight[cache_key] = task
+
+    def cleanup(finished: "asyncio.Future[bytes]") -> None:
+        if _vanilla_render_inflight.get(cache_key) is finished:
+            _vanilla_render_inflight.pop(cache_key, None)
+        if not finished.cancelled():
+            finished.exception()
+
+    task.add_done_callback(cleanup)
+    return await asyncio.shield(task)
 
 
 @app.post("/v2/vanilla/enrich")
 async def vanilla_enrich(request: Request):
-    global _vanilla_enrich_semaphore
     try:
         value = await _vanilla_payload(request)
         media, preset_ref, locale = _validate_vanilla_request(value, render=False)
-        if _vanilla_enrich_semaphore is None:
-            _vanilla_enrich_semaphore = asyncio.Semaphore(_cfg.VANILLA_RENDER_CONCURRENCY)
-        async with _vanilla_enrich_semaphore:
-            result = await asyncio.wait_for(
-                _coalesced_vanilla_enrichment(media, preset_ref, locale),
-                timeout=_cfg.VANILLA_RENDER_TIMEOUT_SECONDS,
-            )
+        result = await asyncio.wait_for(
+            _coalesced_vanilla_enrichment(media, preset_ref, locale),
+            timeout=_cfg.VANILLA_RENDER_TIMEOUT_SECONDS,
+        )
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
     except HTTPException:
         raise
@@ -3036,25 +3386,64 @@ async def vanilla_render(request: Request):
         if not hmac.compare_digest(config_sha256, expected_config):
             return _vanilla_error(409, "config_mismatch")
         snapshot_sha256 = str(value["snapshot_sha256"])
-        if _vanilla_render_semaphore is None:
-            _vanilla_render_semaphore = asyncio.Semaphore(_cfg.VANILLA_RENDER_CONCURRENCY)
-        params = query_params(preset_ref, locale=locale)
-        params.update({
-            "tmdb_id": str(media["tmdb_id"]),
-            "imdb_id": str(media.get("imdb_id") or ""),
-            "type": "tv" if media["media_type"] == "series" else "movie",
-        })
-        query = urlencode(params).encode("utf-8")
-        scope = {
-            "type": "http", "http_version": "1.1", "method": "GET", "scheme": "http",
-            "path": "/poster", "raw_path": b"/poster", "query_string": query,
-            "headers": [], "client": ("127.0.0.1", 0), "server": ("localhost", 80),
-        }
-        inner_request = Request(scope)
-        async with _vanilla_render_semaphore:
+        snapshot_key = _vanilla_snapshot_key(media, preset_ref, locale)
+        snapshot_bytes = get_cached_vanilla_snapshot(snapshot_key)
+        if snapshot_bytes is None:
+            return _vanilla_error(409, "snapshot_unavailable")
+        try:
+            enrichment = json.loads(snapshot_bytes)
+            if not _valid_cached_vanilla_enrichment(
+                enrichment, media, preset_ref, locale
+            ):
+                return _vanilla_error(409, "snapshot_unavailable")
+            cached_snapshot_sha256 = str(enrichment["snapshot_sha256"])
+            cached_config_sha256 = str(enrichment["config_sha256"])
+            resolved_media = dict(enrichment["media"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return _vanilla_error(409, "snapshot_unavailable")
+        if not (
+            hmac.compare_digest(snapshot_sha256, cached_snapshot_sha256)
+            and hmac.compare_digest(config_sha256, cached_config_sha256)
+        ):
+            return _vanilla_error(409, "snapshot_mismatch")
+        resolved_imdb = resolved_media.get("imdb_id")
+        resolved_imdb_id = str(resolved_imdb or "")
+        if resolved_imdb is not None and not _IMDB_ID_RE.fullmatch(resolved_imdb_id):
+            return _vanilla_error(409, "snapshot_unavailable")
+        render_cache_key = _vanilla_render_key(
+            resolved_media,
+            preset_ref,
+            locale,
+            snapshot_sha256,
+            config_sha256,
+        )
+
+        async def render_body() -> bytes:
+            global _vanilla_render_semaphore
+
+            if _vanilla_render_semaphore is None:
+                _vanilla_render_semaphore = asyncio.Semaphore(
+                    _cfg.VANILLA_RENDER_CONCURRENCY
+                )
+            params = query_params(preset_ref, locale=locale)
+            params.update({
+                "tmdb_id": str(resolved_media["tmdb_id"]),
+                "imdb_id": resolved_imdb_id,
+                "type": "tv" if resolved_media["media_type"] == "series" else "movie",
+            })
+            query = urlencode(params).encode("utf-8")
+            scope = {
+                "type": "http", "http_version": "1.1", "method": "GET", "scheme": "http",
+                "path": "/poster", "raw_path": b"/poster", "query_string": query,
+                "headers": [], "client": ("127.0.0.1", 0), "server": ("localhost", 80),
+            }
+            inner_request = Request(scope)
+            inner_request.state.posterplus_vanilla_snapshot = dict(
+                enrichment["snapshot"]
+            )
             poster_kwargs = {
-                "tmdb_id": str(media["tmdb_id"]),
-                "imdb_id": str(media.get("imdb_id") or ""),
+                "tmdb_id": str(resolved_media["tmdb_id"]),
+                "imdb_id": resolved_imdb_id,
                 "type": params["type"],
                 # These are server-owned values.  They are deliberately not
                 # accepted from the signed JSON body or query string.
@@ -3075,19 +3464,39 @@ async def vanilla_render(request: Request):
             ):
                 if name in params:
                     poster_kwargs[name] = params[name]
-            response = await asyncio.wait_for(
-                get_poster(inner_request, **poster_kwargs),
-                timeout=_cfg.VANILLA_RENDER_TIMEOUT_SECONDS,
-            )
-        body = getattr(response, "body", None)
-        if body is None:
-            body = b"".join([chunk async for chunk in response.body_iterator])
-        try:
-            _validate_vanilla_webp(body)
-        except ValueError:
-            return _vanilla_error(502, "invalid_webp")
+            async with _vanilla_render_semaphore:
+                response = await get_poster(inner_request, **poster_kwargs)
+            body = getattr(response, "body", None)
+            if body is None:
+                body = b"".join([chunk async for chunk in response.body_iterator])
+            body = bytes(body)
+            if _cfg.IMAGE_FORMAT != "webp":
+                with Image.open(io.BytesIO(body)) as image:
+                    width, height = image.size
+                    if (
+                        int(getattr(image, "n_frames", 1)) != 1
+                        or width < 1
+                        or height < 1
+                        or width > 8192
+                        or height > 8192
+                        or width * height > 40_000_000
+                    ):
+                        raise ValueError("invalid source image")
+                    output = io.BytesIO()
+                    image.convert("RGB").save(
+                        output,
+                        format="WEBP",
+                        quality=_cfg.WEBP_QUALITY,
+                    )
+                    body = output.getvalue()
+            return body
+
+        body = await asyncio.wait_for(
+            _coalesced_vanilla_render(render_cache_key, render_body),
+            timeout=_cfg.VANILLA_RENDER_TIMEOUT_SECONDS,
+        )
         content_sha256 = hashlib.sha256(body).hexdigest()
-        renderer_revision = hashlib.sha256(_server_render_signature().encode()).hexdigest()
+        renderer_revision = VANILLA_RENDERER_REVISION
         return Response(
             content=body,
             media_type="image/webp",
@@ -3104,6 +3513,8 @@ async def vanilla_render(request: Request):
         raise
     except (httpx.TimeoutException, TimeoutError, asyncio.TimeoutError):
         return _vanilla_error(503, "render_timeout", retry_after=5)
+    except (OSError, ValueError):
+        return _vanilla_error(502, "invalid_webp")
     except Exception:
         logger.exception("vanilla render failed")
         return _vanilla_error(503, "render_unavailable", retry_after=5)
@@ -3653,6 +4064,16 @@ async def get_poster(
 
     _check_type(type)
 
+    # Only the signed private adapter can place this state on its synthetic
+    # request. Public /poster calls never accept provider facts from a client.
+    _vanilla_snapshot = getattr(
+        request.state,
+        "posterplus_vanilla_snapshot",
+        None,
+    )
+    if not isinstance(_vanilla_snapshot, dict):
+        _vanilla_snapshot = None
+
     # -----------------------------------------------------------------------
     # Anime-native ids (AniList / Kitsu).
     #
@@ -3696,9 +4117,10 @@ async def get_poster(
         canonical_id = imdb_id or anime_key
     else:
         _check_tmdb_id(tmdb_id)
-        _check_imdb_id(imdb_id)
+        if imdb_id or _vanilla_snapshot is None:
+            _check_imdb_id(imdb_id)
         has_tmdb_id = True
-        canonical_id = imdb_id
+        canonical_id = imdb_id or f"tmdb:{tmdb_id}"
 
     # -----------------------------------------------------------------------
     # Single-user mode: check for a cached final poster first.
@@ -3777,7 +4199,11 @@ async def get_poster(
     # all rendering parameters so different visual configs don't collide.
     # Skipped when an explicit quality= override is supplied (one-off).
     # ------------------------------------------------------------------
-    if not quality and not _cfg.DISABLE_COMPOSITE_CACHE:
+    if (
+        _vanilla_snapshot is None
+        and not quality
+        and not _cfg.DISABLE_COMPOSITE_CACHE
+    ):
         # Server-side detection settings affect the rendered output but aren't URL
         # params, so fold a signature into the hash.  Toggling detection or
         # changing its thresholds then auto-busts stale composites (and leaves
@@ -3867,7 +4293,22 @@ async def get_poster(
     # doesn't complain about use-before-global-declaration.
     global _mdblist_active_key_idx
 
-    cached_rating = get_cached_rating(canonical_id)
+    if _vanilla_snapshot is None:
+        cached_rating = get_cached_rating(canonical_id)
+    else:
+        cached_rating = (
+            dict(_vanilla_snapshot.get("ratings") or {}),
+            str(_vanilla_snapshot.get("genre") or "Unknown"),
+            _vanilla_snapshot.get("release_date"),
+            list(_vanilla_snapshot.get("award_wins") or []),
+            list(_vanilla_snapshot.get("award_noms") or []),
+            True,
+            _vanilla_snapshot.get("festival_label"),
+            _vanilla_snapshot.get("age_rating"),
+            bool(_vanilla_snapshot.get("is_cult")),
+            bool(_vanilla_snapshot.get("is_true_story")),
+            bool(_vanilla_snapshot.get("is_metacritic")),
+        )
 
     if cached_rating is not None:
         (
@@ -4117,6 +4558,15 @@ async def get_poster(
             ) = _anime_meta
             if using_anime_art and _logo_meta is not None:
                 logos = _logo_meta[2]
+        elif _vanilla_snapshot is not None:
+            genre_ids = list(_vanilla_snapshot.get("genre_ids") or [])
+            is_textless = bool(_vanilla_snapshot.get("is_textless"))
+            logos = list(_vanilla_snapshot.get("logos") or [])
+            release_year = _vanilla_snapshot.get("release_year")
+            title = str(_vanilla_snapshot.get("title") or "Unknown Title")
+            poster_path = _vanilla_snapshot.get("poster_path")
+            backdrop_path = _vanilla_snapshot.get("backdrop_path")
+            tmdb_data = dict(_vanilla_snapshot.get("tmdb_data") or {})
         else:
             genre_ids, is_textless, logos, release_year, title, poster_path, backdrop_path, tmdb_data = (
                 await _coalesced_fetch_poster_metadata(
@@ -4587,8 +5037,15 @@ async def get_poster(
             rating_coro,
             # Trending rank is a TMDB list lookup, so it needs a real tmdb_id —
             # which AIOMetadata does send alongside the anime id when it has one.
-            fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type)
-            if has_tmdb_id and effective_tmdb_key else _resolved(None),
+            (
+                _resolved(_vanilla_snapshot.get("trending_rank"))
+                if _vanilla_snapshot is not None
+                else (
+                    fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type)
+                    if has_tmdb_id and effective_tmdb_key
+                    else _resolved(None)
+                )
+            ),
         )
 
         rating_key_used, rating_result = rating_fetch_result
@@ -4838,10 +5295,23 @@ async def get_poster(
         # fetched metadata. Movie digital freshness uses the cached TMDB
         # /release_dates helper only when the Just Added sash is enabled.
         # ------------------------------------------------------------------
-        _release_status: str | None = None
-        _recent_digital_release_date: str | None = None
+        _release_status: str | None = (
+            _vanilla_snapshot.get("release_status")
+            if _vanilla_snapshot is not None
+            else None
+        )
+        _recent_digital_release_date: str | None = (
+            _vanilla_snapshot.get("recent_digital_release_date")
+            if _vanilla_snapshot is not None
+            else None
+        )
+        _is_digital_release = (
+            bool(_vanilla_snapshot.get("is_digital_release"))
+            if _vanilla_snapshot is not None
+            else is_digital_release(imdb_id)
+        )
         _rs_slots = {"release_status", "cinema", "streaming", "physical", "production", "ended", "cancelled", "airing"}
-        if any(s in rcfg.sash_priority for s in _rs_slots):
+        if _vanilla_snapshot is None and any(s in rcfg.sash_priority for s in _rs_slots):
             # Resolved for every title regardless of age.  There used to be an
             # age gate here that skipped the lookup for anything older than a
             # configurable limit, but it silently blanked the status on older
@@ -4862,7 +5332,7 @@ async def get_poster(
             # r/movieleaks confirmation overrides TMDB's theatrical/production
             # status — if the film is in the digital-release cache it's already
             # streaming regardless of what the official release dates say.
-            if _release_status in ("Cinema", "Production") and is_digital_release(imdb_id):
+            if _release_status in ("Cinema", "Production") and _is_digital_release:
                 _release_status = "Streaming"
             # Cinema-only mode: keep the badge purely as an "unavailable" marker —
             # show only Cinema / Production and drop the rest so the slot is
@@ -4870,7 +5340,7 @@ async def get_poster(
             if rcfg.release_status_cinema_only and _release_status not in ("Cinema", "Production"):
                 _release_status = None
 
-        if (type not in ("tv", "series") and "just_added" in rcfg.sash_priority
+        if (_vanilla_snapshot is None and type not in ("tv", "series") and "just_added" in rcfg.sash_priority
                 and has_tmdb_id and effective_tmdb_key):
             _recent_digital_release_date = await fetch_recent_movie_digital_release_date(
                 client, tmdb_id, effective_tmdb_key,
@@ -4880,22 +5350,32 @@ async def get_poster(
         # ------------------------------------------------------------------
         # Build DiscoveryMeta
         # ------------------------------------------------------------------
-        discovery_meta = extract_discovery_meta(
-            tmdb_data=tmdb_data,
-            media_type=type,
-            award_wins=award_wins,
-            award_noms=award_noms,
-            trending_rank=trending_rank,
-            release_date=rel,
-            keywords=keywords if not rating_already_cached else [],
-            festival_label_override=festival_label,
-            is_cult_override=is_cult,
-            is_true_story_override=is_true_story,
-            is_metacritic_override=is_metacritic,
-            is_digital_release_override=is_digital_release(imdb_id),
-            release_status_override=_release_status,
-            recent_digital_release_date=_recent_digital_release_date,
-        )
+        if _vanilla_snapshot is not None:
+            raw_discovery = _vanilla_snapshot.get("discovery_meta")
+            expected_discovery_fields = set(DiscoveryMeta.__dataclass_fields__)
+            if (
+                not isinstance(raw_discovery, dict)
+                or set(raw_discovery) != expected_discovery_fields
+            ):
+                raise ValueError("invalid vanilla discovery snapshot")
+            discovery_meta = DiscoveryMeta(**raw_discovery)
+        else:
+            discovery_meta = extract_discovery_meta(
+                tmdb_data=tmdb_data,
+                media_type=type,
+                award_wins=award_wins,
+                award_noms=award_noms,
+                trending_rank=trending_rank,
+                release_date=rel,
+                keywords=keywords if not rating_already_cached else [],
+                festival_label_override=festival_label,
+                is_cult_override=is_cult,
+                is_true_story_override=is_true_story,
+                is_metacritic_override=is_metacritic,
+                is_digital_release_override=_is_digital_release,
+                release_status_override=_release_status,
+                recent_digital_release_date=_recent_digital_release_date,
+            )
 
         _sash_priority = rcfg.sash_priority
 
