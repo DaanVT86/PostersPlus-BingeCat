@@ -306,6 +306,7 @@ _SASH_TYPES: dict[str, str] = {
     "studio":          "prestige",  # purple — production credit
     "director":        "prestige",  # purple — production credit
     "cast":            "cast",      # green — talent credit
+    "most_popular":    "trending",  # blue — BingeCat's shared TMDB popularity list
     "trending":        "trending",  # blue
     "trending_broad":  "trending",  # blue — lower-priority ranks 41-100
     "new_season":      "alert",     # red — timely TV lifecycle signal
@@ -423,6 +424,7 @@ class DiscoveryMeta:
     original_language: str | None = None   # ISO 639-1 code, e.g. "ko", "fr"
 
     # Social proof
+    most_popular_rank: int | None = None
     trending_rank: int | None = None
 
     # Timely release / TV lifecycle signals
@@ -717,6 +719,13 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
     if slot == "trending":
         return f"#{meta.trending_rank} Today" if meta.trending_rank and meta.trending_rank <= _cfg.TRENDING_FETCH_COUNT else None
 
+    if slot == "most_popular":
+        return (
+            f"#{meta.most_popular_rank} Today"
+            if meta.most_popular_rank and meta.most_popular_rank <= 20
+            else None
+        )
+
     if slot == "trending_broad":
         return f"#{meta.trending_rank} Today" if meta.trending_rank and _cfg.TRENDING_FETCH_COUNT < meta.trending_rank <= _cfg.TRENDING_BROAD_FETCH_COUNT else None
 
@@ -781,6 +790,7 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
 # ---------------------------------------------------------------------------
 
 ALL_PRIORITY_SLOTS: list[str] = [
+    "most_popular",
     "wins",
     "gg_wins",
     "festival",

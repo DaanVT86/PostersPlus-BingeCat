@@ -18,8 +18,8 @@ ACTIVE_PRESET_REFS = ("clean-notch@3", "prestige@2", "minimalist@3")
 # change; immutable BingeCat identities intentionally fail closed otherwise.
 # SHA-256 seed: c831989a656ed3b153382bdb9b85ff9f4a024e67:
 # bingecat-postersplus-vanilla-v1:sash-exclusions-v1:identity-render-cache-v1:
-# snapshot-render-inputs-v1
-RENDERER_REVISION = "fd979d24a31d680443dce18c44f4643078387b3676c82b42220b7ae7c2bea64b"
+# snapshot-render-inputs-v1:most-popular-rank-v1
+RENDERER_REVISION = "0d3c3cf4496b90783e0b4452e608243ac8de50e95deeb6069b9b6792dcd97fce"
 EXPECTED_CONFIG_HASHES = {
     "clean-notch@3": "3e6549607745bb14293c0630e4fc756fcf7a930fe70cde6d12b5851f92c82404",
     "prestige@2": "97b362bdcfb73a5ec2583b2992fbb473de41a80afe6dd0fa0f6a5c872d6115f7",

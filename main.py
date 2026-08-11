@@ -2837,12 +2837,18 @@ async def _vanilla_payload(request: Request) -> dict:
     return value
 
 
-def _validate_vanilla_request(value: dict, *, render: bool) -> tuple[dict, str, str]:
+def _validate_vanilla_request(
+    value: dict,
+    *,
+    render: bool,
+) -> tuple[dict, str, str, int | None]:
     required_fields = {
         "schema", "version", "media", "preset_ref",
         "snapshot_sha256", "config_sha256", "locale", "output_format",
     } if render else {"schema", "version", "media", "preset_ref", "locales"}
-    allowed_fields = required_fields if render else required_fields | {"locale"}
+    allowed_fields = required_fields | {"most_popular_rank"}
+    if not render:
+        allowed_fields.add("locale")
     if not required_fields.issubset(value) or not set(value).issubset(allowed_fields):
         raise HTTPException(status_code=400, detail="invalid contract fields", headers={"Cache-Control": "no-store"})
     version = value.get("version")
@@ -2896,12 +2902,29 @@ def _validate_vanilla_request(value: dict, *, render: bool) -> tuple[dict, str, 
         locale = locale or normalized_locales[0]
     if locale not in VANILLA_SUPPORTED_LOCALES:
         raise HTTPException(status_code=400, detail="unsupported locale", headers={"Cache-Control": "no-store"})
+    most_popular_rank = value.get("most_popular_rank")
+    if most_popular_rank is not None and (
+        isinstance(most_popular_rank, bool)
+        or not isinstance(most_popular_rank, int)
+        or not 1 <= most_popular_rank <= 20
+    ):
+        raise HTTPException(status_code=400, detail="invalid most_popular_rank", headers={"Cache-Control": "no-store"})
     media_value = {"media_type": media_type, "tmdb_id": tmdb_id, "imdb_id": imdb_id}
-    return media_value, preset_ref, locale
+    return media_value, preset_ref, locale, most_popular_rank
 
 
-def _vanilla_snapshot_key(media: dict, preset_ref: str, locale: str) -> str:
-    return hashlib.sha256(_vanilla_json({"media": media, "preset_ref": preset_ref, "locale": locale})).hexdigest()
+def _vanilla_snapshot_key(
+    media: dict,
+    preset_ref: str,
+    locale: str,
+    most_popular_rank: int | None = None,
+) -> str:
+    return hashlib.sha256(_vanilla_json({
+        "media": media,
+        "preset_ref": preset_ref,
+        "locale": locale,
+        "most_popular_rank": most_popular_rank,
+    })).hexdigest()
 
 
 def _vanilla_render_key(
@@ -3033,7 +3056,12 @@ def _vanilla_logo_snapshot(logos: list) -> list[dict]:
     return result
 
 
-async def _build_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -> dict:
+async def _build_vanilla_enrichment(
+    media: dict,
+    preset_ref: str,
+    locale: str,
+    most_popular_rank: int | None = None,
+) -> dict:
     if _HTTP_CLIENT is None or not _cfg.SERVER_TMDB_KEY:
         raise RuntimeError("provider unavailable")
     media_type = str(media["media_type"])
@@ -3170,6 +3198,7 @@ async def _build_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -
         release_status_override=release_status,
         recent_digital_release_date=recent_digital_release_date,
     )
+    discovery_meta.most_popular_rank = most_popular_rank
     snapshot = {
         "schema": "postersplus_vanilla_snapshot",
         "version": 1,
@@ -3193,6 +3222,7 @@ async def _build_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -
         "is_true_story": is_true_story,
         "is_metacritic": is_metacritic,
         "is_digital_release": digital_release,
+        "most_popular_rank": most_popular_rank,
         "trending_rank": trending_rank,
         "release_status": release_status,
         "recent_digital_release_date": recent_digital_release_date,
@@ -3219,6 +3249,7 @@ def _valid_cached_vanilla_enrichment(
     media: dict,
     preset_ref: str,
     locale: str,
+    most_popular_rank: int | None = None,
 ) -> bool:
     if not isinstance(value, dict) or set(value) != {
         "schema", "version", "media", "preset_ref", "locale", "snapshot",
@@ -3251,6 +3282,11 @@ def _valid_cached_vanilla_enrichment(
         )
         or (request_imdb is not None and response_media.get("imdb_id") != request_imdb)
         or snapshot.get("media") != response_media
+        or "most_popular_rank" not in snapshot
+        or snapshot.get("most_popular_rank") != most_popular_rank
+        or not isinstance(snapshot.get("discovery_meta"), dict)
+        or "most_popular_rank" not in snapshot["discovery_meta"]
+        or snapshot["discovery_meta"].get("most_popular_rank") != most_popular_rank
         or value.get("config_sha256") != get_preset(preset_ref).config_sha256
         or value.get("renderer_revision") != VANILLA_RENDERER_REVISION
     ):
@@ -3265,15 +3301,22 @@ def _valid_cached_vanilla_enrichment(
     )
 
 
-async def _coalesced_vanilla_enrichment(media: dict, preset_ref: str, locale: str) -> dict:
+async def _coalesced_vanilla_enrichment(
+    media: dict,
+    preset_ref: str,
+    locale: str,
+    most_popular_rank: int | None = None,
+) -> dict:
     global _vanilla_enrich_semaphore
 
-    key = _vanilla_snapshot_key(media, preset_ref, locale)
+    key = _vanilla_snapshot_key(media, preset_ref, locale, most_popular_rank)
     cached = get_cached_vanilla_snapshot(key)
     if cached:
         try:
             value = json.loads(cached)
-            if _valid_cached_vanilla_enrichment(value, media, preset_ref, locale):
+            if _valid_cached_vanilla_enrichment(
+                value, media, preset_ref, locale, most_popular_rank
+            ):
                 return value
         except (ValueError, TypeError):
             pass
@@ -3290,7 +3333,9 @@ async def _coalesced_vanilla_enrichment(media: dict, preset_ref: str, locale: st
             )
         async with _vanilla_enrich_semaphore:
             value = await asyncio.wait_for(
-                _build_vanilla_enrichment(media, preset_ref, locale),
+                _build_vanilla_enrichment(
+                    media, preset_ref, locale, most_popular_rank
+                ),
                 timeout=_cfg.VANILLA_RENDER_TIMEOUT_SECONDS,
             )
         encoded = _vanilla_json(value)
@@ -3360,9 +3405,13 @@ async def _coalesced_vanilla_render(
 async def vanilla_enrich(request: Request):
     try:
         value = await _vanilla_payload(request)
-        media, preset_ref, locale = _validate_vanilla_request(value, render=False)
+        media, preset_ref, locale, most_popular_rank = _validate_vanilla_request(
+            value, render=False
+        )
         result = await asyncio.wait_for(
-            _coalesced_vanilla_enrichment(media, preset_ref, locale),
+            _coalesced_vanilla_enrichment(
+                media, preset_ref, locale, most_popular_rank
+            ),
             timeout=_cfg.VANILLA_RENDER_TIMEOUT_SECONDS,
         )
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -3380,20 +3429,24 @@ async def vanilla_render(request: Request):
     global _vanilla_render_semaphore
     try:
         value = await _vanilla_payload(request)
-        media, preset_ref, locale = _validate_vanilla_request(value, render=True)
+        media, preset_ref, locale, most_popular_rank = _validate_vanilla_request(
+            value, render=True
+        )
         config_sha256 = str(value["config_sha256"])
         expected_config = str(get_preset(preset_ref)["config_sha256"])
         if not hmac.compare_digest(config_sha256, expected_config):
             return _vanilla_error(409, "config_mismatch")
         snapshot_sha256 = str(value["snapshot_sha256"])
-        snapshot_key = _vanilla_snapshot_key(media, preset_ref, locale)
+        snapshot_key = _vanilla_snapshot_key(
+            media, preset_ref, locale, most_popular_rank
+        )
         snapshot_bytes = get_cached_vanilla_snapshot(snapshot_key)
         if snapshot_bytes is None:
             return _vanilla_error(409, "snapshot_unavailable")
         try:
             enrichment = json.loads(snapshot_bytes)
             if not _valid_cached_vanilla_enrichment(
-                enrichment, media, preset_ref, locale
+                enrichment, media, preset_ref, locale, most_popular_rank
             ):
                 return _vanilla_error(409, "snapshot_unavailable")
             cached_snapshot_sha256 = str(enrichment["snapshot_sha256"])
