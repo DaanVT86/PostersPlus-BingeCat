@@ -177,6 +177,12 @@ def test_signature_replay_clock_and_query_are_rejected():
 
 
 def test_invalid_preset_and_user_credentials_are_rejected_before_provider_io():
+    legacy_schema = _payload()
+    legacy_schema["schema"] = "bingecat_postersplus_v2"
+    with pytest.raises(HTTPException) as exc_info:
+        main._validate_vanilla_request(legacy_schema, render=False)
+    assert exc_info.value.status_code == 400
+
     invalid = _payload("legacy@1")
     with pytest.raises(HTTPException) as exc_info:
         main._validate_vanilla_request(invalid, render=False)
