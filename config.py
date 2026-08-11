@@ -97,6 +97,20 @@ SOURCE_ART_LEDGER_PATH = os.environ.get(
 POSTERSPLUS_INTEGRATION_STATELESS_METADATA = os.environ.get(
     "POSTERSPLUS_INTEGRATION_STATELESS_METADATA", "true"
 ).strip().lower() not in ("0", "false", "no", "off")
+VANILLA_RENDER_CONCURRENCY = max(
+    1, min(16, _bytes_env("VANILLA_RENDER_CONCURRENCY", 3))
+)
+try:
+    VANILLA_RENDER_TIMEOUT_SECONDS = max(
+        1.0,
+        min(60.0, float(os.environ.get("VANILLA_RENDER_TIMEOUT_SECONDS", "30"))),
+    )
+except (TypeError, ValueError):
+    VANILLA_RENDER_TIMEOUT_SECONDS = 30.0
+VANILLA_RENDER_MAX_BYTES = max(
+    1_000_000,
+    min(25_000_000, _bytes_env("VANILLA_RENDER_MAX_BYTES", 25_000_000)),
+)
 
 # Quality source selection.
 # QUALITY_SOURCE: "aiostreams" (default) or "scraper".
