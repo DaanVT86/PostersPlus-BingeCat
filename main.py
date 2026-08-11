@@ -2777,9 +2777,6 @@ _VANILLA_FORBIDDEN_FIELDS = frozenset({
     "access_key", "api_key", "apikey", "authorization", "mdblist_key",
     "password", "secret", "token", "tmdb_key",
 })
-_VANILLA_REQUEST_SCHEMAS = frozenset({VANILLA_SCHEMA, "bingecat_postersplus_vanilla"})
-
-
 def _vanilla_has_forbidden_field(value: object) -> bool:
     pending = [value]
     visited = 0
@@ -2838,7 +2835,7 @@ async def _vanilla_payload(request: Request) -> dict:
 
 
 def _validate_vanilla_request(value: dict, *, render: bool) -> tuple[dict, str, str]:
-    if value.get("schema") not in _VANILLA_REQUEST_SCHEMAS or value.get("version") != VANILLA_VERSION:
+    if value.get("schema") != VANILLA_SCHEMA or value.get("version") != VANILLA_VERSION:
         raise HTTPException(status_code=400, detail="invalid contract schema", headers={"Cache-Control": "no-store"})
     media = value.get("media")
     if not isinstance(media, dict) or len(media) > 4:
