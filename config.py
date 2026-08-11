@@ -45,6 +45,24 @@ SERVER_TMDB_KEY       = os.environ.get("TMDB_API_KEY", "").strip()
 SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
 SERVER_MDBLIST_KEY_2  = os.environ.get("MDBLIST_API_KEY_2", "").strip()
 
+# Signed private contract used by BingeCat's vanilla-backed cold path.  Keep
+# this separate from ACCESS_KEY: ACCESS_KEY protects the public/operator
+# endpoints, while this value authenticates the directional Core boundary.
+POSTERSPLUS_V2_REQUEST_SECRET = os.environ.get(
+    "POSTERSPLUS_BINGECAT_REQUEST_SECRET",
+    os.environ.get("POSTERSPLUS_V2_REQUEST_SECRET", ""),
+).strip()
+VANILLA_RENDER_CONCURRENCY = max(
+    1, int(os.environ.get("VANILLA_RENDER_CONCURRENCY", "3"))
+)
+VANILLA_RENDER_TIMEOUT_SECONDS = max(
+    1.0, min(60.0, float(os.environ.get("VANILLA_RENDER_TIMEOUT_SECONDS", "30")))
+)
+VANILLA_RENDER_MAX_BYTES = max(
+    1_000_000,
+    min(25_000_000, int(os.environ.get("VANILLA_RENDER_MAX_BYTES", "25000000"))),
+)
+
 # TheTVDB v4 API key.  Optional — when empty, every TVDB code path is skipped
 # and behaviour is identical to TMDB-only.  TVDB is used strictly as a fallback
 # source of art (logos, backdrops, optionally textless posters) for titles where

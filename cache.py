@@ -454,6 +454,57 @@ def delete_cached_final_poster(cache_key: str) -> None:
     except Exception as exc:
         logger.error(f"Final poster cache delete error: {exc}")
 
+
+def get_cached_vanilla_snapshot(cache_key: str) -> bytes | None:
+    """Read a bounded enrichment snapshot from the vanilla SQLite cache."""
+    conn = None
+    try:
+        conn = get_db()
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS vanilla_snapshot_cache "
+            "(cache_key TEXT PRIMARY KEY, snapshot_json BLOB NOT NULL, cached_at INTEGER NOT NULL)"
+        )
+        row = conn.execute(
+            "SELECT snapshot_json, cached_at FROM vanilla_snapshot_cache WHERE cache_key = ?",
+            (cache_key,),
+        ).fetchone()
+        if not row:
+            return None
+        if time.time() - int(row[1]) > 7 * 86400:
+            with _db_lock:
+                conn.execute("DELETE FROM vanilla_snapshot_cache WHERE cache_key = ?", (cache_key,))
+                conn.commit()
+            return None
+        return bytes(row[0])
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        logger.warning("Vanilla snapshot cache read failed: %s", exc)
+        return None
+
+
+def set_cached_vanilla_snapshot(cache_key: str, snapshot_json: bytes) -> None:
+    """Persist an enrichment snapshot without sharing the final-artifact table."""
+    if len(snapshot_json) > 256 * 1024:
+        raise ValueError("vanilla snapshot exceeds bounded size")
+    conn = None
+    try:
+        with _db_lock:
+            conn = get_db()
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS vanilla_snapshot_cache "
+                "(cache_key TEXT PRIMARY KEY, snapshot_json BLOB NOT NULL, cached_at INTEGER NOT NULL)"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO vanilla_snapshot_cache(cache_key, snapshot_json, cached_at) VALUES (?, ?, ?)",
+                (cache_key, snapshot_json, int(time.time())),
+            )
+            conn.commit()
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        logger.warning("Vanilla snapshot cache write failed: %s", exc)
+
 def invalidate_final_posters(tmdb_id: str, media_type: str | None = None) -> None:
     """Invalidate all composited posters for a specific TMDB ID.
     Used when underlying dynamic data (like trending rank or release status)
