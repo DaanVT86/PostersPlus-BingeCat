@@ -311,7 +311,7 @@ Sash priority order is configurable in the web configurator via drag-and-drop. T
 
 ## Ratings
 
-Scores from multiple providers are normalised to a 0–100 scale and combined using configurable weights. Default weights give IMDb, TMDb, Letterboxd, and Trakt equal shares for movies, and IMDb, TMDb, and Trakt equal shares for TV; Rotten Tomatoes approval and critic sources remain available but default to zero. Weights are fully adjustable in the web configurator.
+Scores from multiple providers are normalised to a 0–100 scale and combined using configurable weights. Default weights use Letterboxd with Trakt fallback for movies, and Trakt (80%) and Rotten Tomatoes (20%) for TV. Weights are fully adjustable in the web configurator.
 
 ---
 

@@ -425,26 +425,26 @@ TEXTLESS_DETECTION_CONCURRENCY = max(1, min(
 # Keep zero-weight providers here: they remain available as user-configurable options.
 
 MOVIE_WEIGHTS = {   # set weight of movie ranking providers, must sum to 1
-    "letterboxd":     0.25,
-    "trakt":          0.25,
-    "tomatoes":       0,
+    "letterboxd":     0.8,
+    "trakt":          0,
+    "tomatoes":       0.2,
     "popcorn":        0, # popcorn is the api response MDblist uses for tomatoes audience
-    "imdb":           0.25,
+    "imdb":           0,
     "metacritic":     0,
     "metacriticuser": 0,
-    "tmdb":           0.25,
+    "tmdb":           0,
     "rogerebert":     0,
     "myanimelist":    0,
 }
 
 TV_WEIGHTS = {   # set weight of TV ranking providers, must sum to 1
-    "trakt":          1 / 3,
-    "tomatoes":       0,
+    "trakt":          0.8,
+    "tomatoes":       0.2,
     "popcorn":        0,
-    "imdb":           1 / 3,
+    "imdb":           0,
     "metacritic":     0,
     "metacriticuser": 0,
-    "tmdb":           1 / 3,
+    "tmdb":           0,
     "myanimelist":    0,
 }
 
