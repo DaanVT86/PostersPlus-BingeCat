@@ -2755,7 +2755,7 @@ const SOURCE_LABELS = {
   rogerebert:'Roger Ebert', myanimelist:'MyAnimeList',
 };
 const DEFAULT_MOVIE_W = {imdb:0.25,letterboxd:0.25,tmdb:0.25,trakt:0.25,tomatoes:0,popcorn:0,metacritic:0,metacriticuser:0,rogerebert:0,myanimelist:0};
-const DEFAULT_TV_W    = {imdb:0.3333333333333333,tmdb:0.3333333333333333,trakt:0.3333333333333333,tomatoes:0,popcorn:0,metacritic:0,metacriticuser:0,myanimelist:0};
+const DEFAULT_TV_W    = {imdb:0.333333,tmdb:0.333333,trakt:0.333333,tomatoes:0,popcorn:0,metacritic:0,metacriticuser:0,myanimelist:0};
 
 const CLIENT_INSETS = {
   stremio_tv_nuvio:    { bar: 0.000, notch: 0.000 },
@@ -3167,7 +3167,7 @@ function buildWeightSection(containerId, sources, defaults) {
     return `
       <div class="weight-item">
         <span class="weight-name">${SOURCE_LABELS[src] || src.toUpperCase()}</span>
-        <input type="range" min="0" max="1" step="any" value="${def}"
+        <input type="range" min="0" max="1" step="0.01" value="${def}"
           data-src="${src}" data-container="${containerId}"
           oninput="updateWeightRange(this,'rv-${containerId}-${src}'); updateWeightSum('${containerId}'); build(); queuePreviewReload()"
           style="flex:1;">
@@ -3794,8 +3794,8 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
     // Rating weights only affect the displayed score
     const mw = getWeights('movie-weights', MOVIE_SOURCES);
     const tw = getWeights('tv-weights',    TV_SOURCES);
-    params.set('movie_weights', Object.entries(mw).map(([k,v]) => `${k}:${String(v)}`).join(','));
-    params.set('tv_weights',    Object.entries(tw).map(([k,v]) => `${k}:${String(v)}`).join(','));
+    params.set('movie_weights', Object.entries(mw).map(([k,v]) => `${k}:${v.toFixed(2)}`).join(','));
+    params.set('tv_weights',    Object.entries(tw).map(([k,v]) => `${k}:${v.toFixed(2)}`).join(','));
   }
 
   // ── Logo ───────────────────────────────────────────────────────────────────

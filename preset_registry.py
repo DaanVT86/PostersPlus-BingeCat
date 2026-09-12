@@ -60,7 +60,7 @@ _PRIORITY = "wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trendin
 _MOVIE_WEIGHTS = "letterboxd:0.99,trakt:0.01,tomatoes:0,popcorn:0,imdb:0,metacritic:0,metacriticuser:0,tmdb:0,rogerebert:0,myanimelist:0"
 _TV_WEIGHTS = "trakt:0.8,tomatoes:0.2,popcorn:0,imdb:0,metacritic:0,metacriticuser:0,tmdb:0,myanimelist:0"
 _BINGECAT_MOVIE_WEIGHTS = "imdb:0.25,letterboxd:0.25,metacritic:0,metacriticuser:0,myanimelist:0,popcorn:0,rogerebert:0,tmdb:0.25,tomatoes:0,trakt:0.25"
-_BINGECAT_TV_WEIGHTS = "imdb:0.3333333333333333,metacritic:0,metacriticuser:0,myanimelist:0,popcorn:0,tmdb:0.3333333333333333,tomatoes:0,trakt:0.3333333333333333"
+_BINGECAT_TV_WEIGHTS = "imdb:0.333333,metacritic:0,metacriticuser:0,myanimelist:0,popcorn:0,tmdb:0.333333,tomatoes:0,trakt:0.333333"
 
 
 def _preset_config(values: Mapping[str, Any]) -> CanonicalRenderSpec:

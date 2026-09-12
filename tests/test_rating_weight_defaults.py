@@ -31,7 +31,7 @@ def test_backend_rating_defaults_use_the_bingecat_provider_contract():
 def test_configurator_rating_defaults_match_backend_contract():
     html = Path("configurator.html").read_text(encoding="utf-8")
     assert "const DEFAULT_MOVIE_W = {imdb:0.25,letterboxd:0.25,tmdb:0.25,trakt:0.25," in html
-    assert "const DEFAULT_TV_W    = {imdb:0.3333333333333333,tmdb:0.3333333333333333,trakt:0.3333333333333333," in html
+    assert "const DEFAULT_TV_W    = {imdb:0.333333,tmdb:0.333333,trakt:0.333333," in html
     assert "tomatoes:0,popcorn:0" in html
-    assert 'input type="range" min="0" max="1" step="any" value="${def}"' in html
-    assert "`${k}:${String(v)}`" in html
+    assert 'input type="range" min="0" max="1" step="0.01" value="${def}"' in html
+    assert "`${k}:${v.toFixed(2)}`" in html

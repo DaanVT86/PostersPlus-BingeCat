@@ -18,9 +18,9 @@ def test_bingecat_presets_are_immutable_and_have_pinned_hashes():
         "clean-notch@3": "4f27590eecd267fb4f8e1e9ba692ac1e4f50c46cf81542321a3870bfd4577656",
         "prestige@2": "980a4e5f7feabd8c5e5044319a38deafc9f9e9dbd8dc2215d785417f35b0b56b",
         "minimalist@3": "cdb4a6967d738fe632ef7fc3fe4961c1b1e27b64f4067ec72062cf96d8dcce7b",
-        "clean-notch@4": "61a8a43da5863034096a25ab3a28d73689688d463d487b95176ef0a086f13f48",
-        "prestige@3": "39c50eca92fc8ad64c5c6821540b4ede23c04cb5907d0dd96403cec960487a4c",
-        "minimalist@4": "65bb6084a6cd096b5e131522f0d875ac8c453026ab8aee5638f37b487077a9e6",
+        "clean-notch@4": "9fdbe43272939dd4e189d1ddfc1cda6cae1940588c82b18c2619ab052afa3db6",
+        "prestige@3": "9887f7f9cde5ab44965d71c858e3c37c8450a6e05231a37dbde6f21dce3fce1c",
+        "minimalist@4": "c244df47e3813bf8551e7d5d770ded33260f77dda7faef3b2cb9d3d602ac99d3",
     }
 
     assert set(BINGECAT_PRESET_REGISTRY) == set(expected_hashes)
@@ -133,9 +133,9 @@ def test_latest_presets_use_the_bingecat_rating_weight_contract():
         "tomatoes": 0.0,
     }
     expected_tv_weights = {
-        "imdb": 1 / 3,
-        "tmdb": 1 / 3,
-        "trakt": 1 / 3,
+        "imdb": 0.333333,
+        "tmdb": 0.333333,
+        "trakt": 0.333333,
         "metacritic": 0.0,
         "metacriticuser": 0.0,
         "myanimelist": 0.0,

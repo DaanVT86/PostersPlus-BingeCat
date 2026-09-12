@@ -333,7 +333,7 @@ def _legacy_config_from_canonical_query(spec, *, locale: str):
             params[field_name] = "true" if value else "false"
         elif field_name in {"movie_weights", "tv_weights"}:
             params[field_name] = ",".join(
-                f"{provider}:{weight:.17g}" for provider, weight in value
+                f"{provider}:{weight:g}" for provider, weight in value
             )
         elif field_name == "sash_priority":
             exclusions = tuple(f"-{slot}" for slot in spec.sash_exclusions)

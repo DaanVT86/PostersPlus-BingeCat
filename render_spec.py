@@ -253,17 +253,7 @@ def _weights(value: Any, allowed: frozenset[str]) -> tuple[tuple[str, float], ..
     for key, weight in pairs:
         name = str(key).strip().lower()
         if name in allowed:
-            # Preserve provider fractions such as 1/3 exactly in the
-            # canonical JSON.  The other bounded render floats are rounded to
-            # six places, but rounding weights would turn equal thirds into a
-            # different contract while providing no useful protection here.
-            try:
-                parsed = float(weight)
-            except (TypeError, ValueError, OverflowError):
-                parsed = 0.0
-            if not math.isfinite(parsed):
-                parsed = 0.0
-            normalised[name] = max(0.0, min(1.0, parsed))
+            normalised[name] = _float(weight, 0.0, 0.0, 1.0)
     return tuple(sorted(normalised.items()))
 
 
