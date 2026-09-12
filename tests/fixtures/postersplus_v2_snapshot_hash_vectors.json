@@ -3955,8 +3955,8 @@
           },
           {
             "metric": "score",
-            "normalized_score": 91.0,
-            "provider": "tomatoes",
+            "normalized_score": 81.0,
+            "provider": "trakt",
             "source": "mdblist:imdb"
           }
         ],
@@ -4227,8 +4227,8 @@
           },
           {
             "metric": "score",
-            "normalized_score": 81.0,
-            "provider": "trakt",
+            "normalized_score": 91.0,
+            "provider": "tomatoes",
             "source": "mdblist:imdb"
           }
         ],
