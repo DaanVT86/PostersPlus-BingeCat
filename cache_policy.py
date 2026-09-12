@@ -184,6 +184,35 @@ def _bounded_files(
                     continue
 
 
+def _bounded_top_level_files(
+    root: str | os.PathLike[str],
+    *,
+    limit: int = FILE_WALK_LIMIT,
+    state: ScanState | None = None,
+):
+    """Yield regular files directly below root without entering cache trees."""
+
+    scan = state if state is not None else ScanState()
+    base = Path(root)
+    if not base.exists() or base.is_symlink():
+        return
+    try:
+        entries = os.scandir(base)
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            if scan.visited_entries >= limit:
+                scan.incomplete = True
+                return
+            scan.visited_entries += 1
+            try:
+                if not entry.is_symlink() and entry.is_file(follow_symlinks=False):
+                    yield Path(entry.path)
+            except OSError:
+                continue
+
+
 def _sum_query(path: str | os.PathLike[str], sql: str) -> int:
     if not os.path.exists(path):
         return 0
@@ -316,7 +345,11 @@ def _temp_bytes() -> tuple[int, bool]:
         if root in seen_roots:
             continue
         seen_roots.add(root)
-        for path in _bounded_files(root, state=scan):
+        # DB and ledger directories can also contain the independently owned
+        # source-art tree. Only temporary files directly beside the databases
+        # belong to this pool; descending into sibling cache trees would hit
+        # the scan cap and falsely charge the full legacy allocation.
+        for path in _bounded_top_level_files(root, state=scan):
             absolute = path.absolute()
             if absolute in counted:
                 continue

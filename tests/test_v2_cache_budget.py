@@ -210,6 +210,35 @@ def test_source_prune_rejects_outside_paths_and_never_unlinks_symlinks(tmp_path:
     assert symlink.is_symlink()
 
 
+def test_temp_accounting_does_not_descend_into_source_art_tree(tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    source_root = cache_root / "source_art"
+    source_tmp = source_root / "tmp"
+    unrelated = source_root / "reconstructable"
+    source_tmp.mkdir(parents=True)
+    unrelated.mkdir()
+    for index in range(cache_policy.FILE_WALK_LIMIT + 1):
+        (unrelated / f"{index}.webp").write_bytes(b"source")
+    staged = source_tmp / "raw-stage.tmp"
+    beside_db = cache_root / "install-cache.tmp"
+    staged.write_bytes(b"stage")
+    beside_db.write_bytes(b"beside")
+
+    with (
+        patch.object(cache_policy.config, "DB_PATH", str(cache_root / "cache.db")),
+        patch.object(cache_policy.config, "SOURCE_ART_CACHE_DIR", str(source_root)),
+        patch.object(
+            cache_policy.config,
+            "SOURCE_ART_LEDGER_PATH",
+            str(cache_root / "source_art.sqlite"),
+        ),
+    ):
+        total, incomplete = cache_policy._temp_bytes()
+
+    assert incomplete is False
+    assert total == len(b"stage") + len(b"beside")
+
+
 def test_prune_waits_for_high_watermark_and_reports_before_after(monkeypatch) -> None:
     def usage(source: int, legacy: int) -> cache_policy.CacheUsage:
         limits = (100, 90, 80)
