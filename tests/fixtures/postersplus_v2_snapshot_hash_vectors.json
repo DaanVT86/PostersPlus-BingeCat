@@ -4227,8 +4227,8 @@
           },
           {
             "metric": "score",
-            "normalized_score": 91.0,
-            "provider": "tomatoes",
+            "normalized_score": 81.0,
+            "provider": "trakt",
             "source": "mdblist:imdb"
           }
         ],
@@ -4247,7 +4247,7 @@
         ],
         "titles_by_locale": {}
       },
-      "expected_sha256": "9a25afc58108b717f0b1887be7ea71f5252122402f8eacbb2c2767152b3f940e",
+      "expected_sha256": "65516900cf42d8ac8ba847bc6ddeff3f3351096b9c58869cb0ce1d2bc162e30a",
       "id": "custom-empty-movie-weights",
       "locale": "en",
       "snapshot_ref": "empty-weight-ratings"

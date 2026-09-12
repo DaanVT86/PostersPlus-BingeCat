@@ -333,7 +333,7 @@ def _legacy_config_from_canonical_query(spec, *, locale: str):
             params[field_name] = "true" if value else "false"
         elif field_name in {"movie_weights", "tv_weights"}:
             params[field_name] = ",".join(
-                f"{provider}:{weight:g}" for provider, weight in value
+                f"{provider}:{weight:.17g}" for provider, weight in value
             )
         elif field_name == "sash_priority":
             exclusions = tuple(f"-{slot}" for slot in spec.sash_exclusions)
@@ -435,7 +435,34 @@ def test_render_is_pure_and_deterministic_for_identical_tuple(tmp_path, monkeypa
             },
         ),
         (
+            "clean-notch@4",
+            {
+                "rating_display_mode": 2,
+                "sash_mode": "notch",
+                "sash_badge_size_w": 0.5,
+                "sash_badge_size_h": 1.3,
+            },
+        ),
+        (
+            "prestige@3",
+            {
+                "rating_display_mode": 1,
+                "sash_mode": "sash",
+                "score_glow_threshold": 85,
+                "sash_length_ratio": 1.2,
+            },
+        ),
+        (
             "minimalist@2",
+            {
+                "rating_display_mode": 3,
+                "minimalist_mode_font_size_ratio": 0.065,
+                "show_award_sash": False,
+                "sash_mode": "hidden",
+            },
+        ),
+        (
+            "minimalist@4",
             {
                 "rating_display_mode": 3,
                 "minimalist_mode_font_size_ratio": 0.065,
@@ -1381,9 +1408,9 @@ def test_presets_endpoint_is_authenticated_canonical_and_secret_free(monkeypatch
     assert payload["version"] == CONTRACT_VERSION
     assert payload["renderer_revision"] == RENDERER_REVISION
     assert [item["ref"] for item in payload["presets"]] == [
-        "clean-notch@3",
-        "prestige@2",
-        "minimalist@3",
+        "clean-notch@4",
+        "prestige@3",
+        "minimalist@4",
     ]
     assert all(len(item["config_sha256"]) == 64 for item in payload["presets"])
     assert all(len(item["requirements_sha256"]) == 64 for item in payload["presets"])

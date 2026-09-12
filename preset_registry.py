@@ -13,7 +13,7 @@ from render_spec import CanonicalRenderSpec, canonicalize_config
 
 
 _SUPPORTED_LOCALES = ("en", "pt", "nl", "de", "es")
-_ACTIVE_PRESET_REFS = ("clean-notch@3", "prestige@2", "minimalist@3")
+_ACTIVE_PRESET_REFS = ("clean-notch@4", "prestige@3", "minimalist@4")
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,8 @@ class Preset:
 _PRIORITY = "wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,new_season,returning,premiere,just_added,season_finale,cult,foreign,new_release,metacritic,true_story,structural,trending_broad,release_status"
 _MOVIE_WEIGHTS = "letterboxd:0.99,trakt:0.01,tomatoes:0,popcorn:0,imdb:0,metacritic:0,metacriticuser:0,tmdb:0,rogerebert:0,myanimelist:0"
 _TV_WEIGHTS = "trakt:0.8,tomatoes:0.2,popcorn:0,imdb:0,metacritic:0,metacriticuser:0,tmdb:0,myanimelist:0"
+_BINGECAT_MOVIE_WEIGHTS = "imdb:0.25,letterboxd:0.25,metacritic:0,metacriticuser:0,myanimelist:0,popcorn:0,rogerebert:0,tmdb:0.25,tomatoes:0,trakt:0.25"
+_BINGECAT_TV_WEIGHTS = "imdb:0.3333333333333333,metacritic:0,metacriticuser:0,myanimelist:0,popcorn:0,tmdb:0.3333333333333333,tomatoes:0,trakt:0.3333333333333333"
 
 
 def _preset_config(values: Mapping[str, Any]) -> CanonicalRenderSpec:
@@ -205,6 +207,20 @@ def _build_registry() -> dict[str, Preset]:
             label,
             {**legacy_values, "sash_priority": f"most_popular,{legacy_priority}"},
         )
+    for new_ref, legacy_ref in (
+        ("clean-notch@4", "clean-notch@3"),
+        ("prestige@3", "prestige@2"),
+        ("minimalist@4", "minimalist@3"),
+    ):
+        label, legacy_values = configs[legacy_ref]
+        configs[new_ref] = (
+            label,
+            {
+                **legacy_values,
+                "movie_weights": _BINGECAT_MOVIE_WEIGHTS,
+                "tv_weights": _BINGECAT_TV_WEIGHTS,
+            },
+        )
     registry: dict[str, Preset] = {}
     for ref, (label, values) in configs.items():
         preset_id, version = ref.rsplit("@", 1)
@@ -225,6 +241,9 @@ def _validate_registry(registry: Mapping[str, Preset]) -> None:
         "clean-notch@3",
         "prestige@2",
         "minimalist@3",
+        "clean-notch@4",
+        "prestige@3",
+        "minimalist@4",
     }
     if set(registry) != expected_refs:
         raise RuntimeError("BingeCat preset registry has an invalid version set")

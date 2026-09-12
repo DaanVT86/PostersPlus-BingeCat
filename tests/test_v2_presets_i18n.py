@@ -18,13 +18,16 @@ def test_bingecat_presets_are_immutable_and_have_pinned_hashes():
         "clean-notch@3": "4f27590eecd267fb4f8e1e9ba692ac1e4f50c46cf81542321a3870bfd4577656",
         "prestige@2": "980a4e5f7feabd8c5e5044319a38deafc9f9e9dbd8dc2215d785417f35b0b56b",
         "minimalist@3": "cdb4a6967d738fe632ef7fc3fe4961c1b1e27b64f4067ec72062cf96d8dcce7b",
+        "clean-notch@4": "61a8a43da5863034096a25ab3a28d73689688d463d487b95176ef0a086f13f48",
+        "prestige@3": "39c50eca92fc8ad64c5c6821540b4ede23c04cb5907d0dd96403cec960487a4c",
+        "minimalist@4": "65bb6084a6cd096b5e131522f0d875ac8c453026ab8aee5638f37b487077a9e6",
     }
 
     assert set(BINGECAT_PRESET_REGISTRY) == set(expected_hashes)
     assert [metadata.ref for metadata in list_public_presets()] == [
-        "clean-notch@3",
-        "prestige@2",
-        "minimalist@3",
+        "clean-notch@4",
+        "prestige@3",
+        "minimalist@4",
     ]
     for ref, expected_hash in expected_hashes.items():
         preset = get_preset(ref)
@@ -109,11 +112,53 @@ def test_latest_presets_apply_bingecat_layout_policy():
 
 
 def test_latest_presets_put_most_popular_first_and_legacy_refs_remain_stable():
-    for ref in ("clean-notch@3", "prestige@2", "minimalist@3"):
+    for ref in ("clean-notch@4", "prestige@3", "minimalist@4"):
         assert get_preset(ref).config.sash_priority[0] == "most_popular"
     assert get_preset("clean-notch@2").config.sash_priority[0] == "wins"
     assert get_preset("prestige@1").config.sash_priority[0] == "wins"
     assert get_preset("minimalist@2").config.sash_mode == "hidden"
+
+
+def test_latest_presets_use_the_bingecat_rating_weight_contract():
+    expected_movie_weights = {
+        "imdb": 0.25,
+        "letterboxd": 0.25,
+        "tmdb": 0.25,
+        "trakt": 0.25,
+        "metacritic": 0.0,
+        "metacriticuser": 0.0,
+        "myanimelist": 0.0,
+        "popcorn": 0.0,
+        "rogerebert": 0.0,
+        "tomatoes": 0.0,
+    }
+    expected_tv_weights = {
+        "imdb": 1 / 3,
+        "tmdb": 1 / 3,
+        "trakt": 1 / 3,
+        "metacritic": 0.0,
+        "metacriticuser": 0.0,
+        "myanimelist": 0.0,
+        "popcorn": 0.0,
+        "tomatoes": 0.0,
+    }
+
+    for ref in ("clean-notch@4", "prestige@3", "minimalist@4"):
+        config = get_preset(ref).config
+        movie_weights = dict(config.movie_weights)
+        tv_weights = dict(config.tv_weights)
+        assert movie_weights == expected_movie_weights
+        assert tv_weights == expected_tv_weights
+        assert movie_weights["popcorn"] == 0
+        assert movie_weights["tomatoes"] == 0
+        assert tv_weights["popcorn"] == 0
+        assert tv_weights["tomatoes"] == 0
+
+
+def test_new_preset_versions_do_not_change_previous_references():
+    assert dict(get_preset("clean-notch@3").config.movie_weights)["letterboxd"] == 0.99
+    assert dict(get_preset("prestige@2").config.tv_weights)["trakt"] == 0.8
+    assert dict(get_preset("minimalist@3").config.tv_weights)["tomatoes"] == 0.2
 
 
 def test_custom_palette_is_canonical_only_while_visually_active():

@@ -631,6 +631,9 @@ def test_year_render_requirement_fetches_tmdb_once_and_reuses_known_year():
                 year_config,
                 known_ratings=(
                     _rating(),
+                    _rating(provider="imdb"),
+                    _rating(provider="tmdb"),
+                    _rating(provider="trakt"),
                     _rating(provider="tomatoes", normalized_score=82.0),
                 ),
             ),
@@ -649,6 +652,9 @@ def test_year_render_requirement_fetches_tmdb_once_and_reuses_known_year():
                 year_config,
                 known_ratings=(
                     _rating(),
+                    _rating(provider="imdb"),
+                    _rating(provider="tmdb"),
+                    _rating(provider="trakt"),
                     _rating(provider="tomatoes", normalized_score=82.0),
                 ),
                 known_facts={"release_year": 1999, "genre": "Sci-Fi"},
