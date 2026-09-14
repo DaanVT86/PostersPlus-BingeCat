@@ -20,4 +20,6 @@ jobs:
           python -m pip uninstall -y opencv-python
           python -m pip install --force-reinstall --no-deps 'opencv-python-headless>=4.8,<5'
       - name: Verify source ownership, artwork-only and golden contracts
+        env:
+          CACHE_LEADER_LOCK_PATH: ${{ runner.temp }}/postersplus-test-background.lock
         run: python -m pytest -q tests
