@@ -69,6 +69,7 @@ compose=(
   "POSTERSPLUS_PRODUCTION_HEALTH_PORT=${HEALTH_PORT}"
   "POSTERSPLUS_PRODUCTION_NETWORK_ALIAS=${NETWORK_ALIAS}"
   "POSTERSPLUS_PRODUCTION_IMAGE=postersplus-bingecat:v2-${target_sha}"
+  "POSTERSPLUS_SOURCE_REVISION=${target_sha}"
   docker compose --project-directory "${REPO_ROOT}" -f "${COMPOSE_FILE}"
 )
 "${compose[@]}" config --quiet

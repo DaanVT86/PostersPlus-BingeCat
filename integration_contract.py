@@ -24,7 +24,6 @@ from pydantic import (
     model_validator,
 )
 
-
 CONTRACT_SCHEMA = "bingecat_postersplus_v2"
 CONTRACT_VERSION = 1
 MAX_JSON_BODY_BYTES = 256 * 1024
@@ -637,6 +636,10 @@ class EnrichmentRequest(ContractDTO):
     titles_by_locale: dict[SupportedLocale, Title] = Field(min_length=1, max_length=5)
     preset_refs: tuple[PresetReference, ...] = Field(default=(), max_length=16)
     canonical_configs: tuple[dict[str, Any], ...] = Field(default=(), max_length=8)
+    # Oracle's prewarm lane can ask Core to refresh only artwork while carrying
+    # the already-captured facts forward.  The default remains the legacy
+    # requirement-gated enrichment behavior.
+    artwork_only: StrictBool = False
     known_ratings: tuple[ProviderRating, ...] = Field(default=(), max_length=64)
     known_facts: NormalizedFactsEnvelope = Field(default_factory=NormalizedFactsEnvelope)
     known_source_art: tuple[SourceArtReference, ...] = Field(default=(), max_length=24)

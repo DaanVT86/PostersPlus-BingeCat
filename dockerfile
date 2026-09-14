@@ -12,7 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip wheel --wheel-dir /wheels --no-cache-dir -r requirements.txt
+COPY deploy/oracle/runtime-constraints.txt /build/runtime-constraints.txt
+ARG PIN_NETCUP_RUNTIME=false
+RUN if [ "$PIN_NETCUP_RUNTIME" = "true" ]; then export PIP_CONSTRAINT=/build/runtime-constraints.txt; fi; \
+    pip wheel --wheel-dir /wheels --no-cache-dir -r requirements.txt
 RUN find /wheels -type f -name 'opencv_python-*.whl' -delete
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
@@ -61,6 +64,9 @@ RUN adduser --disabled-password --gecos '' appuser
 # which is a runtime volume mount — permissions are fixed by entrypoint.sh.
 COPY . .
 RUN chown -R appuser:appuser /app
+
+ARG SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_REVISION
 
 # Run as root so entrypoint.sh can fix cache volume permissions at startup,
 # then it drops to appuser via gosu before exec-ing uvicorn.

@@ -4,15 +4,22 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import importlib.resources
-from contextlib import contextmanager
-from difflib import SequenceMatcher
+import json
 import logging
-from queue import LifoQueue
 import os
+import platform
 import re
+import sys
 import threading
 import unicodedata
 import urllib.request
+from collections.abc import Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
+from difflib import SequenceMatcher
+from queue import LifoQueue
+from typing import Any, Literal
 
 import numpy as np
 
@@ -110,11 +117,42 @@ except (TypeError, ValueError):
 _SCAN_TOP = max(0.0, min(0.9, _SCAN_TOP))
 
 _LIMIT_SIDE_LEN = 512
+
+
+def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    """Read one bounded integer without making import-time config fatal."""
+
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 _MODEL_SESSIONS = max(1, min(
-    4, os.cpu_count() or 1,
-    int(os.environ.get("TEXTLESS_DETECTION_CONCURRENCY", "2")),
+    4,
+    os.cpu_count() or 1,
+    _bounded_env_int(
+        "TEXTLESS_DETECTION_CONCURRENCY",
+        2,
+        minimum=1,
+        maximum=4,
+    ),
 ))
-_ORT_THREADS = max(1, min(4, (os.cpu_count() or 1) // _MODEL_SESSIONS))
+_AUTO_ORT_THREADS = max(1, min(4, (os.cpu_count() or 1) // _MODEL_SESSIONS))
+# The existing default remains CPU-count based.  A deployment with multiple
+# worker processes can explicitly cap each process's ONNX intra-op pool (for
+# example TEXTLESS_DETECTION_THREADS=2 on a four-core host) without changing
+# the detector's selection rules or renderer revision.
+_ORT_THREADS = _bounded_env_int(
+    "TEXTLESS_DETECTION_THREADS",
+    _AUTO_ORT_THREADS,
+    minimum=1,
+    maximum=4,
+)
+
+OCR_RULES_VERSION = "ppocr.textless.v1"
+OCR_VERIFICATION_RECIPE = "ppocr.textless.v1"
 DETECT_RES_SIG = (
     f"ppocrv5m-r7-s{_LIMIT_SIDE_LEN}-c{int(round(_BOX_THRESHOLD * 100))}"
     f"-wc{int(round(_WIDE_BOX_THRESHOLD * 100))}"
@@ -122,6 +160,7 @@ DETECT_RES_SIG = (
     f"-wr{int(round(_WIDE_MIN_AREA * 10000))}"
     f"-wy{int(round(_WIDE_MIN_Y * 100))}"
     f"-t{int(round(_SCAN_TOP * 100))}"
+    f"-ot{_ORT_THREADS}-{OCR_RULES_VERSION}"
 )
 
 _ocr_pool = None
@@ -129,6 +168,352 @@ _ocr_sessions = []
 _model_lock = threading.Lock()
 _load_failed = False
 _load_error = None
+
+
+OCRDecision = Literal["textless", "text", "unknown"]
+
+
+def _package_version(distribution: str) -> str:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return "missing"
+    except Exception:
+        return "unknown"
+
+
+def _normalise_title_context(
+    title: str | list[str] | tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    values = [title] if isinstance(title, str) else list(title or ())
+    result: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        normalised = _normalise_text(value)
+        if normalised and normalised not in result:
+            result.append(normalised)
+    return tuple(result)
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def title_context_sha256(title: str | list[str] | tuple[str, ...] | None) -> str:
+    """Hash the normalized, de-duplicated, ordered title tuple."""
+
+    return hashlib.sha256(_canonical_json(list(_normalise_title_context(title)))).hexdigest()
+
+
+def ocr_architecture() -> str:
+    """Return a stable CPU architecture label for cross-host memo isolation."""
+
+    return (platform.machine() or "unknown").strip().lower()[:32] or "unknown"
+
+
+def ocr_runtime_diagnostics() -> str:
+    """Return readable, complete runtime details for diagnostics only."""
+
+    return ";".join(
+        (
+            f"python={sys.version}",
+            f"implementation={platform.python_implementation()}",
+            f"rapidocr={_package_version('rapidocr')}",
+            f"onnxruntime={_package_version('onnxruntime')}",
+            f"Pillow={_package_version('Pillow')}",
+            f"numpy={_package_version('numpy')}",
+            f"model=ppocrv5-mobile",
+            f"model_sha256={_MODEL_SHA256}",
+            f"model_url={_MODEL_URL}",
+            f"detect_res_sig={DETECT_RES_SIG}",
+            f"sessions={_MODEL_SESSIONS}",
+            f"ort_threads={_ORT_THREADS}",
+            "ort_inter_op_threads=1",
+        )
+    )
+
+
+def _ocr_runtime_binding(
+    *,
+    model_hash: str,
+    detection_rules: str,
+    runtime: str,
+    architecture: str,
+) -> dict[str, Any]:
+    """Build the complete, canonical input set behind a memo token."""
+
+    return {
+        "binding_version": 1,
+        "runtime": runtime,
+        "model": "ppocrv5-mobile",
+        "model_sha256": model_hash,
+        "detection_rules": detection_rules,
+        "architecture": architecture,
+        "detect_res_sig": DETECT_RES_SIG,
+        "settings": {
+            "python": sys.version,
+            "python_implementation": platform.python_implementation(),
+            "rapidocr": _package_version("rapidocr"),
+            "onnxruntime": _package_version("onnxruntime"),
+            "Pillow": _package_version("Pillow"),
+            "numpy": _package_version("numpy"),
+            "model_url": _MODEL_URL,
+            "model_sessions": _MODEL_SESSIONS,
+            "ort_threads": _ORT_THREADS,
+            "ort_inter_op_threads": 1,
+        },
+    }
+
+
+def _runtime_binding_token(binding: Mapping[str, Any]) -> str:
+    """Return the fixed-width owner token for a complete binding payload."""
+
+    # ``v1-`` plus a full SHA-256 is 67 characters.  Hashing the complete
+    # canonical payload avoids the old prefix-truncation collision where a
+    # long version/model/rules value could hide the changed suffix.
+    return f"v1-{hashlib.sha256(_canonical_json(binding)).hexdigest()}"
+
+
+def ocr_runtime_version() -> str:
+    """Return the bounded digest token used by the source-owner key."""
+
+    return _runtime_binding_token(
+        _ocr_runtime_binding(
+            model_hash=str(_MODEL_SHA256).lower(),
+            detection_rules=OCR_VERIFICATION_RECIPE,
+            runtime=ocr_runtime_diagnostics(),
+            architecture=ocr_architecture(),
+        )
+    )
+
+
+def ocr_runtime_signature() -> str:
+    """Compatibility alias for the bounded runtime-version token."""
+
+    return ocr_runtime_version()
+
+
+@dataclass(frozen=True)
+class OCRMemoKey:
+    """Exact source-owner identity for one completed text decision."""
+
+    kind: Literal["poster", "backdrop"]
+    source_sha256: str
+    title_context_sha256: str
+    detection_rules: str
+    model: str
+    runtime: str
+    runtime_version: str
+    architecture: str
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "source_sha256": self.source_sha256,
+            "title_context_sha256": self.title_context_sha256,
+            "detection_rules": self.detection_rules,
+            "model": self.model,
+            "runtime": self.runtime,
+            "runtime_version": self.runtime_version,
+            "architecture": self.architecture,
+        }
+
+    @property
+    def signature(self) -> str:
+        return hashlib.sha256(_canonical_json(self.payload())).hexdigest()
+
+
+@dataclass(frozen=True)
+class OCRMemoEntry:
+    """A source-owner memo hit, including an explicit unknown decision."""
+
+    signature: str
+    decision: OCRDecision
+    verified_at: datetime | None = None
+
+    @property
+    def value(self) -> bool | None:
+        return {"textless": False, "text": True, "unknown": None}[self.decision]
+
+
+def build_ocr_memo_key(
+    normalized_image_sha256: str,
+    source_kind: Literal["poster", "backdrop"],
+    title: str | list[str] | tuple[str, ...] | None,
+    *,
+    model_hash: str | None = None,
+    rules: str | None = None,
+    runtime: str | None = None,
+    arch: str | None = None,
+) -> OCRMemoKey:
+    """Build the exact source-owner key for one normalized image scan."""
+
+    if not re.fullmatch(r"[0-9a-f]{64}", str(normalized_image_sha256)):
+        raise ValueError("normalized_image_sha256 must be a lowercase SHA-256")
+    if source_kind not in {"poster", "backdrop"}:
+        raise ValueError("source_kind must be poster or backdrop")
+    model = "ppocrv5-mobile"
+    # The pinned model name remains a stable wire field.  Its complete digest
+    # is included in the runtime binding below so a changed model cannot reuse
+    # an old memo while keeping the owner's bounded key shape.
+    model_hash = str(_MODEL_SHA256 if model_hash is None else model_hash).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", model_hash):
+        raise ValueError("model_hash must be a lowercase SHA-256")
+    runtime_value = (
+        ocr_runtime_diagnostics() if runtime is None else str(runtime)
+    )
+    rules_value = OCR_VERIFICATION_RECIPE if rules is None else str(rules)
+    detection_rules = re.sub(
+        r"[^a-zA-Z0-9._:-]",
+        "-",
+        rules_value,
+    ).lower()[:80]
+    architecture_value = ocr_architecture() if arch is None else str(arch)
+    architecture = re.sub(
+        r"[^a-zA-Z0-9._:-]",
+        "-",
+        architecture_value,
+    ).lower()[:80]
+    runtime_version = _runtime_binding_token(
+        _ocr_runtime_binding(
+            model_hash=model_hash,
+            detection_rules=rules_value,
+            runtime=runtime_value,
+            architecture=architecture_value,
+        )
+    )
+    return OCRMemoKey(
+        kind=source_kind,
+        source_sha256=normalized_image_sha256,
+        title_context_sha256=title_context_sha256(title),
+        detection_rules=detection_rules,
+        model=model,
+        runtime="rapidocr_onnxruntime",
+        runtime_version=runtime_version,
+        architecture=architecture,
+    )
+
+
+def decision_for_detection(value: bool | None) -> OCRDecision:
+    """Encode text, clear, and unavailable/uncertain without collapsing them."""
+
+    if value is False:
+        return "textless"
+    if value is True:
+        return "text"
+    return "unknown"
+
+
+def parse_ocr_memo_entry(
+    value: Any,
+    *,
+    expected_key: OCRMemoKey | str,
+) -> OCRMemoEntry | None:
+    """Parse a source-owner response; ``None`` means a true cache miss.
+
+    A stored ``unknown`` value is returned as an entry whose ``value`` is
+    ``None``.  Callers must not treat that as a miss and rerun OCR.
+    """
+
+    expected_signature = (
+        expected_key.signature if isinstance(expected_key, OCRMemoKey) else expected_key
+    )
+    if value is None:
+        return None
+    expected_payload = expected_key.payload() if isinstance(expected_key, OCRMemoKey) else None
+
+    def validate_key(raw_key: Any) -> None:
+        if expected_payload is None:
+            return
+        if hasattr(raw_key, "to_dict"):
+            raw_key = raw_key.to_dict()
+        if not isinstance(raw_key, Mapping) or dict(raw_key) != expected_payload:
+            raise ValueError("OCR memo key mismatch")
+
+    def parse_verified_at(raw_verified_at: Any) -> datetime | None:
+        if raw_verified_at is None:
+            return None
+        if isinstance(raw_verified_at, datetime):
+            verified_at = raw_verified_at
+        elif isinstance(raw_verified_at, str):
+            try:
+                verified_at = datetime.fromisoformat(raw_verified_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError("invalid OCR memo verified_at") from exc
+        else:
+            raise ValueError("invalid OCR memo verified_at")
+        if verified_at.tzinfo is None or verified_at.utcoffset() is None:
+            raise ValueError("OCR memo verified_at must be timezone-aware")
+        return verified_at
+
+    if isinstance(value, OCRMemoEntry):
+        if (
+            value.signature != expected_signature
+            or value.decision not in {"textless", "text", "unknown"}
+        ):
+            raise ValueError("OCR memo key mismatch")
+        return value
+    if (
+        hasattr(value, "signature")
+        and hasattr(value, "result")
+    ):
+        signature = getattr(value, "signature")
+        decision = getattr(value, "result")
+        if signature != expected_signature or decision not in {"textless", "text", "unknown"}:
+            raise ValueError("invalid OCR memo response")
+        if hasattr(value, "key"):
+            validate_key(getattr(value, "key"))
+        source_sha256 = getattr(value, "source_sha256", None)
+        if expected_payload is not None and source_sha256 not in {
+            None,
+            expected_payload["source_sha256"],
+        }:
+            raise ValueError("OCR memo source mismatch")
+        return OCRMemoEntry(
+            signature=expected_signature,
+            decision=decision,
+            verified_at=parse_verified_at(getattr(value, "verified_at", None)),
+        )
+    if isinstance(value, Mapping) and value.get("found") is False:
+        return None
+    if isinstance(value, Mapping) and isinstance(value.get("memo"), Mapping):
+        value = value["memo"]
+    if not isinstance(value, Mapping):
+        raise ValueError("invalid OCR memo response")
+    signature = value.get("signature", expected_signature)
+    decision = value.get("result", value.get("decision"))
+    if signature != expected_signature or decision not in {"textless", "text", "unknown"}:
+        raise ValueError("invalid OCR memo response")
+    if "key" in value:
+        validate_key(value["key"])
+    if expected_payload is not None and value.get("source_sha256") not in {
+        None,
+        expected_payload["source_sha256"],
+    }:
+        raise ValueError("OCR memo source mismatch")
+    raw_verified_at = value.get("verified_at")
+    verified_at = parse_verified_at(raw_verified_at)
+    return OCRMemoEntry(
+        signature=expected_signature,
+        decision=decision,
+        verified_at=verified_at,
+    )
+
+
+def ocr_memo_payload(key: OCRMemoKey, value: bool | None) -> dict[str, Any]:
+    """Return the bounded registration payload for the source owner."""
+
+    return {
+        "signature": key.signature,
+        "key": key.payload(),
+        "result": decision_for_detection(value),
+    }
 
 
 def text_detection_available() -> bool:
@@ -549,6 +934,7 @@ def text_column_profile(image, conf: float = _BOX_THRESHOLD):
 
 if __name__ == "__main__":
     import sys
+
     from PIL import Image
 
     logging.basicConfig(level=logging.INFO)

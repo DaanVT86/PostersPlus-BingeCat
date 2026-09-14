@@ -1,0 +1,7 @@
+# Validation-only image: preserve an inspected runtime without a package rebuild.
+# Supply VERIFIED_BASE_IMAGE as an actual local image SHA or registry digest.
+ARG VERIFIED_BASE_IMAGE
+FROM ${VERIFIED_BASE_IMAGE}
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.revision=${SOURCE_REVISION}
+COPY --chown=1000:1000 . /app
