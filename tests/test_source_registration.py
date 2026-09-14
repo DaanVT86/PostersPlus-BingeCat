@@ -470,13 +470,23 @@ def test_owner_surface_has_no_enrich_or_render_routes() -> None:
     }
 
 
-def test_renderer_revision_module_has_no_worktree_diff() -> None:
-    result = subprocess.run(
-        ["git", "diff", "--quiet", "--", "v2_render.py"],
-        cwd=Path(__file__).parents[1],
-        check=False,
+def test_renderer_revision_excludes_freshness_only_changes() -> None:
+    import v2_render
+
+    assert not any(
+        "_validate_freshness" in entry
+        for entry in v2_render.RENDERER_REVISION_MANIFEST
     )
-    assert result.returncode == 0
+    baseline = subprocess.run(
+        ["git", "show", "HEAD:v2_render.py"],
+        cwd=Path(__file__).parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert v2_render._compute_renderer_revision(
+        source_overrides={"v2_render.py": baseline}
+    ) == v2_render.RENDERER_REVISION
 
 
 def test_invalid_source_mode_fails_closed_without_env_preserving_default() -> None:

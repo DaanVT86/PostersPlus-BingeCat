@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import io
 import json
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
-from dataclasses import asdict
 
 import pytest
 from fastapi.testclient import TestClient
@@ -38,7 +38,6 @@ from v2_render import (
     render,
     snapshot_visual_projection,
 )
-
 
 NOW = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
 SECRET = b"render-route-secret"
@@ -211,13 +210,32 @@ def _snapshot(
     facts: NormalizedFactsEnvelope | None = None,
     ratings: tuple[ProviderRating, ...] = (),
     source_art: tuple[SourceArtReference, ...] = (),
+    artwork_evaluated_at: datetime | None = None,
 ) -> ImmutableRenderSnapshot:
     return ImmutableRenderSnapshot(
         evaluated_at=NOW,
+        artwork_evaluated_at=artwork_evaluated_at,
         titles_by_locale=titles or {"en": "The Matrix", "nl": "De Matrix"},
         ratings=ratings,
         facts=facts or _facts(),
         source_art=source_art,
+    )
+
+
+def _source_art_with_clock(
+    reference: SourceArtReference,
+    *,
+    observed_at: datetime,
+    checked_at: datetime,
+    expires_at: datetime,
+) -> SourceArtReference:
+    return SourceArtReference.model_validate(
+        {
+            **reference.model_dump(mode="json"),
+            "observed_at": observed_at,
+            "checked_at": checked_at,
+            "expires_at": expires_at,
+        }
     )
 
 
@@ -770,6 +788,136 @@ def test_hash_tamper_requirement_and_freshness_mismatches_fail_closed(
     fresh_rating = _snapshot(ratings=(_rating(),), source_art=(art,))
     rendered, _ = render(_bundle(rating_config, fresh_rating), source_store=store)
     assert rendered
+
+
+def test_artwork_clock_is_optional_but_cannot_precede_snapshot_clock():
+    snapshot = _snapshot()
+    assert snapshot.artwork_evaluated_at is None
+    assert snapshot.model_dump(mode="json")["artwork_evaluated_at"] is None
+
+    with pytest.raises(ValueError, match="artwork_evaluated_at must be >= evaluated_at"):
+        _snapshot(artwork_evaluated_at=NOW - timedelta(seconds=1))
+
+
+def test_aged_metadata_and_new_art_use_separate_clocks_without_visual_churn(tmp_path):
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    installed = _install_art(store)
+    art = _source_art_with_clock(
+        installed,
+        observed_at=NOW + timedelta(minutes=30),
+        checked_at=NOW + timedelta(hours=1),
+        expires_at=NOW + timedelta(hours=4),
+    )
+    aged_rating = ProviderRating.model_validate(
+        {
+            **_rating().model_dump(mode="json"),
+            "observed_at": NOW - timedelta(days=30),
+            "checked_at": NOW - timedelta(days=29),
+            "expires_at": NOW + timedelta(minutes=15),
+        }
+    )
+    config = _canonical_config(
+        use_original_art=True,
+        hide_genre=True,
+        rating_display_mode=2,
+        fallback_to_imdb=True,
+    )
+    artwork_clock = NOW + timedelta(hours=2)
+    first = _snapshot(
+        ratings=(aged_rating,),
+        source_art=(art,),
+        artwork_evaluated_at=artwork_clock,
+    )
+    refreshed_clock = _snapshot(
+        ratings=(aged_rating,),
+        source_art=(art,),
+        artwork_evaluated_at=artwork_clock + timedelta(hours=1),
+    )
+    first_bundle = _bundle(config, first)
+    refreshed_bundle = _bundle(config, refreshed_clock)
+
+    assert first_bundle.snapshot_sha256 == refreshed_bundle.snapshot_sha256
+    first_bytes, first_metadata = render(first_bundle, source_store=store)
+    refreshed_bytes, refreshed_metadata = render(refreshed_bundle, source_store=store)
+    assert first_bytes == refreshed_bytes
+    assert first_metadata == refreshed_metadata
+    assert first_metadata.renderer_revision == RENDERER_REVISION
+    projection = snapshot_visual_projection(
+        first,
+        media=first_bundle.media,
+        spec=canonicalize_config(config),
+        locale="en",
+    )
+    assert "artwork_evaluated_at" not in projection
+
+
+@pytest.mark.parametrize(
+    ("artwork_clock", "checked_at", "expires_at", "error"),
+    (
+        (None, NOW + timedelta(hours=1), NOW + timedelta(hours=4), "future_source_art_provenance"),
+        (
+            NOW + timedelta(minutes=30),
+            NOW + timedelta(hours=1),
+            NOW + timedelta(hours=4),
+            "future_source_art_provenance",
+        ),
+        (
+            NOW + timedelta(hours=3),
+            NOW + timedelta(hours=1),
+            NOW + timedelta(hours=2),
+            "stale_source_art",
+        ),
+    ),
+)
+def test_new_source_art_clock_failures_remain_typed(
+    tmp_path,
+    artwork_clock,
+    checked_at,
+    expires_at,
+    error,
+):
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    installed = _install_art(store)
+    art = _source_art_with_clock(
+        installed,
+        observed_at=NOW + timedelta(minutes=30),
+        checked_at=checked_at,
+        expires_at=expires_at,
+    )
+    config = _canonical_config(use_original_art=True, hide_genre=True)
+
+    with pytest.raises(RenderConflict, match=error):
+        render(
+            _bundle(
+                config,
+                _snapshot(
+                    source_art=(art,),
+                    artwork_evaluated_at=artwork_clock,
+                ),
+            ),
+            source_store=store,
+        )
+
+
+def test_preserved_source_uses_old_clock_even_if_expired_at_new_art_clock(tmp_path):
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    installed = _install_art(store)
+    preserved = _source_art_with_clock(
+        installed,
+        observed_at=NOW - timedelta(hours=2),
+        checked_at=NOW - timedelta(hours=1),
+        expires_at=NOW + timedelta(days=1),
+    )
+    config = _canonical_config(use_original_art=True, hide_genre=True)
+    snapshot = _snapshot(
+        source_art=(preserved,),
+        artwork_evaluated_at=NOW + timedelta(days=2),
+    )
+
+    payload, metadata = render(_bundle(config, snapshot), source_store=store)
+
+    assert payload
+    assert metadata.content_sha256 == hashlib.sha256(payload).hexdigest()
 
 
 def test_noncanonical_config_and_missing_local_derivative_are_typed(tmp_path):
