@@ -7,7 +7,11 @@ dependency pins alone imply parity.
 
 For a bounded x86 validation build, `dockerfile.runtime-overlay` copies the same
 source commit over an inspected existing runtime image. Pass its immutable image
-SHA as `VERIFIED_BASE_IMAGE` and the source commit as `SOURCE_REVISION`. This is
+digest reference as `VERIFIED_BASE_IMAGE` and the source commit as
+`SOURCE_REVISION`. For locally built images without a registry digest, create a
+dedicated tag from the inspected image ID and verify that tag still resolves to
+the same ID before building; BuildKit treats a bare `sha256:` ID as a repository
+name. This is
 a test image and does not replace or restart the production Core service.
 
 Run `run-offline-golden.sh IMAGE - FIXTURE_DIR arm` on Oracle and the equivalent

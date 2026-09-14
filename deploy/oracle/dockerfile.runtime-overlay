@@ -1,5 +1,5 @@
 # Validation-only image: preserve an inspected runtime without a package rebuild.
-# Supply VERIFIED_BASE_IMAGE as an actual local image SHA or registry digest.
+# Supply a registry digest, or a local tag verified against its inspected image ID.
 ARG VERIFIED_BASE_IMAGE
 FROM ${VERIFIED_BASE_IMAGE}
 ARG SOURCE_REVISION
