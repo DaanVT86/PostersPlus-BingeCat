@@ -307,6 +307,37 @@ def test_artwork_only_reuses_facts_and_makes_one_image_request_for_all_fixed_pre
                    for item in result.provider_statuses)
 
 
+def test_artwork_only_drops_obsolete_policy_before_reusing_same_source_bytes():
+    logo = _candidate("logo", "logo-en.png", "en", 1)
+    digest = hashlib.sha256(logo.locator.url.encode()).hexdigest()
+    obsolete = _old_logo().model_copy(
+        update={
+            "source_art_id": f"fixture-logo-{digest[:12]}",
+            "policy_key": "logo.native_text.en",
+            "sha256": digest,
+            "locator": logo.locator,
+        }
+    )
+    candidates = (
+        _candidate("poster", "poster.jpg", "neutral", 1),
+        _candidate("backdrop", "backdrop.jpg", "neutral", 1),
+        logo,
+    )
+    calls = Counter()
+
+    result = asyncio.run(
+        enrich(
+            _request(known_source_art=(obsolete,)),
+            NOW,
+            runtime=_runtime(_hooks(calls, candidates)),
+        )
+    )
+
+    assert len({item.source_art_id for item in result.source_art}) == len(result.source_art)
+    assert obsolete not in result.source_art
+    assert any(item.policy_key == "logo.native_original.en" for item in result.source_art)
+
+
 def test_artwork_only_preserves_expired_captured_ratings_exactly():
     captured = (_old_rating(expired=True),)
     candidates = (
