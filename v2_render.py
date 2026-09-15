@@ -9,18 +9,18 @@ downloads artwork, or reads the wall clock for a visual decision.
 from __future__ import annotations
 
 import ast
-from dataclasses import asdict
-from datetime import datetime
 import hashlib
 import io
 import json
 import math
-from pathlib import Path
 import threading
+from dataclasses import asdict
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Mapping
 
-from PIL import Image, ImageOps, features
 import PIL
+from PIL import Image, ImageOps, features
 
 from integration_contract import (
     CONTRACT_SCHEMA,
@@ -40,7 +40,6 @@ from render_spec import (
     compile_requirements,
 )
 from source_art import RECIPE_VERSIONS, SourceArtStore, SourceDigestMismatch
-
 
 _BASE_DIR = Path(__file__).resolve().parent
 _CANVAS_SIZE = (500, 750)
@@ -237,10 +236,12 @@ def snapshot_visual_projection(
 ) -> dict[str, Any]:
     """Return only inputs that can affect pixels for this render target.
 
-    ``evaluated_at`` and all observation/check/expiry timestamps are excluded:
-    they do not affect pixels, and including them would churn immutable poster
-    URLs after a no-op refresh.  They are validated separately before
-    composition, with ``evaluated_at`` serving as the only freshness clock.
+    ``evaluated_at``, ``artwork_evaluated_at`` and all observation/check/expiry
+    timestamps are excluded: they do not affect pixels, and including them
+    would churn immutable poster URLs after a no-op refresh.  They are
+    validated separately before composition.  The metadata clock remains the
+    freshness clock for facts/ratings; a newer selected source-art reference
+    uses the explicit artwork acquisition clock.
     Unused ratings, facts, artwork, and locale titles are excluded for the same
     reason.
     """
@@ -442,11 +443,21 @@ def _validate_freshness(
     for reference in source_art:
         if reference.recipe_version != RECIPE_VERSIONS[reference.kind]:
             raise RenderConflict("source_art_recipe_mismatch")
+        reference_evaluated_at = evaluated_at
+        if reference.checked_at > evaluated_at:
+            # A newly acquired source derivative is valid only when the
+            # caller binds it to an explicit acquisition clock.  Passing the
+            # old clock through preserves the legacy rejection for bundles
+            # that omit the new field; it also keeps preserved old refs on the
+            # original snapshot clock even when the artwork clock is newer.
+            reference_evaluated_at = snapshot.artwork_evaluated_at
+            if reference_evaluated_at is None:
+                raise RenderConflict("future_source_art_provenance")
         _validate_interval(
             observed_at=reference.observed_at,
             checked_at=reference.checked_at,
             expires_at=reference.expires_at,
-            evaluated_at=evaluated_at,
+            evaluated_at=reference_evaluated_at,
             stale_code="stale_source_art",
             future_code="future_source_art_provenance",
         )

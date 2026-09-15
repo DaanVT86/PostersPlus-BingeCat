@@ -88,12 +88,103 @@ except (TypeError, ValueError):
 POSTERSPLUS_V2_NONCE_DB_PATH = os.environ.get(
     "POSTERSPLUS_V2_NONCE_DB_PATH", "/app/cache/postersplus_v2_nonces.db"
 ).strip()
+POSTERSPLUS_SOURCE_STORE_MODE = os.environ.get(
+    "POSTERSPLUS_SOURCE_STORE_MODE", "local"
+).strip().lower()
+if POSTERSPLUS_SOURCE_STORE_MODE not in {"local", "remote"}:
+    raise RuntimeError(
+        "POSTERSPLUS_SOURCE_STORE_MODE must be 'local' or 'remote'"
+    )
+POSTERSPLUS_SOURCE_REGISTRY_MODE = os.environ.get(
+    "POSTERSPLUS_SOURCE_REGISTRY_MODE", "disabled"
+).strip().lower()
+if POSTERSPLUS_SOURCE_REGISTRY_MODE not in {"disabled", "owner"}:
+    POSTERSPLUS_SOURCE_REGISTRY_MODE = "disabled"
+POSTERSPLUS_SOURCE_REGISTRY_URL = os.environ.get(
+    "POSTERSPLUS_SOURCE_REGISTRY_URL", ""
+).strip().rstrip("/")
+POSTERSPLUS_SOURCE_REGISTRY_SECRET = os.environ.get(
+    "POSTERSPLUS_SOURCE_REGISTRY_SECRET", ""
+).strip()
+POSTERSPLUS_SOURCE_REGISTRY_NONCE_DB_PATH = os.environ.get(
+    "POSTERSPLUS_SOURCE_REGISTRY_NONCE_DB_PATH",
+    "/app/cache/source_registry_nonces.sqlite",
+).strip()
+POSTERSPLUS_SOURCE_INCOMING_DIR = os.environ.get(
+    "POSTERSPLUS_SOURCE_INCOMING_DIR", "/app/source_incoming"
+).strip()
+_source_account_incoming_raw = os.environ.get("POSTERSPLUS_SOURCE_ACCOUNT_INCOMING")
+if _source_account_incoming_raw is None:
+    _source_account_incoming = False
+else:
+    _source_account_incoming_value = _source_account_incoming_raw.strip().lower()
+    if _source_account_incoming_value in {"1", "true", "yes", "on"}:
+        _source_account_incoming = True
+    elif _source_account_incoming_value in {"0", "false", "no", "off"}:
+        _source_account_incoming = False
+    else:
+        raise RuntimeError(
+            "POSTERSPLUS_SOURCE_ACCOUNT_INCOMING must be a boolean"
+        )
+POSTERSPLUS_SOURCE_ACCOUNT_INCOMING = bool(
+    _source_account_incoming
+    or POSTERSPLUS_SOURCE_STORE_MODE == "remote"
+    or POSTERSPLUS_SOURCE_REGISTRY_MODE == "owner"
+)
+POSTERSPLUS_SOURCE_MOUNTINFO_PATH = os.environ.get(
+    "POSTERSPLUS_SOURCE_MOUNTINFO_PATH", "/proc/self/mountinfo"
+).strip() or "/proc/self/mountinfo"
+try:
+    # This is a per-process guard. The two-Core deployment sets it to 1 so
+    # the stack-wide source download ceiling remains 2 without a shared
+    # coordinator. The legacy default remains two permits per process.
+    POSTERSPLUS_SOURCE_DOWNLOAD_CONCURRENCY = max(
+        1,
+        min(
+            2,
+            int(os.environ.get("POSTERSPLUS_SOURCE_DOWNLOAD_CONCURRENCY", "2")),
+        ),
+    )
+except (TypeError, ValueError):
+    POSTERSPLUS_SOURCE_DOWNLOAD_CONCURRENCY = 2
+try:
+    POSTERSPLUS_SOURCE_REGISTRY_TIMEOUT_SECONDS = max(
+        1.0,
+        min(30.0, float(os.environ.get("POSTERSPLUS_SOURCE_REGISTRY_TIMEOUT_SECONDS", "15"))),
+    )
+except (TypeError, ValueError):
+    POSTERSPLUS_SOURCE_REGISTRY_TIMEOUT_SECONDS = 15.0
+_source_require_mounts_raw = os.environ.get("POSTERSPLUS_SOURCE_REQUIRE_MOUNTS")
+if _source_require_mounts_raw is None:
+    POSTERSPLUS_SOURCE_REQUIRE_MOUNTS = (
+        POSTERSPLUS_SOURCE_STORE_MODE == "remote"
+        or POSTERSPLUS_SOURCE_REGISTRY_MODE == "owner"
+    )
+else:
+    _source_require_mounts_value = _source_require_mounts_raw.strip().lower()
+    if _source_require_mounts_value in {"1", "true", "yes", "on"}:
+        POSTERSPLUS_SOURCE_REQUIRE_MOUNTS = True
+    elif _source_require_mounts_value in {"0", "false", "no", "off"}:
+        if (
+            POSTERSPLUS_SOURCE_STORE_MODE == "remote"
+            or POSTERSPLUS_SOURCE_REGISTRY_MODE == "owner"
+        ):
+            raise RuntimeError(
+                "POSTERSPLUS_SOURCE_REQUIRE_MOUNTS cannot be disabled for remote or owner mode"
+            )
+        POSTERSPLUS_SOURCE_REQUIRE_MOUNTS = False
+    else:
+        raise RuntimeError(
+            "POSTERSPLUS_SOURCE_REQUIRE_MOUNTS must be a boolean"
+        )
 SOURCE_ART_CACHE_DIR = os.environ.get(
     "SOURCE_ART_CACHE_DIR", "/app/cache/source_art"
 ).strip()
-SOURCE_ART_LEDGER_PATH = os.environ.get(
-    "SOURCE_ART_LEDGER_PATH", "/app/cache/source_art.sqlite"
-).strip()
+SOURCE_ART_LEDGER_PATH = (
+    ""
+    if POSTERSPLUS_SOURCE_STORE_MODE == "remote"
+    else os.environ.get("SOURCE_ART_LEDGER_PATH", "/app/cache/source_art.sqlite").strip()
+)
 POSTERSPLUS_INTEGRATION_STATELESS_METADATA = os.environ.get(
     "POSTERSPLUS_INTEGRATION_STATELESS_METADATA", "true"
 ).strip().lower() not in ("0", "false", "no", "off")

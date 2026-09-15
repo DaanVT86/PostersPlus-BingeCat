@@ -1,0 +1,25 @@
+name: Oracle source and artwork contracts
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - name: Install runtime and test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libcairo2-dev pkg-config
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+          python -m pip uninstall -y opencv-python
+          python -m pip install --force-reinstall --no-deps 'opencv-python-headless>=4.8,<5'
+      - name: Verify source ownership, artwork-only and golden contracts
+        env:
+          CACHE_LEADER_LOCK_PATH: ${{ runner.temp }}/postersplus-test-background.lock
+        run: python -m pytest -q tests

@@ -13,15 +13,25 @@ services:
       dockerfile: ./dockerfile
       args:
         BAKE_PPOCR_MODEL: "${BAKE_PPOCR_MODEL:-true}"
+        PIN_NETCUP_RUNTIME: "${PIN_NETCUP_RUNTIME:-true}"
+        SOURCE_REVISION: "${POSTERSPLUS_SOURCE_REVISION:-unknown}"
     image: "${POSTERSPLUS_PRODUCTION_IMAGE:-postersplus-bingecat:v2-production}"
     container_name: postersplus-v2-core
     env_file:
       - ${POSTERSPLUS_PRODUCTION_CORE_ENV_FILE:-/opt/postersplus/env/postersplus.env}
       - ${POSTERSPLUS_PRODUCTION_PRIVATE_ENV_FILE:-/opt/postersplus/env/postersplus-v2-private.env}
+    environment:
+      POSTERSPLUS_SOURCE_ACCOUNT_INCOMING: "true"
+      POSTERSPLUS_SOURCE_INCOMING_DIR: /app/source_incoming
     ports:
       - "127.0.0.1:${POSTERSPLUS_PRODUCTION_HEALTH_PORT:-18084}:8000"
     volumes:
       - ${POSTERSPLUS_PRODUCTION_CACHE_DIR:-/opt/postersplus/cache}:/app/cache
+      - type: bind
+        source: /opt/postersplus/source_incoming
+        target: /app/source_incoming
+        read_only: true
+        bind: {create_host_path: false}
     cpu_shares: 2048
     mem_reservation: 2g
     mem_limit: 12g

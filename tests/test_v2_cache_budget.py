@@ -178,6 +178,150 @@ def test_usage_has_exact_pools_and_never_double_counts_sqlite_blobs(tmp_path: Pa
         )
 
 
+def test_usage_counts_incoming_and_active_reservations_once(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_tmp = source_root / "tmp"
+    incoming = tmp_path / "incoming"
+    source_tmp.mkdir(parents=True)
+    incoming.mkdir()
+    (source_tmp / "legacy-raw.part").write_bytes(b"old")
+    (incoming / "oracle-orphan.part").write_bytes(b"incoming")
+
+    source_file = source_root / "poster" / "aa" / "asset.jpg"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_bytes(b"derivative")
+    ledger_path = tmp_path / "source.sqlite"
+    with sqlite3.connect(ledger_path) as db:
+        db.execute(
+            "CREATE TABLE source_art_ledger (path TEXT, byte_size INTEGER, last_used_at REAL)"
+        )
+        db.execute(
+            "INSERT INTO source_art_ledger VALUES (?, ?, ?)",
+            (str(source_file), source_file.stat().st_size, time.time()),
+        )
+        db.execute(
+            "CREATE TABLE source_art_capacity_reservations "
+            "(token TEXT PRIMARY KEY, byte_size INTEGER, expires_at REAL)"
+        )
+        db.executemany(
+            "INSERT INTO source_art_capacity_reservations VALUES (?, ?, ?)",
+            (
+                ("active", 11, time.time() + 300),
+                ("expired", 97, time.time() - 1),
+            ),
+        )
+
+    with (
+        patch.object(cache_policy.config, "DB_PATH", str(tmp_path / "cache.db")),
+        patch.object(cache_policy.config, "SOURCE_ART_CACHE_DIR", str(source_root)),
+        patch.object(cache_policy.config, "SOURCE_ART_LEDGER_PATH", str(ledger_path)),
+        patch.object(
+            cache_policy.config,
+            "POSTERSPLUS_SOURCE_INCOMING_DIR",
+            str(incoming),
+        ),
+        patch.object(cache_policy.config, "POSTERSPLUS_SOURCE_ACCOUNT_INCOMING", True),
+    ):
+        usage = cache_policy.get_usage()
+
+    assert usage.pools["source_derivatives"].bytes == len(b"derivative")
+    assert usage.pools["temp"].bytes == len(b"old") + len(b"incoming") + 11
+
+
+def test_usage_preserves_legacy_opt_out_for_unconfigured_incoming(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_tmp = source_root / "tmp"
+    incoming = tmp_path / "incoming"
+    source_tmp.mkdir(parents=True)
+    incoming.mkdir()
+    (source_tmp / "legacy-raw.part").write_bytes(b"old")
+    (incoming / "oracle-orphan.part").write_bytes(b"incoming")
+
+    with (
+        patch.object(cache_policy.config, "DB_PATH", str(tmp_path / "cache.db")),
+        patch.object(cache_policy.config, "SOURCE_ART_CACHE_DIR", str(source_root)),
+        patch.object(
+            cache_policy.config,
+            "SOURCE_ART_LEDGER_PATH",
+            str(tmp_path / "source.sqlite"),
+        ),
+        patch.object(
+            cache_policy.config,
+            "POSTERSPLUS_SOURCE_INCOMING_DIR",
+            str(incoming),
+        ),
+        patch.object(cache_policy.config, "POSTERSPLUS_SOURCE_ACCOUNT_INCOMING", False),
+    ):
+        total, incomplete = cache_policy._temp_bytes()
+
+    assert incomplete is False
+    assert total == len(b"old")
+
+
+def test_incoming_accounting_fails_closed_on_missing_or_nested_scan(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    incoming = tmp_path / "incoming"
+    with (
+        patch.object(cache_policy.config, "DB_PATH", str(tmp_path / "cache.db")),
+        patch.object(cache_policy.config, "SOURCE_ART_CACHE_DIR", str(source_root)),
+        patch.object(
+            cache_policy.config,
+            "SOURCE_ART_LEDGER_PATH",
+            str(tmp_path / "source.sqlite"),
+        ),
+        patch.object(
+            cache_policy.config,
+            "POSTERSPLUS_SOURCE_INCOMING_DIR",
+            str(incoming),
+        ),
+        patch.object(cache_policy.config, "POSTERSPLUS_SOURCE_ACCOUNT_INCOMING", True),
+    ):
+        total, incomplete = cache_policy._temp_bytes()
+    assert incomplete is True
+    assert total >= config.SOURCE_CACHE_MAX_BYTES + config.LEGACY_CACHE_MAX_BYTES
+
+    incoming.mkdir()
+    (incoming / "unexpected-fixture-dir").mkdir()
+    with (
+        patch.object(cache_policy.config, "DB_PATH", str(tmp_path / "cache.db")),
+        patch.object(cache_policy.config, "SOURCE_ART_CACHE_DIR", str(source_root)),
+        patch.object(
+            cache_policy.config,
+            "SOURCE_ART_LEDGER_PATH",
+            str(tmp_path / "source.sqlite"),
+        ),
+        patch.object(
+            cache_policy.config,
+            "POSTERSPLUS_SOURCE_INCOMING_DIR",
+            str(incoming),
+        ),
+        patch.object(cache_policy.config, "POSTERSPLUS_SOURCE_ACCOUNT_INCOMING", True),
+    ):
+        total, incomplete = cache_policy._temp_bytes()
+    assert incomplete is True
+    assert total >= config.SOURCE_CACHE_MAX_BYTES + config.LEGACY_CACHE_MAX_BYTES
+
+
+def test_reservation_accounting_fails_closed_on_corrupt_ledger(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    ledger = tmp_path / "source.sqlite"
+    ledger.write_bytes(b"not-a-sqlite-database")
+    with (
+        patch.object(cache_policy.config, "DB_PATH", str(tmp_path / "cache.db")),
+        patch.object(cache_policy.config, "SOURCE_ART_CACHE_DIR", str(source_root)),
+        patch.object(cache_policy.config, "SOURCE_ART_LEDGER_PATH", str(ledger)),
+        patch.object(cache_policy.config, "POSTERSPLUS_SOURCE_ACCOUNT_INCOMING", False),
+    ):
+        total, incomplete = cache_policy._temp_bytes()
+
+    assert incomplete is True
+    assert total >= config.SOURCE_CACHE_MAX_BYTES + config.LEGACY_CACHE_MAX_BYTES
+
+
 def test_source_prune_rejects_outside_paths_and_never_unlinks_symlinks(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir()

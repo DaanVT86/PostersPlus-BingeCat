@@ -1,0 +1,47 @@
+# Deploy on Netcup after approval; separate from the existing private Core.
+name: postersplus-source-owner
+services:
+  source-owner:
+    image: ${POSTERSPLUS_SOURCE_OWNER_IMAGE:?set an immutable verified Core image}
+    user: "1000:1000"
+    command: [uvicorn, source_registry:app, --host, 0.0.0.0, --port, "8000", --workers, "1"]
+    env_file: [/opt/postersplus/env/source-owner.env]
+    environment:
+      POSTERSPLUS_SOURCE_REGISTRY_MODE: owner
+      POSTERSPLUS_SOURCE_STORE_MODE: local
+      SOURCE_ART_CACHE_DIR: /app/cache/source_art
+      SOURCE_ART_LEDGER_PATH: /app/cache/source_art.sqlite
+      POSTERSPLUS_SOURCE_INCOMING_DIR: /app/source_incoming
+      POSTERSPLUS_SOURCE_REGISTRY_NONCE_DB_PATH: /app/cache/source_registry_nonces.sqlite
+      POSTERSPLUS_SOURCE_REQUIRE_MOUNTS: "true"
+      SOURCE_CACHE_MAX_BYTES: "15000000000"
+    ports: ["100.71.209.127:18087:8000"]
+    volumes:
+      - type: bind
+        source: /opt/postersplus/cache
+        target: /app/cache
+        bind: {create_host_path: false}
+      - type: bind
+        source: /opt/postersplus/cache/source_art
+        target: /app/cache/source_art
+        bind: {create_host_path: false}
+      - type: bind
+        source: /opt/postersplus/source_incoming
+        target: /app/source_incoming
+        bind: {create_host_path: false}
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: "0.5"
+    mem_limit: 512m
+    pids_limit: 48
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "2"}
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

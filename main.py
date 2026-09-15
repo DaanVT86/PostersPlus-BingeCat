@@ -626,6 +626,7 @@ from integration_contract import (
 from preset_registry import get_preset, list_public_presets
 from service_auth import AuthError as V2AuthError, SQLiteNonceStore, verify_request as verify_v2_request
 from source_art import SourceArtStore
+from source_registry import router as source_registry_router
 from cache_policy import FileLeaderLock, get_usage as get_cache_usage, prune_to_targets
 from v2_enrich import (
     SourceArtUnavailable as V2SourceArtUnavailable,
@@ -2845,21 +2846,29 @@ async def lifespan(app: FastAPI):
         logger.warning(f"TVDB status check failed: {exc}")
 
     _digital_release_ready = asyncio.Event()
-    # Uvicorn/Gunicorn may run several worker processes.  Provider polling,
-    # cache warming, trending replay and pruning are process-global jobs, so a
-    # short non-blocking filesystem lock elects exactly one worker.  Request
-    # handling remains enabled in every worker when another worker owns it.
-    _BACKGROUND_LEADER = FileLeaderLock(_cfg.CACHE_LEADER_LOCK_PATH)
-    _is_background_leader = await asyncio.to_thread(_BACKGROUND_LEADER.acquire)
-    if _is_background_leader:
-        logger.info("Background cache leader acquired (%s)", _cfg.CACHE_LEADER_LOCK_PATH)
-        prune_task   = asyncio.create_task(_cache_prune_loop())
-        digital_task = asyncio.create_task(digital_release_poll_loop(_HTTP_CLIENT, _digital_release_ready))
-        cache_warm_task = asyncio.create_task(_cache_warm_loop(_digital_release_ready))
-        trending_task = asyncio.create_task(_trending_fetch_loop())
-    else:
-        logger.info("Background cache leader is another worker; local provider loops disabled")
+    if _cfg.POSTERSPLUS_SOURCE_STORE_MODE == "remote":
+        # Oracle remote mode is request-driven.  The source owner is the only
+        # source-ledger pruner, and Core must not run legacy provider refresh,
+        # cache-warm, trending, digital-release, or local-prune loops.
+        logger.info("Remote source mode: legacy provider/background loops disabled")
+        _BACKGROUND_LEADER = None
+        _is_background_leader = False
         prune_task = digital_task = cache_warm_task = trending_task = None
+    else:
+        # Uvicorn/Gunicorn may run several worker processes.  Provider
+        # polling, cache warming, trending replay and pruning are process-wide
+        # jobs, so a short non-blocking filesystem lock elects one worker.
+        _BACKGROUND_LEADER = FileLeaderLock(_cfg.CACHE_LEADER_LOCK_PATH)
+        _is_background_leader = await asyncio.to_thread(_BACKGROUND_LEADER.acquire)
+        if _is_background_leader:
+            logger.info("Background cache leader acquired (%s)", _cfg.CACHE_LEADER_LOCK_PATH)
+            prune_task = asyncio.create_task(_cache_prune_loop())
+            digital_task = asyncio.create_task(digital_release_poll_loop(_HTTP_CLIENT, _digital_release_ready))
+            cache_warm_task = asyncio.create_task(_cache_warm_loop(_digital_release_ready))
+            trending_task = asyncio.create_task(_trending_fetch_loop())
+        else:
+            logger.info("Background cache leader is another worker; local provider loops disabled")
+            prune_task = digital_task = cache_warm_task = trending_task = None
     yield
     for _task in (prune_task, digital_task, cache_warm_task, trending_task):
         if _task is not None:
@@ -2890,6 +2899,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(bingecat_configurator_router)
+app.include_router(source_registry_router)
 
 
 @app.middleware("http")
@@ -3182,6 +3192,8 @@ async def _verify_v2_cache_request(request: Request) -> None:
 @app.get("/v2/cache/usage")
 async def v2_cache_usage_endpoint(request: Request):
     """Authenticated, bounded cache accounting for the operator plane."""
+    if _cfg.POSTERSPLUS_SOURCE_STORE_MODE == "remote":
+        raise HTTPException(status_code=404, detail="Not found")
     await _verify_v2_cache_request(request)
     usage = await asyncio.to_thread(get_cache_usage)
     return JSONResponse(
@@ -3193,6 +3205,8 @@ async def v2_cache_usage_endpoint(request: Request):
 @app.post("/v2/cache/prune")
 async def v2_cache_prune_endpoint(request: Request):
     """Run one bounded eviction pass; no provider calls are made."""
+    if _cfg.POSTERSPLUS_SOURCE_STORE_MODE == "remote":
+        raise HTTPException(status_code=404, detail="Not found")
     await _verify_v2_cache_request(request)
     raw = await request.body()
     max_items = None

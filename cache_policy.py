@@ -12,6 +12,7 @@ headroom absorbs short staging spikes, but is never advertised as cache budget.
 
 from __future__ import annotations
 
+import math
 import os
 import sqlite3
 import stat
@@ -189,16 +190,37 @@ def _bounded_top_level_files(
     *,
     limit: int = FILE_WALK_LIMIT,
     state: ScanState | None = None,
+    strict: bool = False,
 ):
-    """Yield regular files directly below root without entering cache trees."""
+    """Yield direct-child regular files without entering cache trees.
+
+    ``strict`` is used for the explicitly configured incoming source pool:
+    missing/unreadable roots and non-regular children make the accounting
+    incomplete instead of silently under-counting them. Legacy sibling scans
+    retain their historical best-effort behavior.
+    """
 
     scan = state if state is not None else ScanState()
     base = Path(root)
-    if not base.exists() or base.is_symlink():
+    try:
+        base_info = base.lstat()
+    except FileNotFoundError:
+        if strict:
+            scan.incomplete = True
+        return
+    except OSError:
+        if strict:
+            scan.incomplete = True
+        return
+    if stat.S_ISLNK(base_info.st_mode) or not stat.S_ISDIR(base_info.st_mode):
+        if strict:
+            scan.incomplete = True
         return
     try:
         entries = os.scandir(base)
     except OSError:
+        if strict:
+            scan.incomplete = True
         return
     with entries:
         for entry in entries:
@@ -207,9 +229,17 @@ def _bounded_top_level_files(
                 return
             scan.visited_entries += 1
             try:
-                if not entry.is_symlink() and entry.is_file(follow_symlinks=False):
+                if entry.is_symlink():
+                    if strict:
+                        scan.incomplete = True
+                    continue
+                if entry.is_file(follow_symlinks=False):
                     yield Path(entry.path)
+                elif strict:
+                    scan.incomplete = True
             except OSError:
+                if strict:
+                    scan.incomplete = True
                 continue
 
 
@@ -328,19 +358,107 @@ def _unlink_source_regular(path: object) -> int:
         os.close(parent_fd)
 
 
+def _active_source_reservation_bytes() -> tuple[int, bool]:
+    """Return active logical reservations without charging ledger bytes twice."""
+
+    ledger = str(getattr(config, "SOURCE_ART_LEDGER_PATH", "") or "").strip()
+    if not ledger or not os.path.exists(ledger):
+        return 0, False
+    try:
+        with sqlite3.connect(ledger, timeout=2.0) as db:
+            rows = db.execute(
+                "SELECT byte_size, expires_at "
+                "FROM source_art_capacity_reservations LIMIT ?",
+                (FILE_WALK_LIMIT + 1,),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        # Older legacy ledgers may not have source reservations yet. That is
+        # known zero, unlike a locked/corrupt database whose tail is unknown.
+        if "no such table" in str(exc).lower():
+            return 0, False
+        return 0, True
+    except (sqlite3.Error, OSError):
+        return 0, True
+    if len(rows) > FILE_WALK_LIMIT:
+        return 0, True
+
+    now = time.time()
+    total = 0
+    for byte_size, expires_at in rows:
+        if (
+            isinstance(byte_size, bool)
+            or not isinstance(byte_size, int)
+            or isinstance(expires_at, bool)
+            or not isinstance(expires_at, (int, float))
+        ):
+            return 0, True
+        try:
+            size = byte_size
+            expiry = float(expires_at)
+        except (TypeError, ValueError, OverflowError):
+            return 0, True
+        if size < 0 or not math.isfinite(expiry):
+            return 0, True
+        if expiry > now:
+            total += size
+    return total, False
+
+
+def _physical_file_size(
+    path: str | os.PathLike[str],
+    seen: set[tuple[int, int]],
+    scan: ScanState,
+) -> int:
+    """Count one regular inode once and mark races as incomplete."""
+
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except OSError:
+        scan.incomplete = True
+        return 0
+    if not stat.S_ISREG(info.st_mode):
+        scan.incomplete = True
+        return 0
+    identity = (int(info.st_dev), int(info.st_ino))
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    return max(0, int(info.st_size))
+
+
 def _temp_bytes() -> tuple[int, bool]:
     total = 0
-    counted: set[Path] = set()
+    counted: set[tuple[int, int]] = set()
     scan = ScanState()
     source_tmp = Path(config.SOURCE_ART_CACHE_DIR) / "tmp"
     for path in _bounded_files(source_tmp, state=scan):
-        absolute = path.absolute()
-        counted.add(absolute)
-        total += _file_size(path)
+        total += _physical_file_size(path, counted, scan)
+
+    # Local Core opts into the RO incoming bind explicitly. Owner/remote modes
+    # imply this setting, but remote Core does not normally call this legacy
+    # usage path. Incoming is a flat protocol directory; strict direct-child
+    # accounting avoids pretending nested/unknown bytes are zero.
+    if bool(getattr(config, "POSTERSPLUS_SOURCE_ACCOUNT_INCOMING", False)):
+        incoming_root = str(
+            getattr(config, "POSTERSPLUS_SOURCE_INCOMING_DIR", "") or ""
+        ).strip()
+        if not incoming_root:
+            scan.incomplete = True
+        else:
+            for path in _bounded_top_level_files(
+                incoming_root,
+                state=scan,
+                strict=True,
+            ):
+                total += _physical_file_size(path, counted, scan)
+
     db_dir = Path(config.DB_PATH).parent
-    ledger_dir = Path(config.SOURCE_ART_LEDGER_PATH).parent
+    ledger_path = str(getattr(config, "SOURCE_ART_LEDGER_PATH", "") or "").strip()
+    roots = [db_dir]
+    if ledger_path:
+        roots.append(Path(ledger_path).parent)
     seen_roots: set[Path] = set()
-    for root in (db_dir, ledger_dir):
+    for root in roots:
         root = root.absolute()
         if root in seen_roots:
             continue
@@ -350,12 +468,13 @@ def _temp_bytes() -> tuple[int, bool]:
         # belong to this pool; descending into sibling cache trees would hit
         # the scan cap and falsely charge the full legacy allocation.
         for path in _bounded_top_level_files(root, state=scan):
-            absolute = path.absolute()
-            if absolute in counted:
-                continue
             if path.name.startswith((".tmp-", "tmp-", "install-", "raw-")):
-                counted.add(absolute)
-                total += _file_size(path)
+                total += _physical_file_size(path, counted, scan)
+
+    reservation_bytes, reservation_incomplete = _active_source_reservation_bytes()
+    total += reservation_bytes
+    if reservation_incomplete:
+        scan.incomplete = True
     if scan.incomplete:
         # The exact tail is unknowable.  Report a conservative allocation-sized
         # sentinel so cleanup is triggered and callers never see a false low.

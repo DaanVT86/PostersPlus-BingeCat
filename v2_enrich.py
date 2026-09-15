@@ -16,7 +16,12 @@ import tvdb
 from awards import FETCH_FAILED, _RateLimited, parse_mdblist_awards
 from bingecat_resolver import ResolvedIdentity, resolve_v2_identity
 from config import GENRE_MAP, GENRE_PRIORITY
-from discovery import FESTIVAL_KEYWORDS, NOTABLE_CAST, NOTABLE_DIRECTORS, NOTABLE_STUDIOS
+from discovery import (
+    FESTIVAL_KEYWORDS,
+    NOTABLE_CAST,
+    NOTABLE_DIRECTORS,
+    NOTABLE_STUDIOS,
+)
 from integration_contract import (
     CONTRACT_SCHEMA,
     CONTRACT_VERSION,
@@ -53,7 +58,6 @@ from tmdb import (
     fetch_v2_trending_rank,
     image_language_order,
 )
-
 
 ProviderCallable = Callable[..., Any]
 OPTIONAL_MISSING_TTL = timedelta(hours=24)
@@ -147,7 +151,37 @@ async def _default_materialize_art(
     textless_verified: bool | None = None
     if runtime.require_ocr and derivative.kind in {"poster", "backdrop"}:
         from PIL import Image
-        from text_detect import poster_has_burned_in_text
+
+        from text_detect import (
+            build_ocr_memo_key,
+            decision_for_detection,
+            parse_ocr_memo_entry,
+            poster_has_burned_in_text,
+        )
+
+        memo_key = build_ocr_memo_key(
+            derivative.sha256,
+            derivative.kind,
+            runtime.ocr_titles,
+        )
+        memo_entry = None
+        memo_store = runtime.source_store
+        lookup_verification = getattr(memo_store, "lookup_verification", None)
+        register_verification = getattr(memo_store, "register_verification", None)
+        if (lookup_verification is None) != (register_verification is None):
+            raise SourceArtError("source verification memo adapter is incomplete")
+        if lookup_verification is not None:
+            try:
+                memo_response = await asyncio.to_thread(
+                    lookup_verification,
+                    memo_key.payload(),
+                )
+                memo_entry = parse_ocr_memo_entry(
+                    memo_response,
+                    expected_key=memo_key,
+                )
+            except Exception as exc:
+                raise SourceArtError("source verification lookup failed") from exc
 
         def scan_derivative() -> bool | None:
             with Image.open(derivative.path) as image:
@@ -157,11 +191,45 @@ async def _default_materialize_art(
                     source=derivative.kind,
                 )
 
-        text_result = await asyncio.to_thread(scan_derivative)
+        if memo_entry is None:
+            text_result = await asyncio.to_thread(scan_derivative)
+            if register_verification is not None:
+                try:
+                    registered = await asyncio.to_thread(
+                        register_verification,
+                        memo_key.payload(),
+                        result=decision_for_detection(text_result),
+                        verified_at=evaluated_at,
+                    )
+                    memo_entry = parse_ocr_memo_entry(
+                        registered,
+                        expected_key=memo_key,
+                    )
+                    if memo_entry is None:
+                        raise SourceArtError("source verification registration did not converge")
+                except SourceArtError:
+                    raise
+                except Exception as exc:
+                    raise SourceArtError("source verification registration failed") from exc
+        else:
+            # A source-owner hit is authoritative, including the explicit
+            # unknown result.  Unknown must not be treated as a cache miss and
+            # must never cause a second OCR scan.
+            text_result = memo_entry.value
         if text_result is not False:
             reason = "contains text" if text_result else "could not be verified textless"
             raise SourceArtError(f"source {derivative.kind} {reason}")
         textless_verified = True
+        verified_at = (
+            memo_entry.verified_at if memo_entry is not None else None
+        ) or evaluated_at
+        verification_recipe = memo_key.detection_rules
+    else:
+        verified_at = None
+        verification_recipe = None
+    reference_observed_at = (
+        min(evaluated_at, verified_at) if verified_at is not None else evaluated_at
+    )
     return SourceArtReference(
         source_art_id=derivative.source_art_id,
         kind=derivative.kind,
@@ -174,12 +242,12 @@ async def _default_materialize_art(
         locator=derivative.locator or candidate.locator,
         locale=candidate.locale if candidate.locale in {"en", "pt", "nl", "de", "es", "neutral"} else "neutral",
         reconstructable=True,
-        observed_at=evaluated_at,
+        observed_at=reference_observed_at,
         checked_at=evaluated_at,
         expires_at=evaluated_at + timedelta(days=30),
         textless_verified=textless_verified,
-        verification_recipe="ppocr.textless.v1" if textless_verified else None,
-        verified_at=evaluated_at if textless_verified else None,
+        verification_recipe=verification_recipe if textless_verified else None,
+        verified_at=verified_at if textless_verified else None,
         verification_source_digest=derivative.sha256 if textless_verified else None,
     )
 
@@ -373,10 +441,12 @@ def _fact_envelope(
 def _dedupe_known_source_art(
     items: tuple[SourceArtReference, ...],
     evaluated_at: datetime,
+    *,
+    preserve_expired: bool = False,
 ) -> list[SourceArtReference]:
     selected: dict[tuple[str, str, str], SourceArtReference] = {}
     for art in items:
-        if art.expires_at <= evaluated_at:
+        if not preserve_expired and art.expires_at <= evaluated_at:
             continue
         if art.recipe_version != RECIPE_VERSIONS[art.kind]:
             continue
@@ -676,6 +746,70 @@ def _logo_options(
     )[:3]
 
 
+def _reference_locale_rank(
+    locale: str | None,
+    locales: tuple[str, ...],
+    *,
+    logo: bool = False,
+) -> int:
+    value = locale or "neutral"
+    if logo:
+        preferences = locales + (("en",) if "en" not in locales else ()) + ("neutral",)
+    else:
+        preferences = ("neutral",) + locales + (("en",) if "en" not in locales else ())
+    try:
+        return preferences.index(value)
+    except ValueError:
+        return len(preferences) + 1
+
+
+def _candidate_improves_reference(
+    candidate: V2ArtworkCandidate,
+    references: list[SourceArtReference],
+    *,
+    role: str,
+    locales: tuple[str, ...],
+) -> bool:
+    """Return whether a candidate has evidence of a strict art improvement.
+
+    Source-art references intentionally do not contain provider voting data.
+    A known reference is therefore treated as the floor for its locale: a
+    candidate must either move to a more preferred locale or carry positive
+    provider quality evidence.  A zero-score candidate with only a different
+    locator never displaces usable bytes.
+
+    Artwork-only refreshes do not use a fresh candidate merely to churn an
+    existing fallback backdrop or logo.  Those roles are filled only when
+    their captured bytes are absent; a verified portrait is likewise retained
+    for its locale because the old reference has no comparable quality score.
+    """
+
+    if not references:
+        return True
+    logo = role == "logo"
+    candidate_locale = _reference_locale_rank(candidate.locale, locales, logo=logo)
+    if role in {"fallback_backdrop", "logo"}:
+        return False
+    best_locale = min(
+        _reference_locale_rank(reference.locale, locales, logo=logo)
+        for reference in references
+    )
+    if any(reference.textless_verified for reference in references):
+        # Equal-locale candidates have no evidence of a strict improvement:
+        # SourceArtReference does not retain the provider score used to rank
+        # them.  A more preferred locale remains a valid upgrade.
+        return candidate_locale < best_locale
+    candidate_quality = (candidate.vote_average, candidate.vote_count)
+    same_locale = [
+        reference
+        for reference in references
+        if (reference.locale or "neutral") == (candidate.locale or "neutral")
+    ]
+    if same_locale:
+        return candidate_quality > (0.0, 0)
+    return candidate_locale < best_locale
+
+
 def _has_transient_blocking_art_failure(
     specs: tuple[CanonicalRenderSpec, ...],
     source_art: list[SourceArtReference],
@@ -736,30 +870,54 @@ async def enrich(
     tmdb_id = str(request.media.tmdb_id) if request.media.tmdb_id is not None else None
     provider_media_type = "tv" if request.media.media_type == "series" else "movie"
 
-    active_fact_groups = request.known_facts.active_provenance(evaluated_at)
-    facts = request.known_facts.active_values(evaluated_at).model_dump(
-        mode="python",
-        exclude_none=True,
+    if request.artwork_only:
+        # Artwork-only is deliberately detached from the provider freshness
+        # pipeline.  The app captured this facts envelope for the same media
+        # identity, so preserve its values and provenance exactly while Core
+        # refreshes only source art.
+        active_fact_groups = request.known_facts.provenance
+        facts = request.known_facts.values.model_dump(
+            mode="python",
+            exclude_none=True,
+        )
+        fact_evidence = {
+            field_name: group
+            for group in active_fact_groups
+            for field_name in group.fields
+        }
+    else:
+        active_fact_groups = request.known_facts.active_provenance(evaluated_at)
+        facts = request.known_facts.active_values(evaluated_at).model_dump(
+            mode="python",
+            exclude_none=True,
+        )
+        fact_evidence = {
+            field_name: group
+            for group in active_fact_groups
+            for field_name in group.fields
+        }
+        before_derived = set(facts)
+        _derive_keyword_facts(facts)
+        keyword_evidence = fact_evidence.get("keywords")
+        if keyword_evidence is not None:
+            for field_name in set(facts) - before_derived:
+                fact_evidence[field_name] = keyword_evidence
+    ratings = (
+        request.known_ratings
+        if request.artwork_only
+        else tuple(rating for rating in request.known_ratings if rating.expires_at > evaluated_at)
     )
-    fact_evidence = {
-        field_name: group
-        for group in active_fact_groups
-        for field_name in group.fields
-    }
-    before_derived = set(facts)
-    _derive_keyword_facts(facts)
-    keyword_evidence = fact_evidence.get("keywords")
-    if keyword_evidence is not None:
-        for field_name in set(facts) - before_derived:
-            fact_evidence[field_name] = keyword_evidence
-    ratings = tuple(rating for rating in request.known_ratings if rating.expires_at > evaluated_at)
     source_art = await _ensure_known_source_art(
-        _dedupe_known_source_art(request.known_source_art, evaluated_at),
+        _dedupe_known_source_art(
+            request.known_source_art,
+            evaluated_at,
+            preserve_expired=request.artwork_only,
+        ),
         evaluated_at,
         runtime.source_store,
     )
 
-    mdblist_missing = _missing_mdblist_fields(
+    mdblist_missing = () if request.artwork_only else _missing_mdblist_fields(
         requirements,
         required_fact_fields,
         facts,
@@ -767,7 +925,7 @@ async def enrich(
         specs=specs,
         media_type=provider_media_type,
     )
-    if mdblist_missing and runtime.mdblist_key and imdb_id is None:
+    if not request.artwork_only and mdblist_missing and runtime.mdblist_key and imdb_id is None:
         resolved = await _maybe_await(
             hooks.resolve_identity(
                 pool=runtime.pool,
@@ -933,24 +1091,23 @@ async def enrich(
         )
     )
     fresh_selection_policies = {(art.role, art.policy_key) for art in source_art}
-    missing_poster_needs = [
-        need for need in poster_needs if need not in fresh_selection_policies
-    ]
+    missing_poster_needs = (
+        list(poster_needs)
+        if request.artwork_only
+        else [need for need in poster_needs if need not in fresh_selection_policies]
+    )
     missing_art_kinds: set[str] = {"poster"} if missing_poster_needs else set()
     logo_specs = tuple(
         spec for spec in specs if compile_requirements(spec).logo
     )
-    missing_logo_specs = tuple(
-        {
-            (spec.logo_language, spec.logo_priority): spec
-            for spec in logo_specs
-            if (
-                "logo",
-                f"logo.{spec.logo_priority}.{spec.logo_language}",
-            )
-            not in fresh_selection_policies
-        }.values()
-    )
+    missing_logo_specs = tuple({
+        (spec.logo_language, spec.logo_priority): spec
+        for spec in logo_specs
+        if (
+            "logo",
+            f"logo.{spec.logo_priority}.{spec.logo_language}",
+        ) not in fresh_selection_policies
+    }.values())
     if missing_logo_specs:
         missing_art_kinds.add("logo")
     if requirements.fallback_art and (
@@ -958,35 +1115,55 @@ async def enrich(
         "fallback.backdrop",
     ) not in fresh_selection_policies:
         missing_art_kinds.add("backdrop")
-    tmdb_fact_fields = required_fact_fields & _TMDB_DERIVED_FACTS
+    tmdb_fact_fields = (
+        frozenset()
+        if request.artwork_only
+        else required_fact_fields & _TMDB_DERIVED_FACTS
+    )
     # ``just_added`` is a BingeCat catalogue observation and cannot truthfully
     # be inferred from TMDB.  Leave it tri-state/missing instead of fabricating
     # a false value and retrying an unrelated provider.
     tmdb_fact_fields -= {"is_just_added"}
     tmdb_facts_missing = tmdb_fact_fields - facts.keys()
-    release_year_missing = bool(
-        getattr(requirements, "release_year", False) and "release_year" not in facts
+    release_year_missing = (
+        False
+        if request.artwork_only
+        else bool(
+            getattr(requirements, "release_year", False)
+            and "release_year" not in facts
+        )
     )
-    genre_required = any(
-        not spec.hide_genre and spec.rating_display_mode in {1, 2, 3, 4}
-        for spec in specs
+    genre_required = (
+        False
+        if request.artwork_only
+        else any(
+            not spec.hide_genre and spec.rating_display_mode in {1, 2, 3, 4}
+            for spec in specs
+        )
     )
     genre_missing = genre_required and "genre" not in facts
-    tmdb_fact_needed = any(
+    tmdb_fact_needed = False if request.artwork_only else any(
         (
             bool(tmdb_facts_missing),
             release_year_missing,
             genre_missing,
         )
     )
-    release_status_needed = bool(_RELEASE_STATUS_SLOTS & sash_slots)
+    release_status_needed = (
+        False if request.artwork_only else bool(_RELEASE_STATUS_SLOTS & sash_slots)
+    )
     needs_tmdb_provider = bool(
         missing_art_kinds
         or tmdb_fact_needed
         or (requirements.trending and "trending_rank" not in facts)
         or (release_status_needed and "release_status" not in facts)
     )
-    if needs_tmdb_provider and runtime.tmdb_key and tmdb_id is None:
+    if (
+        needs_tmdb_provider
+        and not request.artwork_only
+        and runtime.tmdb_key
+        and tmdb_id is None
+    ):
         resolved = await _maybe_await(
             hooks.resolve_identity(
                 pool=runtime.pool,
@@ -1003,7 +1180,10 @@ async def enrich(
         tmdb_id = resolved.tmdb_id
         provider_media_type = resolved.media_type
     metadata: V2TMDBMetadata | None = None
-    if (missing_art_kinds or tmdb_fact_needed) and not runtime.tmdb_key:
+    if (
+        (missing_art_kinds or tmdb_fact_needed)
+        and (not runtime.tmdb_key or tmdb_id is None)
+    ):
         expires = evaluated_at + CONFIGURATION_MISSING_TTL
         statuses.append(
             ProviderResultStatus(
@@ -1024,9 +1204,13 @@ async def enrich(
                     provider_media_type,
                     request.locales,
                     need_images=bool(missing_art_kinds),
-                    need_credits=bool(
-                        {"matched_directors", "matched_cast", "matched_studios"}
-                        & tmdb_facts_missing
+                    need_credits=(
+                        False
+                        if request.artwork_only
+                        else bool(
+                            {"matched_directors", "matched_cast", "matched_studios"}
+                            & tmdb_facts_missing
+                        )
                     ),
                     need_external_ids=False,
                     need_original_assets=any(spec.use_original_art for spec in specs),
@@ -1053,7 +1237,7 @@ async def enrich(
                 )
             )
 
-    if metadata is not None:
+    if metadata is not None and not request.artwork_only:
         facts_before_tmdb = set(facts)
         if genre_missing:
             genre = next(
@@ -1116,7 +1300,12 @@ async def enrich(
             expires_at=evaluated_at + timedelta(days=7),
         )
 
-    if requirements.trending and "trending_rank" not in facts and not runtime.tmdb_key:
+    if (
+        not request.artwork_only
+        and requirements.trending
+        and "trending_rank" not in facts
+        and not runtime.tmdb_key
+    ):
         expires = evaluated_at + CONFIGURATION_MISSING_TTL
         statuses.append(
             ProviderResultStatus(
@@ -1125,7 +1314,11 @@ async def enrich(
                 expires_at=expires,
             )
         )
-    elif requirements.trending and "trending_rank" not in facts:
+    elif (
+        not request.artwork_only
+        and requirements.trending
+        and "trending_rank" not in facts
+    ):
         try:
             rank = await _maybe_await(
                 hooks.fetch_trending(
@@ -1167,7 +1360,12 @@ async def enrich(
                 )
             )
 
-    if release_status_needed and "release_status" not in facts and not runtime.tmdb_key:
+    if (
+        not request.artwork_only
+        and release_status_needed
+        and "release_status" not in facts
+        and not runtime.tmdb_key
+    ):
         expires = evaluated_at + CONFIGURATION_MISSING_TTL
         statuses.append(
             ProviderResultStatus(
@@ -1176,7 +1374,11 @@ async def enrich(
                 expires_at=expires,
             )
         )
-    elif release_status_needed and "release_status" not in facts:
+    elif (
+        not request.artwork_only
+        and release_status_needed
+        and "release_status" not in facts
+    ):
         tmdb_status = metadata.tmdb_status if metadata else None
         try:
             status = await _maybe_await(
@@ -1228,6 +1430,37 @@ async def enrich(
         for art in source_art
         if art.locator is not None
     }
+    materialization_attempts: dict[tuple[str, str], int] = {}
+
+    def policy_references(role: str, policy_key: str) -> list[SourceArtReference]:
+        return [
+            reference
+            for reference in source_art
+            if reference.role == role and reference.policy_key == policy_key
+        ]
+
+    def replace_same_locale_reference(
+        installed: SourceArtReference,
+        *,
+        role: str,
+        policy_key: str,
+    ) -> None:
+        """Replace only the old bytes for the improved locale/policy."""
+
+        if not request.artwork_only:
+            source_art.append(installed)
+            return
+        locale = installed.locale or "neutral"
+        source_art[:] = [
+            reference
+            for reference in source_art
+            if not (
+                reference.role == role
+                and reference.policy_key == policy_key
+                and (reference.locale or "neutral") == locale
+            )
+        ]
+        source_art.append(installed)
 
     async def install_first(
         options: list[V2ArtworkCandidate],
@@ -1239,6 +1472,18 @@ async def enrich(
             locator_policy = (candidate.locator.url, role, policy_key)
             if locator_policy in installed_locator_policies:
                 return True
+            if request.artwork_only and not _candidate_improves_reference(
+                candidate,
+                policy_references(role, policy_key),
+                role=role,
+                locales=request.locales,
+            ):
+                continue
+            attempt_key = (role, policy_key)
+            attempts = materialization_attempts.get(attempt_key, 0)
+            if attempts >= 3:
+                break
+            materialization_attempts[attempt_key] = attempts + 1
             try:
                 installed = await _maybe_await(
                     hooks.materialize_art(
@@ -1257,7 +1502,11 @@ async def enrich(
                 if (installed.role, installed.policy_key) != (role, policy_key):
                     raise SourceArtError("art materializer returned the wrong selection policy")
                 installed_locator_policies.add(locator_policy)
-                source_art.append(installed)
+                replace_same_locale_reference(
+                    installed,
+                    role=role,
+                    policy_key=policy_key,
+                )
                 return True
             except SourceArtError:
                 continue
@@ -1289,7 +1538,10 @@ async def enrich(
                 tmdb_posters,
                 key=lambda candidate: _candidate_order(candidate, request.locales),
             )[:3]
-        if not await install_first(options, role=role, policy_key=policy_key):
+        if (
+            not await install_first(options, role=role, policy_key=policy_key)
+            and not policy_references(role, policy_key)
+        ):
             unresolved_poster_needs.append((role, policy_key))
 
     if "backdrop" in missing_art_kinds:
@@ -1301,11 +1553,14 @@ async def enrich(
             ),
             key=lambda candidate: _candidate_order(candidate, request.locales),
         )[:3]
-        unresolved_backdrop = not await install_first(
+        if not await install_first(
             options,
             role="fallback_backdrop",
             policy_key="fallback.backdrop",
-        )
+        ):
+            unresolved_backdrop = not policy_references(
+                "fallback_backdrop", "fallback.backdrop"
+            )
 
     if "logo" in missing_art_kinds:
         if metadata is not None:
@@ -1316,13 +1571,28 @@ async def enrich(
                     metadata.original_language,
                     candidates,
                 )
-                if not await install_first(
-                    options,
-                    role="logo",
-                    policy_key=f"logo.{spec.logo_priority}.{spec.logo_language}",
+                policy_key = f"logo.{spec.logo_priority}.{spec.logo_language}"
+                if (
+                    not await install_first(
+                        options,
+                        role="logo",
+                        policy_key=policy_key,
+                    )
+                    and not policy_references("logo", policy_key)
                 ):
                     still_missing.append(spec)
             pending_logo_specs = still_missing
+
+    # An artwork-only refresh may have deliberately kept a usable old logo
+    # after finding no strict improvement.  It is no longer unresolved and
+    # must not trigger a TVDB fallback request.
+    pending_logo_specs = [
+        spec
+        for spec in pending_logo_specs
+        if not policy_references(
+            "logo", f"logo.{spec.logo_priority}.{spec.logo_language}"
+        )
+    ]
 
     tvdb_candidates: list[V2ArtworkCandidate] = []
     unresolved_kinds = {
@@ -1330,7 +1600,7 @@ async def enrich(
         *({"backdrop"} if unresolved_backdrop else set()),
         *({"logo"} if pending_logo_specs else set()),
     }
-    if unresolved_kinds:
+    if unresolved_kinds and not request.artwork_only:
         try:
             fallbacks = await _maybe_await(
                 hooks.fetch_tvdb(
@@ -1351,6 +1621,13 @@ async def enrich(
                     retry_at=retry_at, expires_at=retry_at,
                 )
             )
+    elif unresolved_kinds:
+        # The detached Oracle lane is intentionally TMDB-images-only.  A
+        # failed or uncertain bounded TMDB candidate pass remains source-art
+        # missing; it must not widen into TVDB merely because a role could not
+        # be improved.  The final source_art status records the unresolved
+        # roles and the caller can retry this bounded lane later.
+        tvdb_candidates = []
 
     still_missing_posters: list[tuple[str, str]] = []
     tvdb_posters = [candidate for candidate in tvdb_candidates if candidate.kind == "poster"]
@@ -1369,7 +1646,10 @@ async def enrich(
                 tvdb_posters,
                 key=lambda candidate: _candidate_order(candidate, request.locales),
             )[:3]
-        if not await install_first(options, role=role, policy_key=policy_key):
+        if (
+            not await install_first(options, role=role, policy_key=policy_key)
+            and not policy_references(role, policy_key)
+        ):
             still_missing_posters.append((role, policy_key))
     unresolved_poster_needs = still_missing_posters
 
@@ -1378,11 +1658,14 @@ async def enrich(
             (candidate for candidate in tvdb_candidates if candidate.kind == "backdrop"),
             key=lambda candidate: _candidate_order(candidate, request.locales),
         )[:3]
-        unresolved_backdrop = not await install_first(
+        if not await install_first(
             options,
             role="fallback_backdrop",
             policy_key="fallback.backdrop",
-        )
+        ):
+            unresolved_backdrop = not policy_references(
+                "fallback_backdrop", "fallback.backdrop"
+            )
 
     still_missing_logos = []
     for spec in pending_logo_specs:
@@ -1391,15 +1674,19 @@ async def enrich(
             metadata.original_language if metadata else None,
             tvdb_candidates,
         )
-        if not await install_first(
-            options,
-            role="logo",
-            policy_key=f"logo.{spec.logo_priority}.{spec.logo_language}",
+        policy_key = f"logo.{spec.logo_priority}.{spec.logo_language}"
+        if (
+            not await install_first(
+                options,
+                role="logo",
+                policy_key=policy_key,
+            )
+            and not policy_references("logo", policy_key)
         ):
             still_missing_logos.append(spec)
     pending_logo_specs = still_missing_logos
 
-    if pending_logo_specs and imdb_id:
+    if pending_logo_specs and imdb_id and not request.artwork_only:
         from integration_contract import ArtworkLocator
 
         metahub = [
@@ -1436,14 +1723,18 @@ async def enrich(
             )
         )
 
-    missing_normalized = sorted(
+    missing_normalized = [] if request.artwork_only else sorted(
         field_name for field_name in required_fact_fields if field_name not in facts
     )
-    if getattr(requirements, "release_year", False) and "release_year" not in facts:
+    if not request.artwork_only and getattr(requirements, "release_year", False) and "release_year" not in facts:
         missing_normalized.append("release_year")
-    if genre_missing and "genre" not in facts:
+    if not request.artwork_only and genre_missing and "genre" not in facts:
         missing_normalized.append("genre")
-    if requirements.certification and not ({"certification", "age_rating"} & facts.keys()):
+    if (
+        not request.artwork_only
+        and requirements.certification
+        and not ({"certification", "age_rating"} & facts.keys())
+    ):
         missing_normalized.append("age_rating")
     if missing_normalized:
         expires = evaluated_at + OPTIONAL_MISSING_TTL
@@ -1457,7 +1748,14 @@ async def enrich(
             )
         )
 
-    normalized_facts = _fact_envelope(facts, fact_evidence)
+    # The artwork-only lane is a detached snapshot pass: no facts are added,
+    # derived, expired, regrouped, or re-stamped.  Returning the validated
+    # envelope directly preserves the app's exact values/provenance binding.
+    normalized_facts = (
+        request.known_facts
+        if request.artwork_only
+        else _fact_envelope(facts, fact_evidence)
+    )
     partial = _has_transient_blocking_art_failure(specs, source_art, statuses)
     retries.extend(status.retry_at for status in statuses if status.retry_at is not None)
     retry_at = min(retries) if retries else None
