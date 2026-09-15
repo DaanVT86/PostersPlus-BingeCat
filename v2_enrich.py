@@ -1445,17 +1445,16 @@ async def enrich(
         role: str,
         policy_key: str,
     ) -> None:
-        """Replace only the old bytes for the improved locale/policy."""
+        """Install one content ID and replace the refreshed policy/locale."""
 
-        if not request.artwork_only:
-            source_art.append(installed)
-            return
         locale = installed.locale or "neutral"
         source_art[:] = [
             reference
             for reference in source_art
-            if not (
-                reference.role == role
+            if reference.source_art_id != installed.source_art_id
+            and not (
+                request.artwork_only
+                and reference.role == role
                 and reference.policy_key == policy_key
                 and (reference.locale or "neutral") == locale
             )
