@@ -4,6 +4,7 @@ import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from typing import Any
+from functools import lru_cache
 
 try:
     import cairo as _cairo
@@ -1221,8 +1222,10 @@ def _text_center(
     font: Any,
     cx: float,
     cy: float,
+    bbox: tuple[int, int, int, int] | None = None,
 ) -> tuple[float, float]:
-    bbox = draw.textbbox((0, 0), text, font=font)
+    if bbox is None:
+        bbox = draw.textbbox((0, 0), text, font=font)
     bbox_width = bbox[2] - bbox[0]
 
     try:
@@ -1303,6 +1306,20 @@ def _sash_body_cairo(
 # auto-star is no longer needed.  The set is kept empty for safety; the star
 # prefix is now controlled by the sash_winner_star URL parameter instead.
 _STAR_WIN_AWARDS: set[str] = set()
+
+
+@lru_cache(maxsize=32)
+def _notch_mask_bytes(width: int, height: int, radius: int) -> bytes:
+    """Cache only immutable L pixels; callers own every reconstructed image.
+
+    ponytail: 32 entries bound retained masks; use a byte budget if canvas sizes grow.
+    """
+    mask = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [(0, 0), (width - 1, height - 1)], radius=radius, fill=255,
+        corners=(False, False, True, True),
+    )
+    return mask.tobytes()
 
 
 def sample_frosted_notch_rgb(
@@ -1486,11 +1503,7 @@ def draw_award_badge(
         fr_b = int(tb * 255 * 0.6 + 255 * 0.4)
 
         # Notch shape mask (square top, rounded bottom)
-        rr_mask_ss = Image.new("L", (bw, bh), 0)
-        ImageDraw.Draw(rr_mask_ss).rounded_rectangle(
-            [(0, 0), (bw - 1, bh - 1)], radius=r_ss, fill=255,
-            corners=(False, False, True, True)
-        )
+        rr_mask_ss = Image.frombytes("L", (bw, bh), _notch_mask_bytes(bw, bh, r_ss))
         rr_f = np.array(rr_mask_ss, dtype=np.float32) / 255
 
         # Lay blurred crop under the tinted frost layer (alpha ~210 = quite opaque)
@@ -1502,7 +1515,7 @@ def draw_award_badge(
         # Dark text
         txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
         td = ImageDraw.Draw(txt_layer)
-        tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss)
+        tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss, _tbbox)
         td.text((tx, ty), label, font=font, fill=(0, 0, 0, 245))
         badge_ss = Image.alpha_composite(badge_ss, txt_layer)
 
@@ -1514,17 +1527,13 @@ def draw_award_badge(
     if notch_style == "black":
         # ── Pure black: dark near-opaque body, no border, silver/white text ──
         badge_ss = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
-        rr_mask_ss = Image.new("L", (bw, bh), 0)
-        ImageDraw.Draw(rr_mask_ss).rounded_rectangle(
-            [(0, 0), (bw - 1, bh - 1)], radius=r_ss, fill=255,
-            corners=(False, False, True, True)
-        )
+        rr_mask_ss = Image.frombytes("L", (bw, bh), _notch_mask_bytes(bw, bh, r_ss))
         body = Image.new("RGBA", (bw, bh), (10, 10, 12, 230))
         body.putalpha(rr_mask_ss)
         badge_ss = body
         txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
         td = ImageDraw.Draw(txt_layer)
-        tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss)
+        tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss, _tbbox)
         _txt_rgb_black = text_color if text_color is not None else (210, 210, 218)
         td.text((tx, ty), label, font=font, fill=(*_txt_rgb_black, 245))
         badge_ss = Image.alpha_composite(badge_ss, txt_layer)
@@ -1639,7 +1648,7 @@ def draw_award_badge(
     # ── Text: white on dark body, with drop shadow ───────────────────────────
     txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
     td = ImageDraw.Draw(txt_layer)
-    tx, ty = _text_center(td, label, font, bw // 2, text_cy_ss)
+    tx, ty = _text_center(td, label, font, bw // 2, text_cy_ss, _tbbox)
     _txt_rgb = text_color if text_color is not None else (255, 255, 255)
     td.text((tx + SS, ty + SS), label, font=font, fill=(0, 0, 0, 160))
     td.text((tx, ty),           label, font=font, fill=(*_txt_rgb, 235))

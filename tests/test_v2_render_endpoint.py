@@ -1650,7 +1650,7 @@ def test_renderer_revision_is_semantic_pixel_identity_not_service_identity():
     )
     assert render_module._compute_renderer_revision(  # noqa: SLF001
         source_overrides={"main.py": health_only_change}
-    ) == RENDERER_REVISION
+    ) == render_module.RENDERER_BUILD_FINGERPRINT
 
     pixel_constant = "_FALLBACK_DEFAULT_TINT = (1.0, 1.0, 1.4)"
     assert pixel_constant in main_source
@@ -1675,3 +1675,36 @@ def test_renderer_revision_is_semantic_pixel_identity_not_service_identity():
             "_draw_age_badge",
         )
     )
+
+
+def test_renderer_compatibility_binding_is_exact_and_fails_closed(monkeypatch):
+    raw = render_module.RENDERER_BUILD_FINGERPRINT
+    bindings = render_module._RENDERER_COMPATIBILITY
+    assert RENDERER_REVISION == bindings.get(raw, raw)
+    assert len(bindings) == 1
+    base = Path(render_module.__file__).parent
+    for path, old, new in (
+        ("awards.py", "maxsize=32", "maxsize=33"),
+        ("awards.py", "radius=radius, fill=255", "radius=radius, fill=254"),
+        ("main.py", "maxsize=256", "maxsize=255"),
+        ("main.py", 'sash_badge_font_ratio:   float = 0.43', 'sash_badge_font_ratio:   float = 0.44'),
+    ):
+        source = (base / path).read_text()
+        assert old in source
+        changed = render_module._compute_renderer_revision(source_overrides={path: source.replace(old, new, 1)})
+        assert changed != raw
+        assert bindings.get(changed, changed) == changed
+        assert changed != RENDERER_REVISION
+
+    environment = render_module._renderer_environment()
+    monkeypatch.setattr(render_module, "_renderer_environment", lambda: {**environment, "libraries": {**environment["libraries"], "pillow": "unverified"}})
+    changed_library = render_module._compute_renderer_revision()
+    assert changed_library != raw
+    assert bindings.get(changed_library, changed_library) == changed_library
+    monkeypatch.undo()
+
+    read_bytes = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda path: read_bytes(path) + (b"changed" if path.name == "Inter-Bold.ttf" else b""))
+    changed_asset = render_module._compute_renderer_revision()
+    assert changed_asset != raw
+    assert bindings.get(changed_asset, changed_asset) == changed_asset

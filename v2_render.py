@@ -1357,7 +1357,19 @@ def _compute_renderer_revision(
     )
 
 
-RENDERER_REVISION = _compute_renderer_revision()
+# Release-scoped proof: scripts/check_render_optimizations.py + the checked-in
+# render-optimization evidence. Only this exact AST/assets/library fingerprint
+# may retain the existing immutable identity. Unknown builds fail closed to
+# their own fingerprint; never extend this with an environment override.
+# Re-prove and replace the key after stacking the portrait/date feature PRs.
+_RENDERER_COMPATIBILITY: Mapping[str, str] = {
+    "4aea61b945e646223209b3a79a40088c4eb49e7700a411a925c1f01c2ccfb869":
+        "260504a9d0d0daa577848316c51518c5de78c4110642bac621cc92d3538f2b29",
+}
+RENDERER_BUILD_FINGERPRINT = _compute_renderer_revision()
+RENDERER_REVISION = _RENDERER_COMPATIBILITY.get(
+    RENDERER_BUILD_FINGERPRINT, RENDERER_BUILD_FINGERPRINT
+)
 RENDER_POLICY_REVISION = _compute_semantic_revision(
     b"postersplus-bingecat-v2-render-policy",
     RENDER_POLICY_REVISION_CODE_ROOTS,
@@ -1440,6 +1452,7 @@ def render(
 __all__ = [
     "RENDER_POLICY_REVISION",
     "RENDERER_REVISION",
+    "RENDERER_BUILD_FINGERPRINT",
     "RENDERER_REVISION_ASSET_MANIFEST",
     "RENDERER_REVISION_CODE_ROOTS",
     "RENDERER_REVISION_MANIFEST",

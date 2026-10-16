@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from functools import lru_cache
 from pydantic import ValidationError
 
 logging.basicConfig(
@@ -1721,8 +1722,13 @@ def build_poster(
         MAX_LINES      = 2
         FONT_PATH      = os.path.join(_FONTS_DIR, _font_file)
 
+        # Render-local: font objects are never shared across requests or retained.
+        @lru_cache(maxsize=256)
+        def _line_bbox(text: str, current_font):
+            return draw.textbbox((0, 0), text, font=current_font)
+
         def _line_width(text: str, current_font) -> int:
-            bbox = draw.textbbox((0, 0), text, font=current_font)
+            bbox = _line_bbox(text, current_font)
             return int(bbox[2] - bbox[0])
 
         def _wrap_lines(text: str, current_font) -> list[str]:
@@ -1745,7 +1751,7 @@ def build_poster(
 
         def _measure_block(lines_to_measure: list[str], current_font, line_gap: int) -> tuple[int, int, list[tuple[str, tuple[int, int, int, int]]]]:
             line_boxes = [
-                (line, draw.textbbox((0, 0), line, font=current_font))
+                (line, _line_bbox(line, current_font))
                 for line in lines_to_measure
             ]
             if not line_boxes:
