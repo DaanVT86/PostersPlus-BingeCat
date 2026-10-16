@@ -477,16 +477,16 @@ def test_renderer_revision_excludes_freshness_only_changes() -> None:
         "_validate_freshness" in entry
         for entry in v2_render.RENDERER_REVISION_MANIFEST
     )
-    baseline = subprocess.run(
-        ["git", "show", "HEAD:v2_render.py"],
-        cwd=Path(__file__).parents[1],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+    source = Path(v2_render.__file__).read_text()
+    original = 'raise RenderConflict("source_art_recipe_mismatch")'
+    assert original in source
+    changed = source.replace(original, 'raise RenderConflict("unverified_recipe")', 1)
     assert v2_render._compute_renderer_revision(
-        source_overrides={"v2_render.py": baseline}
-    ) == v2_render.RENDERER_REVISION
+        source_overrides={"v2_render.py": changed}
+    ) == v2_render._compute_renderer_revision()
+    assert v2_render._compute_renderer_build_fingerprint(
+        source_overrides={"v2_render.py": changed}
+    ) == v2_render.RENDERER_BUILD_FINGERPRINT
 
 
 def test_invalid_source_mode_fails_closed_without_env_preserving_default() -> None:
