@@ -131,6 +131,13 @@ Na stacken moet root:
 5. De geautoriseerde finale app-/Core-clusterchecks uitvoeren. Dit PR1-bewijs
    vervangt geen integratiebewijs of operationele runtime-attestation.
 
+Het aanvullende prewarmonderzoek van 16 oktober bevestigt: **nul extra
+prewarmcode**. Oracle staging verwerkt uitsluitend de drie fixed/en-presets;
+nieuwe custom opt-ins volgen de bestaande demandflow. De renderchecks hierboven
+gebruiken geïsoleerde testcontainers. Voor een latere rollout blijven nieuwe echte
+ARM/x86-imagepariteit en verse runtime-evidence vereist; een oude attestation mag
+niet als bewijs voor een nieuwe image worden hergebruikt.
+
 Voor deze zuivere optimalisatie is **geen prewarm, brede invalidatie of rendergolf
 nodig**: bestaande legacy-identiteiten en bytes blijven behouden. Geen merge,
 deployments, productie-/Oracle-SSH, providers of queuewijzigingen uitgevoerd.
