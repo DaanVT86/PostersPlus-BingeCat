@@ -1509,6 +1509,7 @@ def build_poster(
     no_poster: bool = False,
     metacritic_score: int | None = None,
     rating_badge_scores: dict[str, float] | None = None,
+    sash_date_label: str | None = None,
 ) -> Image.Image:
 
     width, height = image.size
@@ -1563,6 +1564,9 @@ def build_poster(
         if discovery_meta is not None
         else None
     )
+
+    if sash_date_label is not None and sash_result is not None:
+        sash_result = (sash_date_label, sash_result[1])
 
     # --- TOP GRADIENT (vectorised) ---
     # Darkens the top of the poster so the age-rating numeral and quality

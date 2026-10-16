@@ -1,0 +1,1271 @@
+{
+  "canonical_config": {
+    "accent_bar_append_mode": 0,
+    "accent_bar_bottom_ratio": 0.04,
+    "accent_bar_font_size_ratio": 0.08,
+    "accent_bar_y_offset": 0.9,
+    "badge_anchor_x": 0.05,
+    "badge_anchor_y": 0.05,
+    "badge_display_mode": 0,
+    "badge_gap": 8,
+    "badge_height": 20,
+    "badge_min_score": 2,
+    "bar_accent": "silver",
+    "bar_append": "rating_year",
+    "bar_bottom_inset": 0.0,
+    "bar_font_size_ratio": 0.55,
+    "bar_frost_opacity": 0.85,
+    "bar_height_ratio": 0.08,
+    "bar_match_notch": false,
+    "bar_score_out_of_10": false,
+    "bar_style": "frosted",
+    "bottom_gradient": "off",
+    "bottom_gradient_height": 0.0,
+    "bottom_gradient_opacity": 0.0,
+    "cinema_greyscale": false,
+    "cinema_greyscale_skip_if_available": false,
+    "combined_badge_stacked": false,
+    "fallback_bg_style": "minimal",
+    "fallback_to_imdb": false,
+    "hide_genre": false,
+    "logo_bottom_anchor": false,
+    "logo_bottom_ratio": 0.28,
+    "logo_language": "en",
+    "logo_max_h_ratio": 0.25,
+    "logo_max_w_ratio": 0.75,
+    "logo_priority": "native_original",
+    "minimalist_append_mode": 0,
+    "minimalist_mode_font_size_ratio": 0.055,
+    "minimalist_mode_font_x_offset": 0.05,
+    "minimalist_mode_font_y_offset": 0.92,
+    "movie_weights": [],
+    "muted": false,
+    "numeric_score_font_size_ratio": 0.1,
+    "numeric_score_y_offset": 0.9,
+    "original_art_source": "primary",
+    "rating_display_mode": 0,
+    "rating_text_color": null,
+    "release_status_cinema_only": false,
+    "sash_badge_font_ratio": 0.43,
+    "sash_badge_frost_opacity": 0.75,
+    "sash_badge_inset": 0.0,
+    "sash_badge_size_h": 1.05,
+    "sash_badge_size_w": 1.05,
+    "sash_badge_style": "frosted",
+    "sash_exclusions": [],
+    "sash_height_ratio": 0.12,
+    "sash_length_ratio": 1.15,
+    "sash_mode": "sash",
+    "sash_poster_color": false,
+    "sash_priority": [
+      "airing",
+      "cinema",
+      "streaming",
+      "production"
+    ],
+    "sash_text_color": null,
+    "sash_winner_star": false,
+    "schema": "bingecat_postersplus_v2",
+    "score_color_mode": 2,
+    "score_glow_alpha": 40,
+    "score_glow_blur": 1,
+    "score_glow_threshold": 85,
+    "score_out_of_10": false,
+    "show_award_sash": true,
+    "textless": false,
+    "top_gradient": "off",
+    "top_gradient_height": 0.0,
+    "top_gradient_opacity": 0.0,
+    "top_vignette_sash_only": false,
+    "tv_weights": [],
+    "use_original_art": false,
+    "version": 1
+  },
+  "media": {
+    "imdb_id": "tt0000001",
+    "media_type": "series",
+    "tmdb_id": 1
+  },
+  "schema": "postersplus_v2_local_date_vectors",
+  "snapshots": {
+    "airing": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.next_air"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "airing",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "airing"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "airing-hidden": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.next_air"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "airing",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "airing"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "airing-optout": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.next_air"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "airing",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "airing"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "airing-wrong-option": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.next_air"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "airing",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "airing"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "award-wins": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "award_wins",
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.mdblist_digital"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": [
+            "Oscar Winner"
+          ],
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "cinema",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "streaming"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "expired": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-11T11:59:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.next_air"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "airing",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "airing"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "grey-priority": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "award_wins",
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.mdblist_digital"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": [
+            "Oscar Winner"
+          ],
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "cinema",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "streaming"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "past": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.next_air"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "airing",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-10",
+          "upcoming_release_window": "airing"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "streams-cinema": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.mdblist_digital"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "cinema",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "streaming"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "streams-current": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.mdblist_digital"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "streaming",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "streaming"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "streams-production": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.mdblist_digital"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "production",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-12",
+          "upcoming_release_window": "streaming"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    },
+    "today": {
+      "artwork_evaluated_at": null,
+      "evaluated_at": "2026-07-11T12:00:00Z",
+      "facts": {
+        "provenance": [
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "release_status"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "bingecat"
+          },
+          {
+            "checked_at": "2026-07-11T11:00:00Z",
+            "expires_at": "2026-07-18T12:00:00Z",
+            "fields": [
+              "upcoming_release_date",
+              "upcoming_release_window"
+            ],
+            "observed_at": "2026-07-11T10:00:00Z",
+            "source": "media_data.next_air"
+          }
+        ],
+        "values": {
+          "age_rating": null,
+          "award_nominations": null,
+          "award_wins": null,
+          "certification": null,
+          "festival_label": null,
+          "genre": null,
+          "is_binge_ready": null,
+          "is_cult": null,
+          "is_digital_release": null,
+          "is_just_added": null,
+          "is_metacritic_must_see": null,
+          "is_mini_series": null,
+          "is_new_release": null,
+          "is_new_season": null,
+          "is_premiere": null,
+          "is_returning": null,
+          "is_season_finale": null,
+          "is_short_film": null,
+          "is_true_story": null,
+          "keywords": null,
+          "matched_cast": null,
+          "matched_directors": null,
+          "matched_studios": null,
+          "most_popular_rank": null,
+          "original_language": null,
+          "release_date": null,
+          "release_status": "airing",
+          "release_year": null,
+          "trending_rank": null,
+          "upcoming_release_date": "2026-07-11",
+          "upcoming_release_window": "airing"
+        }
+      },
+      "ratings": [],
+      "source_art": [],
+      "titles_by_locale": {
+        "en": "The Matrix",
+        "nl": "De Matrix"
+      }
+    }
+  },
+  "vectors": [
+    {
+      "config_overrides": {
+        "airing_dates": true
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat",
+            "upcoming_release_date": "media_data.next_air",
+            "upcoming_release_window": "media_data.next_air"
+          },
+          "values": {
+            "release_status": "airing",
+            "upcoming_release_date": "2026-07-12",
+            "upcoming_release_window": "airing"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "82fc7321bcbd6206b35e6be82a9f1f24e3a2b19fb28ada990636cd50f002fdaa",
+      "id": "airing",
+      "locale": "en",
+      "snapshot_ref": "airing"
+    },
+    {
+      "config_overrides": {},
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat"
+          },
+          "values": {
+            "release_status": "airing"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "b0bac82c97a2b45dad5cd7362882846fb0418d12b23ae8afa861e52f94c60b97",
+      "id": "airing-optout",
+      "locale": "en",
+      "snapshot_ref": "airing-optout"
+    },
+    {
+      "config_overrides": {
+        "airing_dates": true,
+        "sash_mode": "hidden"
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {},
+          "values": {}
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "7c76c189ec071537851da2bdaeedd87d3053eb38461a2d21c7abe91fcde5b9f8",
+      "id": "airing-hidden",
+      "locale": "en",
+      "snapshot_ref": "airing-hidden"
+    },
+    {
+      "config_overrides": {
+        "release_status_dates": true
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat"
+          },
+          "values": {
+            "release_status": "airing"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "b0bac82c97a2b45dad5cd7362882846fb0418d12b23ae8afa861e52f94c60b97",
+      "id": "airing-wrong-option",
+      "locale": "en",
+      "snapshot_ref": "airing-wrong-option"
+    },
+    {
+      "config_overrides": {
+        "release_status_dates": true
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat",
+            "upcoming_release_date": "media_data.mdblist_digital",
+            "upcoming_release_window": "media_data.mdblist_digital"
+          },
+          "values": {
+            "release_status": "cinema",
+            "upcoming_release_date": "2026-07-12",
+            "upcoming_release_window": "streaming"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "9af439559d2789bb78ec966ff10664befede6cd22cc31d8a66473e32ac8571f8",
+      "id": "streams-cinema",
+      "locale": "en",
+      "snapshot_ref": "streams-cinema"
+    },
+    {
+      "config_overrides": {
+        "release_status_dates": true
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat",
+            "upcoming_release_date": "media_data.mdblist_digital",
+            "upcoming_release_window": "media_data.mdblist_digital"
+          },
+          "values": {
+            "release_status": "production",
+            "upcoming_release_date": "2026-07-12",
+            "upcoming_release_window": "streaming"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "1f10f4940b9c1292ad18ad956bd45cf44f58bbea7056ff8520ae1a341e5bd90f",
+      "id": "streams-production",
+      "locale": "en",
+      "snapshot_ref": "streams-production"
+    },
+    {
+      "config_overrides": {
+        "release_status_dates": true
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat"
+          },
+          "values": {
+            "release_status": "streaming"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "2fda3c2f4f027936841163015f730f1d05e6a2783b8809e2e3beb06712c4eb4f",
+      "id": "streams-current",
+      "locale": "en",
+      "snapshot_ref": "streams-current"
+    },
+    {
+      "config_overrides": {
+        "airing_dates": true
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat"
+          },
+          "values": {
+            "release_status": "airing"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "b0bac82c97a2b45dad5cd7362882846fb0418d12b23ae8afa861e52f94c60b97",
+      "id": "expired",
+      "locale": "en",
+      "snapshot_ref": "expired"
+    },
+    {
+      "config_overrides": {
+        "airing_dates": true
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat"
+          },
+          "values": {
+            "release_status": "airing"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "b0bac82c97a2b45dad5cd7362882846fb0418d12b23ae8afa861e52f94c60b97",
+      "id": "past",
+      "locale": "en",
+      "snapshot_ref": "past"
+    },
+    {
+      "config_overrides": {
+        "airing_dates": true
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "release_status": "bingecat",
+            "upcoming_release_date": "media_data.next_air",
+            "upcoming_release_window": "media_data.next_air"
+          },
+          "values": {
+            "release_status": "airing",
+            "upcoming_release_date": "2026-07-11",
+            "upcoming_release_window": "airing"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "0c64b65525e59c908abe4893068fd1ebfdfe3f7dc80dfa1fbaf79731dee5b593",
+      "id": "today",
+      "locale": "en",
+      "snapshot_ref": "today"
+    },
+    {
+      "config_overrides": {
+        "release_status_dates": true,
+        "sash_priority": [
+          "wins",
+          "cinema"
+        ]
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_wins": "bingecat"
+          },
+          "values": {
+            "award_wins": [
+              "Oscar Winner"
+            ]
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "98bddb4ea4fe8a87075e28f15cffd2b08abbe9ff486fe484381e127f7798541c",
+      "id": "award-wins",
+      "locale": "en",
+      "snapshot_ref": "award-wins"
+    },
+    {
+      "config_overrides": {
+        "cinema_greyscale": true,
+        "release_status_dates": true,
+        "sash_priority": [
+          "wins",
+          "cinema"
+        ]
+      },
+      "expected_projection": {
+        "facts": {
+          "sources": {
+            "award_wins": "bingecat",
+            "release_status": "bingecat",
+            "upcoming_release_date": "media_data.mdblist_digital",
+            "upcoming_release_window": "media_data.mdblist_digital"
+          },
+          "values": {
+            "award_wins": [
+              "Oscar Winner"
+            ],
+            "release_status": "cinema",
+            "upcoming_release_date": "2026-07-12",
+            "upcoming_release_window": "streaming"
+          }
+        },
+        "media": {
+          "imdb_id": "tt0000001",
+          "media_type": "series",
+          "tmdb_id": 1
+        },
+        "ratings": [],
+        "source_art": [],
+        "titles_by_locale": {
+          "en": "The Matrix"
+        }
+      },
+      "expected_sha256": "0e3e82fa4867cd0be044a4cfe4b9f04e9c8b856ea9e0818e097dfb98d6eb01a2",
+      "id": "grey-priority",
+      "locale": "en",
+      "snapshot_ref": "grey-priority"
+    }
+  ],
+  "version": 1
+}

@@ -10,6 +10,7 @@
 # back to the English canonical string.  Nothing breaks if a translation is
 # absent — it just renders in English.
 import json
+from datetime import date
 import logging
 import os
 import re
@@ -110,6 +111,20 @@ def translate_sash(label: str | None, lang: str | None) -> str:
     """
     if not label:
         return label or ""
+    dated = re.fullmatch(r"(Cinema|Streaming|Airing) · (\d{4}-\d{2}-\d{2})", label)
+    if dated:
+        try:
+            event = date.fromisoformat(dated.group(2))
+        except ValueError:
+            return translate_sash(dated.group(1), lang)
+        code = normalize_locale(lang)
+        if code == "en":
+            calendar = f"{event.month:02d}/{event.day:02d}/{event.year:04d}"
+        else:
+            separator = {"nl": "-", "de": "."}.get(code, "/")
+            calendar = separator.join((f"{event.day:02d}", f"{event.month:02d}", f"{event.year:04d}"))
+        prefix = _table(code, "dateWindowLabels").get(dated.group(1), dated.group(1))
+        return f"{prefix} · {calendar}"
     sl = _table(lang, "sashLabels")
     if not sl:
         return label

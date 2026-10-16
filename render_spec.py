@@ -167,6 +167,8 @@ class CanonicalRenderSpec:
     cinema_greyscale: bool = True
     cinema_greyscale_skip_if_available: bool = False
     release_status_cinema_only: bool = False
+    release_status_dates: bool = False
+    airing_dates: bool = False
     badge_display_mode: int = 0
     rating_display_mode: int = 1
     accent_bar_font_size_ratio: float = 0.08
@@ -255,6 +257,9 @@ class CanonicalRenderSpec:
         for name in PORTRAIT_DEFAULTS:
             payload.pop(name)
         payload.update(active)
+        for name in ("release_status_dates", "airing_dates"):
+            if not payload[name]:
+                payload.pop(name)
         if payload["score_custom_palette"] is None:
             payload.pop("score_custom_palette")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -453,6 +458,8 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         cinema_greyscale=_bool(values.get("cinema_greyscale"), defaults.cinema_greyscale),
         cinema_greyscale_skip_if_available=_bool(values.get("cinema_greyscale_skip_if_available"), defaults.cinema_greyscale_skip_if_available),
         release_status_cinema_only=_bool(values.get("release_status_cinema_only"), defaults.release_status_cinema_only),
+        release_status_dates=_bool(values.get("release_status_dates"), False),
+        airing_dates=_bool(values.get("airing_dates"), False),
         badge_display_mode=badge_display_mode,
         rating_display_mode=_int(values.get("rating_display_mode"), defaults.rating_display_mode, 0, 5),
         accent_bar_font_size_ratio=_float(values.get("accent_bar_font_size_ratio"), defaults.accent_bar_font_size_ratio, 0.0, 0.5),

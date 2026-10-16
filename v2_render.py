@@ -15,7 +15,7 @@ import json
 import math
 import threading
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -657,6 +657,61 @@ def _used_ratings(
     return tuple(sorted(selected, key=_rating_order))
 
 
+
+def _displayed_upcoming_date(
+    config: Mapping[str, Any],
+    facts: Mapping[str, Any],
+    *,
+    selected: tuple[str, ...] | None,
+    evaluated_at: Any,
+    provenance: Any,
+) -> bool:
+    if selected != ("release_status",) or not (
+        config.get("release_status_dates") or config.get("airing_dates")
+    ):
+        return False
+    try:
+        instant = (
+            datetime.fromisoformat(str(evaluated_at).replace("Z", "+00:00"))
+            if not isinstance(evaluated_at, datetime)
+            else evaluated_at
+        )
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            return False
+        today = instant.astimezone(timezone.utc).date()
+        raw = facts.get("upcoming_release_date")
+        event = date.fromisoformat(raw) if isinstance(raw, str) else raw
+        window = facts.get("upcoming_release_window")
+        status = facts.get("release_status")
+        allowed = (
+            config.get("airing_dates")
+            and window == "airing"
+            and status == "airing"
+            and event >= today
+            or config.get("release_status_dates")
+            and event > today
+            and (
+                window == "streaming"
+                and status in {"cinema", "production"}
+                or window == "cinema"
+                and status in {"cinema", "production"}
+            )
+        )
+        pair = {"upcoming_release_date", "upcoming_release_window"}
+        return bool(
+            allowed
+            and any(
+                pair <= set(group.get("fields") or ())
+                and datetime.fromisoformat(str(group["checked_at"]).replace("Z", "+00:00"))
+                <= instant
+                < datetime.fromisoformat(str(group["expires_at"]).replace("Z", "+00:00"))
+                for group in provenance or ()
+            )
+        )
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return False
+
+
 def _used_fact_fields(
     spec: CanonicalRenderSpec,
     requirements: DataRequirements,
@@ -688,6 +743,12 @@ def _used_fact_fields(
 
     if spec.show_award_sash and spec.sash_mode != "hidden":
         selected_sash_fact = _selected_sash_fact(spec, snapshot)
+        facts = snapshot.facts.values.model_dump(mode="json", exclude_none=True)
+        date_selected = selected_sash_fact
+        if spec.cinema_greyscale and facts.get("release_status") in {"cinema", "production"} and facts["release_status"] in spec.sash_priority:
+            date_selected = ("release_status",)
+        if _displayed_upcoming_date(asdict(spec), facts, selected=date_selected, evaluated_at=snapshot.evaluated_at, provenance=[group.model_dump(mode="json") for group in snapshot.facts.provenance]):
+            used.update({"upcoming_release_date", "upcoming_release_window"})
         if selected_sash_fact is not None:
             used.update(selected_sash_fact)
         release_status_is_requested = any(
@@ -1151,6 +1212,8 @@ def _compose(
             and (rating.vote_count is None or rating.vote_count >= 10)
             and rating.checked_at <= bundle.snapshot.evaluated_at < rating.expires_at
         },
+        **({"sash_date_label": f"{facts.upcoming_release_window.title()} · {facts.upcoming_release_date.isoformat()}"}
+           if "upcoming_release_date" in used_fact_fields else {}),
     )
     return rendered.convert("RGB")
 

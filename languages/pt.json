@@ -26,6 +26,7 @@
     "Soap": "Telenovela",
     "Talk": "Talk Show"
   },
+  "dateWindowLabels": {"Cinema": "Cinema", "Streaming": "Streaming", "Airing": "Exibição"},
   "sashLabels": {
     "trendingToday": "#{rank} Hoje",
     "New Season": "Nova temporada",

@@ -66,6 +66,8 @@ FactField = Literal[
     "genre",
     "release_year",
     "release_date",
+    "upcoming_release_date",
+    "upcoming_release_window",
     "original_language",
     "keywords",
     "certification",
@@ -271,6 +273,8 @@ class NormalizedFacts(StrictModel):
     genre: Annotated[str, StringConstraints(max_length=120)] | None = None
     release_year: Annotated[int, Field(strict=True, ge=1870, le=9999)] | None = None
     release_date: date | None = None
+    upcoming_release_date: date | None = None
+    upcoming_release_window: Literal["cinema", "streaming", "airing"] | None = None
     original_language: Annotated[
         str,
         StringConstraints(min_length=2, max_length=16, pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$"),
@@ -369,6 +373,12 @@ class NormalizedFactsEnvelope(StrictModel):
     @model_validator(mode="after")
     def _every_value_has_exactly_one_source(self):
         populated = set(self.values.model_dump(mode="python", exclude_none=True))
+        pair = {"upcoming_release_date", "upcoming_release_window"}
+        if populated.intersection(pair):
+            if not pair <= populated or not any(
+                pair <= set(group.fields) for group in self.provenance
+            ):
+                raise ValueError("upcoming release requires a coherent date/window provenance group")
         covered: set[str] = set()
         for group in self.provenance:
             overlap = covered.intersection(group.fields)

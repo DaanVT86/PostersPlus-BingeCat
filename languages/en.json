@@ -27,6 +27,7 @@
     "Soap": "Soap",
     "Talk": "Talk"
   },
+  "dateWindowLabels": {"Cinema": "Cinema", "Streaming": "Streams", "Airing": "Airs"},
   "sashLabels": {
     "trendingToday": "#{rank} Today",
     "New Season": "New Season",
