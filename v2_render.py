@@ -69,6 +69,38 @@ V2_TRENDING_BROAD_FETCH_COUNT = 100
 # are hashed as normalized AST closures rather than hashing the whole module.
 # A health/auth edit in that file is therefore outside this identity, while a
 # change to ``build_poster`` or one of its module-level constants is included.
+_COMPOSITOR_CONFIG_DEFAULTS = (
+    "ACCENT_BAR_MODE_FONT_SIZE_RATIO",
+    "ACCENT_BAR_MODE_FONT_Y_OFFSET",
+    "BADGE_ANCHOR_X_RATIO",
+    "BADGE_ANCHOR_Y_RATIO",
+    "BADGE_DISPLAY_MODE",
+    "BADGE_GAP",
+    "BADGE_HEIGHT",
+    "DEFAULT_LOGO_LANGUAGE",
+    "LOGO_BOTTOM_RATIO",
+    "LOGO_MAX_H_RATIO",
+    "LOGO_MAX_W_RATIO",
+    "MINIMALIST_MODE_FONT_SIZE_RATIO",
+    "MINIMALIST_MODE_FONT_X_OFFSET",
+    "MINIMALIST_MODE_FONT_Y_OFFSET",
+    "NUMERIC_SCORE_MODE_FONT_SIZE_RATIO",
+    "NUMERIC_SCORE_MODE_FONT_Y_OFFSET",
+    "SASH_PRIORITY",
+    "SCORE_GLOW_ALPHA",
+    "SCORE_GLOW_BLUR",
+    "SCORE_GLOW_THRESHOLD",
+    "SHOW_AWARD_SASH",
+    "SHOW_RATING_DISPLAY_MODE",
+)
+
+_COMPOSITOR_CONFIG_INPUTS = _COMPOSITOR_CONFIG_DEFAULTS + (
+    "GENRE_MAP", "GENRE_PRIORITY", "POSTER_WIDTH", "POSTER_HEIGHT",
+    "QUALITY_LABELS", "TRENDING_FETCH_COUNT", "TRENDING_BROAD_FETCH_COUNT",
+    "LOGO_CONTRAST_RESCUE", "LOGO_STRETCH_DISABLED", "LOGO_STRETCH_FACTOR",
+    "MOVIE_WEIGHTS", "TV_WEIGHTS",
+)
+
 RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "v2_render.py",
@@ -106,7 +138,14 @@ RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "sample_frosted_sash_rgb",
         ),
     ),
-    ("age_badge.py", ("draw_quality_age_badge",)),
+    # Cross-module imports are not followed by the per-module AST closure.
+    ("rating_badges.py", ("*",)),
+    ("config.py", _COMPOSITOR_CONFIG_INPUTS),
+    ("render_spec.py", (
+        "PORTRAIT_DEFAULTS", "BADGE_PROVIDERS", "portrait_options",
+        "badge_layout", "weighted_rating_needed",
+    )),
+    ("age_badge.py", ("draw_quality_age_badge", "draw_tier_bar", "_score_points")),
     ("discovery.py", ("DiscoveryMeta", "pick_sash")),
     ("tmdb.py", ("LOGO_ABS_MAX_H", "composite_logo", "logo_centre_y")),
     ("i18n.py", ("load_languages", "translate_genre", "translate_sash")),
@@ -118,6 +157,7 @@ def _renderer_assets() -> tuple[str, ...]:
         (_BASE_DIR / "fonts", frozenset({".ttf"})),
         (_BASE_DIR / "static" / "genre_bg", frozenset({".png"})),
         (_BASE_DIR / "static" / "logos", frozenset({".png"})),
+        (_BASE_DIR / "static" / "rating_badges", frozenset({".png"})),
     )
     paths = [
         path.relative_to(_BASE_DIR).as_posix()
@@ -160,6 +200,7 @@ RENDER_POLICY_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("render_spec.py", ("CanonicalRenderSpec", "canonicalize_config", "compile_requirements")),
     ("preset_registry.py", ("get_preset",)),
+    ("i18n.py", ("normalize_locale",)),
     (
         "integration_contract.py",
         ("ImmutableRenderSnapshot", "RenderInputBundle", "SourceArtReference"),
@@ -1282,6 +1323,9 @@ def _semantic_code_payload(
             f"revision source unavailable: {relative_path}"
         ) from exc
 
+    if roots == ("*",):
+        return ast.dump(tree, annotate_fields=True, include_attributes=False).encode("utf-8")
+
     definitions: dict[str, ast.AST] = {}
     for node in tree.body:  # type: ignore[attr-defined]
         for name in _bound_names(node):
@@ -1396,6 +1440,7 @@ def _renderer_environment() -> dict[str, Any]:
 
     return {
         "canvas": _CANVAS_SIZE,
+        "config_inputs": {name: getattr(config, name) for name in _COMPOSITOR_CONFIG_INPUTS},
         "genre_map": config.GENRE_MAP,
         "genre_priority": config.GENRE_PRIORITY,
         "legacy_canvas": (config.POSTER_WIDTH, config.POSTER_HEIGHT),
@@ -1436,22 +1481,31 @@ def _compute_renderer_revision(
     )
 
 
-# Release-scoped proof: scripts/check_render_optimizations.py + the checked-in
-# render-optimization evidence. Only this exact AST/assets/library fingerprint
-# may retain the existing immutable identity. Unknown builds fail closed to
-# their own fingerprint; never extend this with an environment override.
-# Re-prove and replace the key after stacking the portrait/date feature PRs.
-_RENDERER_COMPATIBILITY: Mapping[str, str] = {
-    "4aea61b945e646223209b3a79a40088c4eb49e7700a411a925c1f01c2ccfb869":
-        "260504a9d0d0daa577848316c51518c5de78c4110642bac621cc92d3538f2b29",
-}
-RENDERER_BUILD_FINGERPRINT = _compute_renderer_revision()
+def _compute_render_policy_revision(*, source_overrides: Mapping[str, str] | None = None) -> str:
+    return _compute_semantic_revision(
+        b"postersplus-bingecat-v2-render-policy",
+        RENDER_POLICY_REVISION_CODE_ROOTS,
+        source_overrides=source_overrides,
+    )
+
+
+def _compute_renderer_build_fingerprint(*, source_overrides: Mapping[str, str] | None = None) -> str:
+    # Keep composition and selection policy separately auditable, but authorize
+    # byte compatibility only for their exact tested combination.
+    return hashlib.sha256(
+        b"postersplus-bingecat-v2-compatible-build\0"
+        + _compute_renderer_revision(source_overrides=source_overrides).encode("ascii")
+        + _compute_render_policy_revision(source_overrides=source_overrides).encode("ascii")
+    ).hexdigest()
+
+
+# Closed release binding: replaced only after baked x86/ARM image parity.
+# docs/research/2026-10-16-posterplus-cluster-image-parity.md records the proof.
+_RENDERER_COMPATIBILITY: Mapping[str, str] = {}
+RENDER_POLICY_REVISION = _compute_render_policy_revision()
+RENDERER_BUILD_FINGERPRINT = _compute_renderer_build_fingerprint()
 RENDERER_REVISION = _RENDERER_COMPATIBILITY.get(
     RENDERER_BUILD_FINGERPRINT, RENDERER_BUILD_FINGERPRINT
-)
-RENDER_POLICY_REVISION = _compute_semantic_revision(
-    b"postersplus-bingecat-v2-render-policy",
-    RENDER_POLICY_REVISION_CODE_ROOTS,
 )
 SOURCE_RECIPE_REVISION = _compute_semantic_revision(
     b"postersplus-bingecat-v2-source-recipe",

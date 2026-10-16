@@ -12,7 +12,7 @@ from render_spec import canonicalize_config, compile_requirements
 from source_art import SourceArtStore
 from test_v2_handoff import configured_handoff, _start, _csrf
 import v2_render
-from test_v2_render_endpoint import NOW, _bundle, _canonical_config, _facts, _install_art, _snapshot
+from test_v2_render_endpoint import NOW, _rating, _bundle, _canonical_config, _facts, _install_art, _snapshot
 
 
 def dated_snapshot(*, window="airing", status="airing", day="2026-07-12", expires=None, **changes):
@@ -196,3 +196,22 @@ def test_shared_local_date_hash_vectors():
             )
             == vector["expected_sha256"]
         ), vector["id"]
+
+
+def test_combined_date_badges_and_side_notch_change_only_opted_pixels(tmp_path):
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    art = _install_art(store)
+    snapshot = dated_snapshot(source_art=(art,)).model_copy(update={
+        "ratings": (_rating(provider="imdb", normalized_score=87.0),),
+    })
+    base = _canonical_config(
+        use_original_art=True, show_award_sash=True, sash_mode="notch",
+        sash_priority=["airing"], sash_badge_style="frosted",
+        cinema_greyscale=False, rating_display_mode=2,
+    )
+    configs = [base, {**base, "airing_dates": True},
+               {**base, "airing_dates": True, "rating_badges": "imdb"},
+               {**base, "airing_dates": True, "rating_badges": "imdb", "sash_badge_pos": "left"}]
+    outputs = [v2_render.render(_bundle(json.loads(canonicalize_config(cfg).canonical_json()), snapshot), source_store=store)[0] for cfg in configs]
+    assert len(set(outputs)) == len(outputs)
+    assert canonicalize_config(base).canonical_json() == canonicalize_config({**configs[-1], "airing_dates": False, "rating_badges": "", "sash_badge_pos": "center"}).canonical_json()

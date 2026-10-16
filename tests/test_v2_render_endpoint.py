@@ -1648,7 +1648,7 @@ def test_renderer_revision_is_semantic_pixel_identity_not_service_identity():
         health.replace('{"status": "ok"}', '{"status": "healthy"}'),
         1,
     )
-    assert render_module._compute_renderer_revision(  # noqa: SLF001
+    assert render_module._compute_renderer_build_fingerprint(
         source_overrides={"main.py": health_only_change}
     ) == render_module.RENDERER_BUILD_FINGERPRINT
 
@@ -1691,20 +1691,20 @@ def test_renderer_compatibility_binding_is_exact_and_fails_closed(monkeypatch):
     ):
         source = (base / path).read_text()
         assert old in source
-        changed = render_module._compute_renderer_revision(source_overrides={path: source.replace(old, new, 1)})
+        changed = render_module._compute_renderer_build_fingerprint(source_overrides={path: source.replace(old, new, 1)})
         assert changed != raw
         assert bindings.get(changed, changed) == changed
         assert changed != RENDERER_REVISION
 
     environment = render_module._renderer_environment()
     monkeypatch.setattr(render_module, "_renderer_environment", lambda: {**environment, "libraries": {**environment["libraries"], "pillow": "unverified"}})
-    changed_library = render_module._compute_renderer_revision()
+    changed_library = render_module._compute_renderer_build_fingerprint()
     assert changed_library != raw
     assert bindings.get(changed_library, changed_library) == changed_library
     monkeypatch.undo()
 
     read_bytes = Path.read_bytes
     monkeypatch.setattr(Path, "read_bytes", lambda path: read_bytes(path) + (b"changed" if path.name == "Inter-Bold.ttf" else b""))
-    changed_asset = render_module._compute_renderer_revision()
+    changed_asset = render_module._compute_renderer_build_fingerprint()
     assert changed_asset != raw
     assert bindings.get(changed_asset, changed_asset) == changed_asset

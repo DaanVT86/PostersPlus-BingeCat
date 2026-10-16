@@ -18,7 +18,7 @@ import tempfile
 import time
 
 
-def check(source: Path, output: Path, iterations: int, baseline: Path | None):
+def check(source: Path, output: Path, iterations: int, baseline: Path | None, unbound_proof: bool = False):
     sys.path[:0] = [str(source), str(source / "tests")]
     import awards
     import v2_render as renderer
@@ -44,6 +44,9 @@ def check(source: Path, output: Path, iterations: int, baseline: Path | None):
         "python": platform.python_version(),
         "libraries": renderer._image_library_versions(),
         "raw_revision": renderer._compute_renderer_revision(),
+        "build_fingerprint": getattr(renderer, "RENDERER_BUILD_FINGERPRINT", renderer._compute_renderer_revision()),
+        "policy_revision": renderer.RENDER_POLICY_REVISION,
+        "unbound_proof": unbound_proof,
         "renderer_revision": renderer.RENDERER_REVISION,
         "iterations": iterations,
         "cases": {},
@@ -129,6 +132,8 @@ def check(source: Path, output: Path, iterations: int, baseline: Path | None):
             if previous_results:
                 previous = previous_results["cases"][name]
                 for key in ("canonical_json", "config_sha256", "requirements_sha256", "snapshot_sha256", "content_sha256", "byte_size", "renderer_revision"):
+                    if key == "renderer_revision" and unbound_proof:
+                        continue
                     assert record[key] == previous[key], (name, key)
                 assert expected == (baseline / filename).read_bytes(), name
             evidence["cases"][name] = record
@@ -150,7 +155,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--iterations", type=int, default=3)
+    parser.add_argument("--unbound-proof", action="store_true", help="Before authorizing a binding: compare every byte/hash, but expect a new renderer identity")
     args = parser.parse_args()
     if args.iterations < 1:
         parser.error("--iterations must be positive")
-    check(args.source.resolve(), args.output, args.iterations, args.baseline)
+    check(args.source.resolve(), args.output, args.iterations, args.baseline, args.unbound_proof)

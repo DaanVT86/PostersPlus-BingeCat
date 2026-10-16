@@ -1484,7 +1484,7 @@ def draw_award_badge(
             region = image.crop((x, y, x + chip_w, y + chip_h)).filter(ImageFilter.GaussianBlur(max(4, chip_h * 0.35)))
             chip = region.resize((w, h), Image.Resampling.LANCZOS).convert("RGBA")
             rgb = tint_rgb or tuple(np.asarray(region.resize((8, 8)).convert("RGB"), dtype=np.float32).mean(axis=(0, 1)))
-            frost = Image.new("RGBA", (w, h), (*_frosted_tint_from_rgb(*rgb), round(frost_opacity * 255)))
+            frost = Image.new("RGBA", (w, h), (*_frosted_tint(*rgb), round(frost_opacity * 255)))
             chip = Image.alpha_composite(chip, frost)
             ink = (0, 0, 0)
         else:
