@@ -1501,7 +1501,10 @@ def _compute_renderer_build_fingerprint(*, source_overrides: Mapping[str, str] |
 
 # Closed release binding: replaced only after baked x86/ARM image parity.
 # docs/research/2026-10-16-posterplus-cluster-image-parity.md records the proof.
-_RENDERER_COMPATIBILITY: Mapping[str, str] = {}
+_RENDERER_COMPATIBILITY: Mapping[str, str] = {
+    "a7ed1df863f30aab040b1ab6d005cf5918268fea5de6cf7ccb7b0652d099a9e5":
+        "260504a9d0d0daa577848316c51518c5de78c4110642bac621cc92d3538f2b29",
+}
 RENDER_POLICY_REVISION = _compute_render_policy_revision()
 RENDERER_BUILD_FINGERPRINT = _compute_renderer_build_fingerprint()
 RENDERER_REVISION = _RENDERER_COMPATIBILITY.get(
