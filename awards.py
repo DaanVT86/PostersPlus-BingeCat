@@ -1384,6 +1384,8 @@ def draw_award_badge(
     tint_rgb: tuple[float, float, float] | None = None,  # override sampled colour (frosted)
     star: bool | None = None,         # override ★ decision (resolved on canonical label)
     text_color: tuple[int, int, int] | None = None,  # override default white text
+    position: str = "center",
+    notch_pad_ratio: float = 1.0,
 ) -> Image.Image:
     """
     Centred notch badge that emerges from the top edge of the poster.
@@ -1434,7 +1436,8 @@ def draw_award_badge(
         label = f"★  {label}"
 
     # ── Dimensions ───────────────────────────────────────────────────────────
-    badge_h = int(height * 0.075 * size_ratio_h)
+    base_h = int(height * 0.075 * size_ratio_h)
+    badge_h = base_h
     bh      = badge_h * SS  # SS-space height (independent of width)
 
     # ── Font: fixed size so every label renders at the same scale ────────────
@@ -1456,6 +1459,46 @@ def draw_award_badge(
     min_badge_w = int(width * 0.28 * size_ratio_w)
     max_badge_w = int(width * 0.70)
     badge_w   = max(min_badge_w, min(max_badge_w, text_w_ss // SS + _h_pad))
+
+    if notch_pad_ratio != 1.0:
+        # Preserve font/width; only tighten empty vertical space, never ink.
+        ref = _tmp_d.textbbox((0, 0), "ÅÄÖÜÀÁÉÓÊÎÑÇgjpqy0★", font=font)
+        ascent, descent = font.getmetrics()
+        k = -(ascent + descent) / 2 - descent + int(ascent * 0.22)
+        min_h = min(base_h, math.ceil(max(-2 * (k + ref[1]), 2 * (k + ref[3])) * 1.05 / SS))
+        badge_h = max(min_h, int(base_h * notch_pad_ratio))
+        bh = badge_h * SS
+    if position in {"left", "right"}:
+        # Floating side chips have four rounded corners and a closed trim.
+        # Upstream geometry: 4.5% side/top margin, 82% nominal notch height.
+        chip_h = max(1, int(badge_h * 0.82), math.ceil((_tbbox[3] - _tbbox[1]) / SS * 1.1))
+        chip_w = min(width - int(width * 0.09), text_w_ss // SS + int(chip_h * 0.80))
+        margin = int(width * 0.045)
+        x = width - margin - chip_w if position == "right" else margin
+        y = max(0, margin + int(height * notch_inset))
+        w, h = chip_w * SS, chip_h * SS
+        radius = int(chip_h * 0.30) * SS
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), radius=radius, fill=255)
+        if notch_style == "frosted":
+            region = image.crop((x, y, x + chip_w, y + chip_h)).filter(ImageFilter.GaussianBlur(max(4, chip_h * 0.35)))
+            chip = region.resize((w, h), Image.Resampling.LANCZOS).convert("RGBA")
+            rgb = tint_rgb or tuple(np.asarray(region.resize((8, 8)).convert("RGB"), dtype=np.float32).mean(axis=(0, 1)))
+            frost = Image.new("RGBA", (w, h), (*_frosted_tint_from_rgb(*rgb), round(frost_opacity * 255)))
+            chip = Image.alpha_composite(chip, frost)
+            ink = (0, 0, 0)
+        else:
+            chip = Image.new("RGBA", (w, h), (10, 10, 12, 255))
+            if notch_style in {"gold", "silver"}:
+                ImageDraw.Draw(chip).rounded_rectangle((0, 0, w - 1, h - 1), radius=radius, outline=(*trim_rgb, 215), width=max(1, int(badge_h * 0.055)) * SS)
+            ink = (210, 210, 218)
+        chip.putalpha(mask)
+        td = ImageDraw.Draw(chip)
+        tx, ty = _text_center(td, label, font, w / 2, h / 2)
+        td.text((tx, ty), label, font=font, fill=(*(text_color or ink), 245))
+        result = image.copy()
+        result.alpha_composite(chip.resize((chip_w, chip_h), Image.Resampling.LANCZOS), (x, y))
+        return result
 
     radius   = int(badge_h * 0.32)
     border_w = max(1, int(badge_h * 0.055))
@@ -1690,6 +1733,7 @@ def draw_award_sash(
     poster_color: tuple[float, float, float] | None = None,
     star: bool = False,
     text_color: tuple[int, int, int] | None = None,
+    side: str = "right",
 ) -> Image.Image:
     if star:
         label = f"★  {label}"
@@ -1775,7 +1819,7 @@ def draw_award_sash(
 
     sash = Image.alpha_composite(sash, text_layer)
 
-    sash = sash.rotate(-45, expand=True, resample=Image.Resampling.BICUBIC)
+    sash = sash.rotate(45 if side == "left" else -45, expand=True, resample=Image.Resampling.BICUBIC)
     sash = sash.resize((sash.width // SS, sash.height // SS), Image.Resampling.LANCZOS)
 
     if muted:
@@ -1794,7 +1838,8 @@ def draw_award_sash(
     offset_x = int(sash.width  * 0.68)
     offset_y = int(sash.height * 0.32)
 
-    result.paste(shadow, (width - offset_x + 6, -offset_y + 6), shadow)
-    result.paste(sash,   (width - offset_x,     -offset_y),     sash)
+    x = -(sash.width - offset_x) if side == "left" else width - offset_x
+    result.paste(shadow, (x + 6, -offset_y + 6), shadow)
+    result.paste(sash, (x, -offset_y), sash)
 
     return result

@@ -6,7 +6,7 @@ the standalone configurator's query-string behaviour untouched.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
@@ -49,6 +49,111 @@ _CLIENT_EDGE_INSETS = {
     "plex": (0.0, 0.0),
     "jellyfin": (0.0, 0.0),
 }
+
+
+# Optional portrait controls are projected onto the layout before hashing.
+# Keep this small contract identical in Core render_spec and BingeCat core_facts_contract.
+PORTRAIT_DEFAULTS = {
+    "sash_badge_pos": "center", "sash_badge_pad": 1.0, "sash_side": "right",
+    "meta_order": "", "minimalist_separator": "pip",
+    "minimalist_rating_separator": "star", "rating_badges": "",
+    "rating_badge_scale": "native", "rating_badge_style": "color",
+}
+BADGE_PROVIDERS = (
+    "imdb", "tmdb", "letterboxd", "trakt", "tomatoes", "popcorn",
+    "metacritic", "metacriticuser", "rogerebert",
+)
+
+
+def badge_layout(config: Mapping[str, Any]) -> bool:
+    mode = config.get("rating_display_mode", 1)
+    return mode == 2 or (mode == 3 and config.get("minimalist_append_mode", 0) in {1, 2}) or (
+        mode == 4 and config.get("bar_append", "rating_year") in {"rating", "rating_year"}
+    )
+
+
+def weighted_rating_needed(config: Mapping[str, Any], has_badges: bool) -> bool:
+    return not has_badges or (
+        config.get("rating_display_mode") == 4
+        and config.get("bar_style", "frosted") in {"rating_black", "rating_frosted"}
+    )
+
+
+def portrait_options(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate extensions and emit only active non-default visual choices."""
+    result = {}
+    choices = {
+        "sash_badge_pos": {"center", "left", "right"}, "sash_side": {"right", "left"},
+        "minimalist_separator": {"pip", "bullet"},
+        "minimalist_rating_separator": {"star", "pip", "bullet", "bullet_star"},
+        "rating_badge_scale": {"native", "normalized"}, "rating_badge_style": {"color", "mono"},
+    }
+    for name, allowed in choices.items():
+        if name in config and config[name] not in allowed:
+            raise ValueError(f"invalid {name}")
+    pad = config.get("sash_badge_pad", 1.0)
+    if isinstance(pad, bool) or not isinstance(pad, (int, float)) or not 0.5 <= pad <= 1.5:
+        raise ValueError("invalid sash_badge_pad")
+    order = config.get("meta_order", "")
+    if isinstance(order, (list, tuple)):
+        order = ",".join(order)
+    if not isinstance(order, str) or (order and (len(order.split(",")) != 3 or set(order.split(",")) != {"genre", "year", "rating"})):
+        raise ValueError("meta_order must be a genre/year/rating permutation")
+    providers = config.get("rating_badges", "")
+    if isinstance(providers, (list, tuple)):
+        providers = ",".join(providers)
+    if not isinstance(providers, str):
+        raise ValueError("invalid rating_badges")
+    names = providers.split(",") if providers else []
+    if len(names) > 3 or len(set(names)) != len(names) or any(p not in BADGE_PROVIDERS for p in names):
+        raise ValueError("rating_badges must contain at most three unique public providers")
+    mode = config.get("rating_display_mode", 1)
+    # Compare only slots the selected layout can actually show. The old Bar
+    # starts with year; every other old label starts with genre.
+    slots = {"genre"} if not config.get("hide_genre", False) else set()
+    if mode == 1:
+        if config.get("accent_bar_append_mode", 0) in {0, 2}:
+            slots.add("year")
+    elif mode == 2:
+        slots.add("rating")
+    elif mode == 3 and config.get("minimalist_append_mode", 0) != 3:
+        append = config.get("minimalist_append_mode", 0)
+        if append in {0, 2}:
+            slots.add("year")
+        if append in {1, 2}:
+            slots.add("rating")
+    elif mode == 4 and config.get("bar_append", "rating_year") != "second_rating":
+        append = config.get("bar_append", "rating_year")
+        if append in {"year", "rating_year"}:
+            slots.add("year")
+        if append in {"rating", "rating_year"}:
+            slots.add("rating")
+    else:
+        slots.clear()
+    legacy = "year,genre,rating" if mode == 4 else "genre,year,rating"
+    visible_order = [s for s in (order or legacy).split(",") if s in slots]
+    if order and visible_order != [s for s in legacy.split(",") if s in slots]:
+        result["meta_order"] = order
+    boundaries = list(zip(visible_order, visible_order[1:]))
+    sash = config.get("show_award_sash", True) and config.get("sash_mode", "sash") != "hidden"
+    active = {
+        "sash_badge_pos": sash and config.get("sash_mode", "sash") == "notch",
+        "sash_badge_pad": sash and config.get("sash_mode", "sash") == "notch",
+        "sash_side": sash and config.get("sash_mode", "sash") == "sash",
+        "rating_badges": badge_layout(config),
+        "rating_badge_scale": badge_layout(config) and bool(names),
+        "rating_badge_style": badge_layout(config) and bool(names),
+        "minimalist_separator": mode == 3 and config.get("minimalist_append_mode", 0) == 2
+            and any("rating" not in pair for pair in boundaries),
+        "minimalist_rating_separator": mode == 3 and config.get("minimalist_append_mode", 0) in {1, 2}
+            and any("rating" in pair for pair in boundaries),
+    }
+    values = dict(config, sash_badge_pad=float(pad), rating_badges=providers)
+    for name, enabled in active.items():
+        value = values.get(name, PORTRAIT_DEFAULTS[name])
+        if enabled and value != PORTRAIT_DEFAULTS[name]:
+            result[name] = value
+    return result
 
 
 @dataclass(frozen=True)
@@ -134,8 +239,22 @@ class CanonicalRenderSpec:
     # colour mode consumes it, preserving all existing fixed-preset hashes.
     score_custom_palette: str | None = None
 
+    sash_badge_pos: str = "center"
+    sash_badge_pad: float = 1.0
+    sash_side: str = "right"
+    meta_order: str = ""
+    minimalist_separator: str = "pip"
+    minimalist_rating_separator: str = "star"
+    rating_badges: str = ""
+    rating_badge_scale: str = "native"
+    rating_badge_style: str = "color"
+
     def canonical_json(self) -> str:
         payload = asdict(self)
+        active = portrait_options(payload)
+        for name in PORTRAIT_DEFAULTS:
+            payload.pop(name)
+        payload.update(active)
         if payload["score_custom_palette"] is None:
             payload.pop("score_custom_palette")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -325,7 +444,10 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
     bar_accent = _choice(values.get("bar_accent"), defaults.bar_accent, {"silver", "gold", "sample", "palette_0", "palette_1", "palette_2", "palette_custom"})
     palette_is_active = score_color_mode == 3 or bar_accent == "palette_custom"
 
-    return CanonicalRenderSpec(
+    extensions = dict(values)
+    if isinstance(extensions.get("sash_badge_pad"), str):
+        extensions["sash_badge_pad"] = float(extensions["sash_badge_pad"])
+    spec = CanonicalRenderSpec(
         show_award_sash=_bool(values.get("show_award_sash"), defaults.show_award_sash),
         sash_poster_color=_bool(values.get("sash_poster_color"), defaults.sash_poster_color),
         cinema_greyscale=_bool(values.get("cinema_greyscale"), defaults.cinema_greyscale),
@@ -405,6 +527,8 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
             else None
         ),
     )
+
+    return replace(spec, **portrait_options({**asdict(spec), **{name: extensions[name] for name in PORTRAIT_DEFAULTS if name in extensions}}))
 
 
 def compile_requirements(spec: CanonicalRenderSpec) -> DataRequirements:

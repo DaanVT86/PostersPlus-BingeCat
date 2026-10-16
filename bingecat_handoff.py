@@ -779,6 +779,13 @@ _CHOICES = {
     "bottom_gradient": ("off", "low", "medium", "high", "custom"),
     "sash_mode": ("hidden", "sash", "notch"),
     "sash_badge_style": ("silver", "gold", "frosted", "black"),
+    "sash_badge_pos": ("center", "left", "right"),
+    "sash_side": ("right", "left"),
+    "minimalist_separator": ("pip", "bullet"),
+    "minimalist_rating_separator": ("star", "pip", "bullet", "bullet_star"),
+    "rating_badge_scale": ("native", "normalized"),
+    "rating_badge_style": ("color", "mono"),
+    "meta_order": ("", "genre,year,rating", "genre,rating,year", "year,genre,rating", "year,rating,genre", "rating,genre,year", "rating,year,genre"),
     "primary_client": ("manual", "stremio_tv_nuvio", "stremio_desktop_web", "plex", "jellyfin"),
 }
 
@@ -824,7 +831,14 @@ def _configurator_html(session: ConfiguratorSession, csrf_token: str) -> str:
             input_type = "number" if isinstance(value, (int, float)) and not isinstance(value, bool) else "text"
             step = ' step="any"' if input_type == "number" else ""
             control = f'<input type="{input_type}" name="{escaped_name}" value="{raw}"{step}>'
-        controls.append(f"<label>{escaped_name}{control}</label>")
+        description = ""
+        if name == "rating_badges":
+            description = "<small>Up to three ordered providers: imdb, tmdb, letterboxd, trakt, tomatoes, popcorn, metacritic, metacriticuser, rogerebert. Existing local scores only. Clean, Minimalist Rating/Year + Rating, or Bar Rating/Rating + Year.</small>"
+        elif name == "minimalist_append_mode":
+            description = "<small>0: Year; 1: Rating; 2: Year + Rating; 3: Dual rating (Metacritic).</small>"
+        elif name == "sash_badge_pad":
+            description = "<small>Vertical padding 0.5–1.5; default 1. Font size is preserved.</small>"
+        controls.append(f"<label>{escaped_name}{control}{description}</label>")
     template = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BingeCat PostersPlus</title><style>

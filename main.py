@@ -797,6 +797,15 @@ class RequestConfig:
     #   2 = Year + Rating (Genre | Year | Score)
     #   3 = Dual rating (Genre | Score | Metacritic Score when available)
     minimalist_append_mode: int = 0
+    sash_badge_pos: str = "center"
+    sash_badge_pad: float = 1.0
+    sash_side: str = "right"
+    meta_order: str = ""
+    minimalist_separator: str = "pip"
+    minimalist_rating_separator: str = "star"
+    rating_badges: str = ""
+    rating_badge_scale: str = "native"
+    rating_badge_style: str = "color"
 
     # Frosted bar (rating_display_mode == 4)
     bar_height_ratio:        float = 0.080
@@ -1081,6 +1090,7 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.minimalist_mode_font_y_offset = _f("minimalist_mode_font_y_offset", cfg.minimalist_mode_font_y_offset, 0.0, 1.0)
     cfg.minimalist_append_mode = _i("minimalist_append_mode", cfg.minimalist_append_mode, 0, 3)
 
+
     cfg.bar_height_ratio        = _f("bar_height_ratio",        cfg.bar_height_ratio,        0.04, 0.20)
     cfg.bar_font_size_ratio     = _f("bar_font_size_ratio",     cfg.bar_font_size_ratio,     0.15, 0.70)
     cfg.bar_frost_opacity       = _f("bar_frost_opacity",       cfg.bar_frost_opacity,       0.0,  1.0)
@@ -1143,6 +1153,14 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.sash_priority        = _parse_sash_priority(params.get("sash_priority"))
     cfg.rating_text_color    = _parse_hex_color(params.get("rating_text_color"))
     cfg.sash_text_color      = _parse_hex_color(params.get("sash_text_color"))
+
+    from render_spec import PORTRAIT_DEFAULTS, portrait_options
+    _portrait_values = {**vars(cfg), **{k: params[k] for k in PORTRAIT_DEFAULTS if k in params}}
+    if isinstance(_portrait_values["sash_badge_pad"], str):
+        _portrait_values["sash_badge_pad"] = float(_portrait_values["sash_badge_pad"])
+    _portrait = portrait_options(_portrait_values)
+    for _name, _default in PORTRAIT_DEFAULTS.items():
+        setattr(cfg, _name, _portrait.get(_name, _default))
 
     return cfg
 
@@ -1490,6 +1508,7 @@ def build_poster(
     age_rating: int | None = None,
     no_poster: bool = False,
     metacritic_score: int | None = None,
+    rating_badge_scores: dict[str, float] | None = None,
 ) -> Image.Image:
 
     width, height = image.size
@@ -1858,6 +1877,11 @@ def build_poster(
             return colorsys.rgb_to_hsv(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)[1]
         _shared_tint = _bar_rgb if _sat(_bar_rgb) >= _sat(_sash_rgb) else _sash_rgb
 
+    import rating_badges as _rb
+    from render_spec import badge_layout
+    _badge_scores = rating_badge_scores or {}
+    _badges = _rb.entries(_badge_scores, cfg.rating_badges) if badge_layout(vars(cfg)) else []
+
     # --- Rating / genre label ---
     if cfg.rating_display_mode != 0:
 
@@ -1888,6 +1912,10 @@ def build_poster(
                 label = _label_main + " · " + translate_sash(_sash_text_for_label, cfg.logo_language) if _label_main else translate_sash(_sash_text_for_label, cfg.logo_language)
             else:
                 label = _label_main
+            if cfg.meta_order:
+                _meta = {"genre": genre_label or "", "year": str(release_year) if release_year and _append_year else ""}
+                _label_main = " · ".join(_meta[key] for key in cfg.meta_order.split(",") if _meta.get(key))
+                label = _label_main + (" · " + translate_sash(_sash_text_for_label, cfg.logo_language) if _sash_text_for_label and _label_main else translate_sash(_sash_text_for_label, cfg.logo_language) if _sash_text_for_label else "")
             rating_cy = height * cfg.accent_bar_y_offset
 
             try:
@@ -1932,6 +1960,10 @@ def build_poster(
 
             if cfg.rating_display_mode == 2:
                 label = f"{genre_label} ★ {_score_text}"
+                if _badges or cfg.meta_order:
+                    _rb.draw_label(image, font_meta, cfg, genre_label, None, _score_text,
+                                   _badges, center_y=rating_cy, max_width=width * 0.92)
+                    label = ""
                 tx, ty = _text_center(draw, label, font_meta, width / 2, rating_cy)  # type: ignore
                 draw.text(
                     (tx, ty - int(font_size * 0.10)),
@@ -2014,6 +2046,13 @@ def build_poster(
             right_edge = width - int(width * cfg.minimalist_mode_font_x_offset)
             _ink = (*cfg.rating_text_color, 255) if cfg.rating_text_color else (235, 235, 235, 255)
 
+            if _badges or cfg.meta_order or cfg.minimalist_separator != "pip" or cfg.minimalist_rating_separator != "star":
+                _rb.draw_label(image, font_meta, cfg, genre_label,
+                               str(release_year) if release_year and cfg.minimalist_append_mode in {0, 2} else None,
+                               str(score) if score not in ("N/A", None) and cfg.minimalist_append_mode in {1, 2} else None,
+                               _badges, top=y, right=right_edge, weighted_score=score,
+                               max_width=width * (1 - 2 * cfg.minimalist_mode_font_x_offset))
+
             # Segments, each tagged with the SEPARATOR that precedes it:
             #   "pip"  — silver vertical pip (before the year)
             #   "star" — ★ glyph (before the rating/score)
@@ -2043,6 +2082,8 @@ def build_poster(
                     if metacritic_score is not None:
                         parts.append((str(metacritic_score), "mc"))
 
+            if _badges or cfg.meta_order or cfg.minimalist_separator != "pip" or cfg.minimalist_rating_separator != "star":
+                parts = []
             pip_gap = int(font_size * 0.55)
             pip_w   = max(4, int(font_size * 0.18))
             pip_h   = int(font_size * 1.4)
@@ -2137,6 +2178,15 @@ def build_poster(
                         ("mc", ""),
                         ("text", str(metacritic_score)),
                     ])
+            if _badges or cfg.meta_order:
+                _bar_font_size = max(10, int(max(24, int(height * cfg.bar_height_ratio)) * cfg.bar_font_size_ratio))
+                _bar_font = ImageFont.truetype(os.path.join(_FONTS_DIR, "Inter-Bold.ttf"), _bar_font_size)
+                _bar_ink = cfg.rating_text_color or ((0, 0, 0) if cfg.bar_style in {"frosted", "rating_frosted"} else (210, 210, 218))
+                _bar_label = _rb.label_image(_bar_font, cfg, genre_label,
+                    _year_str if cfg.bar_append in {"year", "rating_year"} else None,
+                    _score_str if cfg.bar_append in {"rating", "rating_year"} else None,
+                    _badges, (*_bar_ink, 255), int(width * 0.89))
+                _center_segments = [("image", _bar_label)]
             image = draw_frosted_bar(
                 image,
                 left_text   = "",
@@ -2176,6 +2226,8 @@ def build_poster(
                                      size_ratio_w=cfg.sash_badge_size_w,
                                      size_ratio_h=cfg.sash_badge_size_h,
                                      notch_style=cfg.sash_badge_style,
+                                     position=cfg.sash_badge_pos,
+                                     notch_pad_ratio=cfg.sash_badge_pad,
                                      notch_inset=cfg.sash_badge_inset,
                                      font_size_ratio=cfg.sash_badge_font_ratio,
                                      frost_opacity=cfg.sash_badge_frost_opacity,
@@ -2191,7 +2243,8 @@ def build_poster(
                                     height_ratio=cfg.sash_height_ratio,
                                     poster_color=_poster_color,
                                     star=_is_star,
-                                    text_color=cfg.sash_text_color)
+                                    text_color=cfg.sash_text_color,
+                                    side=cfg.sash_side)
 
     return image
 

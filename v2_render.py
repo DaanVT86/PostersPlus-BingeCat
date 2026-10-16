@@ -37,6 +37,8 @@ from render_spec import (
     CanonicalRenderSpec,
     DataRequirements,
     canonicalize_config,
+    badge_layout,
+    weighted_rating_needed,
     compile_requirements,
 )
 from source_art import RECIPE_VERSIONS, SourceArtStore, SourceDigestMismatch
@@ -636,7 +638,14 @@ def _used_ratings(
             or (spec.rating_display_mode == 4 and spec.bar_append == "second_rating")
         )
     )
-    selected = list(score_inputs)
+    badges = []
+    if badge_layout(asdict(spec)) and spec.rating_badges:
+        for provider in spec.rating_badges.split(","):
+            match = next((rating for rating in ratings if rating.provider == provider and rating.metric == "score" and (rating.vote_count is None or rating.vote_count >= 10) and rating.checked_at <= snapshot.evaluated_at < rating.expires_at), None)
+            if match is not None:
+                badges.append(match)
+    selected = list(score_inputs) if weighted_rating_needed(asdict(spec), bool(badges)) else []
+    selected.extend(rating for rating in badges if rating not in selected)
     if displays_metacritic:
         selected.extend(
             rating
@@ -1135,6 +1144,13 @@ def _compose(
         age_rating=age_rating,
         no_poster=base_reference is None,
         metacritic_score=_metacritic_score(used_ratings),
+        rating_badge_scores={
+            rating.provider: rating.normalized_score
+            for rating in reversed(used_ratings)
+            if rating.metric == "score"
+            and (rating.vote_count is None or rating.vote_count >= 10)
+            and rating.checked_at <= bundle.snapshot.evaluated_at < rating.expires_at
+        },
     )
     return rendered.convert("RGB")
 

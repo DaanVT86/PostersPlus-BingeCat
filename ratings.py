@@ -816,7 +816,9 @@ def draw_frosted_bar(
         icon_old_size = max(8, int(font_size * 0.82))
         measured: list[tuple[str, str, float]] = []
         for kind, text in center_segments:
-            if kind == "mc":
+            if kind == "image":
+                seg_w = text.width
+            elif kind == "mc":
                 seg_w = icon_size
             elif kind == "sep":
                 seg_w = td.textlength("·", font=font)
@@ -829,7 +831,9 @@ def draw_frosted_bar(
         cursor = (width - total_w) / 2
         icon_cy = round(text_y + font_size * 0.60 + (icon_size - icon_old_size) / 2)
         for idx, (kind, text, seg_w) in enumerate(measured):
-            if kind == "mc":
+            if kind == "image":
+                txt_layer.alpha_composite(text, (round(cursor), round((bar_h - text.height) / 2)))
+            elif kind == "mc":
                 mask = _load_metacritic_icon_mask(icon_size)
                 if mask is not None:
                     swatch = Image.new("RGBA", mask.size, ink)

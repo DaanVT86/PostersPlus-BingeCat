@@ -1,0 +1,59 @@
+{
+  "source": "Simple Icons 13.20.0 (CC0); Wikimedia Commons public-domain RT audience mark; generic Material Symbols thumbs-up (Apache-2.0). Brand marks remain their owners\u2019 trademarks.",
+  "sources": [
+    {
+      "name": "imdb",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/imdb.svg",
+      "sha256": "c6eff80e69ce5511d4c7bed436fb367f6fa5d9e2d1b68cc56753a1b5c00e4c25"
+    },
+    {
+      "name": "themoviedatabase",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/themoviedatabase.svg",
+      "sha256": "e136b127f5184f95b999e68548618a8507c878587f5f73af5293c56c59e854a5"
+    },
+    {
+      "name": "letterboxd",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/letterboxd.svg",
+      "sha256": "8ff6cf562b555ae1fdc3437e0a30bea6f20cc3ab76774b587c60ed7e51c2162e"
+    },
+    {
+      "name": "trakt",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/trakt.svg",
+      "sha256": "f7d71f8dc4a5dcfb164b46f1455273b80ce8ea676abc96c98cfbaa73d29845c1"
+    },
+    {
+      "name": "rottentomatoes",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/rottentomatoes.svg",
+      "sha256": "31ee403cde05ab5cd78c9a0ba4f1448a6114fd63f4d8a20da4e2c342672da732"
+    },
+    {
+      "name": "metacritic",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/metacritic.svg",
+      "sha256": "a25ab4c4c04e10a4af5092e37d6fd1c0791cd0b7c182e95f00f101f12283a69b"
+    },
+    {
+      "name": "popcorn",
+      "url": "https://commons.wikimedia.org/wiki/Special:FilePath/Rotten_Tomatoes_positive_audience.svg",
+      "sha1": "63bbcf6deb1bf8ec8268052e1cc41681794fed93",
+      "sha256": "2ad511c7a101a7f2f8810434911df8c13cc126fa691272242037237172600bc3"
+    },
+    {
+      "name": "thumb_up",
+      "url": "https://cdn.jsdelivr.net/npm/@material-symbols/svg-700@0.47.5/rounded/thumb_up-fill.svg",
+      "upstream_sha1": "7f052d1f2827686651bc2f22bdc105dedb48ca07",
+      "note": "Gold fill prepared locally; generic convention, not an official RogerEbert.com logo."
+    }
+  ],
+  "assets": {
+    "imdb.png": "4e572a5a017fdaf0681bcbde9caba622acc0919909878b630c2b7b149cc3b525",
+    "letterboxd.png": "780239b9415278e4d1c94f3d646e8478ef38694bf70984dceadc1b10aa8e3989",
+    "metacritic.png": "7948231bfd1a524025da634df64f2b534c3424e1b7d783aa450f04738dfbad95",
+    "metacriticuser.png": "1cd95e7e481e3089e560b8d5b5aedc230071b70cffe6ac4d100842308973c9f8",
+    "popcorn.png": "eb9df00894fe3103b96351aabc949ba100f09e3a1034df4a8061037eaeefb512",
+    "rogerebert.png": "89fb100214cefbbec08aff50aa01c2d6f6310a344d20d8835bfe06e5ae02c210",
+    "tmdb.png": "0e42aa6990afed5fa44e3b293d19cfe9cb50c6cc78c195bb10151d9dc5da7f29",
+    "tomatoes.png": "2745b6a8263e0281d78f38ab3c68844d5483b5b61160f15b94975f6efcd480fe",
+    "trakt.png": "a1c92abe5c31fc8dc872d8a5ed0f9bb37d3f8063cef4bafa75e6c21816570a8a"
+  },
+  "notes": "MC user uses the Metacritic mark in user green. Popcorn uses the fixed upright audience bucket, independent of score. Roger Ebert uses the generic thumbs-up convention, not an official RogerEbert.com logo."
+}
