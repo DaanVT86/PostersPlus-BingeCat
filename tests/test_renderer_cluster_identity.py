@@ -67,3 +67,30 @@ def test_manifest_covers_whole_badge_module_and_explicit_portrait_dependencies()
     assert ("rating_badges.py", ("*",)) in render.RENDERER_REVISION_CODE_ROOTS
     roots = dict(render.RENDERER_REVISION_CODE_ROOTS)["render_spec.py"]
     assert set(roots) == {"PORTRAIT_DEFAULTS", "BADGE_PROVIDERS", "portrait_options", "badge_layout", "weighted_rating_needed"}
+
+
+def test_revision_startup_guard_is_outside_identity_and_fails_on_mismatch():
+    import os
+    import subprocess
+    import sys
+
+    base = Path(render.__file__).parent
+    source = (base / "v2_render.py").read_text()
+    start = source.index("# Startup guard:")
+    end = source.index("SOURCE_RECIPE_REVISION = ", start)
+    without_guard = source[:start] + source[end:]
+    assert render._compute_renderer_build_fingerprint(
+        source_overrides={"v2_render.py": without_guard}
+    ) == render.RENDERER_BUILD_FINGERPRINT
+
+    def load(expected):
+        env = {**os.environ, "POSTERSPLUS_EXPECTED_RENDERER_REVISION": expected}
+        return subprocess.run(
+            [sys.executable, "-c", "import v2_render"],
+            cwd=base, env=env, capture_output=True, text=True,
+        )
+
+    assert load(render.RENDERER_REVISION).returncode == 0
+    mismatch = load("0" * 64)
+    assert mismatch.returncode != 0
+    assert "renderer revision mismatch" in mismatch.stderr

@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import threading
 from dataclasses import asdict
 from datetime import date, datetime, timezone
@@ -1510,6 +1511,20 @@ RENDERER_BUILD_FINGERPRINT = _compute_renderer_build_fingerprint()
 RENDERER_REVISION = _RENDERER_COMPATIBILITY.get(
     RENDERER_BUILD_FINGERPRINT, RENDERER_BUILD_FINGERPRINT
 )
+
+# Startup guard: a deployment pins the revision it was approved for, so env or
+# library drift fails loudly instead of silently re-rendering the whole cache.
+# Unbound module-level statement: not part of any revision AST closure.
+if os.environ.get("POSTERSPLUS_EXPECTED_RENDERER_REVISION", "").strip() not in (
+    "",
+    RENDERER_REVISION,
+):
+    raise RuntimeError(
+        "renderer revision mismatch: expected "
+        f"{os.environ['POSTERSPLUS_EXPECTED_RENDERER_REVISION'].strip()}, "
+        f"computed {RENDERER_REVISION} "
+        f"(build fingerprint {RENDERER_BUILD_FINGERPRINT})"
+    )
 SOURCE_RECIPE_REVISION = _compute_semantic_revision(
     b"postersplus-bingecat-v2-source-recipe",
     SOURCE_RECIPE_REVISION_CODE_ROOTS,
