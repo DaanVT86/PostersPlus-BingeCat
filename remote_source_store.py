@@ -19,7 +19,8 @@ from integration_contract import ArtworkLocator
 from service_auth import build_auth_headers
 from source_art import (
     MAX_SOURCE_BYTES,
-    RECIPE_VERSIONS,
+    LANDSCAPE_CANVAS_SIZE,
+    STORE_RECIPE_VERSIONS,
     SourceArtError,
     SourceDerivative,
     SourceDigestMismatch,
@@ -36,7 +37,7 @@ from source_art import (
 
 _SOURCE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _ARTIFACT_RELPATH_RE = re.compile(
-    r"^(poster|backdrop|logo)/([0-9a-f]{2})/([0-9a-f]{64})\.(jpg|png)$"
+    r"^(poster|backdrop|logo|landscape)/([0-9a-f]{2})/([0-9a-f]{64})\.(jpg|png)$"
 )
 _SOURCE_ACTIONS = frozenset(
     {
@@ -360,13 +361,13 @@ class RemoteSourceArtStore:
         if set(payload) != required:
             raise SourceArtError("source owner derivative fields are invalid")
         kind = payload["kind"]
-        if not isinstance(kind, str) or kind not in RECIPE_VERSIONS:
+        if not isinstance(kind, str) or kind not in STORE_RECIPE_VERSIONS:
             raise SourceArtError("source owner derivative kind is invalid")
         recipe_version = payload["recipe_version"]
         if (
             isinstance(recipe_version, bool)
             or not isinstance(recipe_version, int)
-            or recipe_version != RECIPE_VERSIONS[kind]
+            or recipe_version != STORE_RECIPE_VERSIONS[kind]
         ):
             raise SourceArtError("source owner derivative recipe is invalid")
         sha256 = RemoteSourceArtStore._validate_sha256(payload["sha256"])
@@ -376,7 +377,7 @@ class RemoteSourceArtStore:
         mime = payload["mime"]
         if not isinstance(mime, str) or mime not in {"image/jpeg", "image/png"}:
             raise SourceArtError("source owner derivative MIME is invalid")
-        if (kind in {"poster", "backdrop"} and mime != "image/jpeg") or (
+        if (kind in {"poster", "backdrop", "landscape"} and mime != "image/jpeg") or (
             kind == "logo" and mime != "image/png"
         ):
             raise SourceArtError("source owner derivative MIME is invalid")
@@ -389,6 +390,8 @@ class RemoteSourceArtStore:
         if byte_size > MAX_SOURCE_BYTES:
             raise SourceResourceError("source owner derivative is too large")
         if kind in {"poster", "backdrop"} and (width, height) != (500, 750):
+            raise SourceArtError("source owner derivative dimensions are invalid")
+        if kind == "landscape" and (width, height) != LANDSCAPE_CANVAS_SIZE:
             raise SourceArtError("source owner derivative dimensions are invalid")
         if kind == "logo" and (width > 1000 or height > 400):
             raise SourceArtError("source owner derivative dimensions are invalid")
@@ -488,10 +491,10 @@ class RemoteSourceArtStore:
         sha256 = self._validate_sha256(sha256)
         if (
             not isinstance(kind, str)
-            or kind not in RECIPE_VERSIONS
+            or kind not in STORE_RECIPE_VERSIONS
             or isinstance(recipe_version, bool)
             or not isinstance(recipe_version, int)
-            or recipe_version != RECIPE_VERSIONS[kind]
+            or recipe_version != STORE_RECIPE_VERSIONS[kind]
         ):
             raise SourceArtError("source lookup recipe is invalid")
         response = self._post(
@@ -553,17 +556,17 @@ class RemoteSourceArtStore:
     ) -> SourceDerivative:
         if (
             not isinstance(kind, str)
-            or kind not in RECIPE_VERSIONS
+            or kind not in STORE_RECIPE_VERSIONS
             or isinstance(recipe_version, bool)
             or not isinstance(recipe_version, int)
-            or recipe_version != RECIPE_VERSIONS[kind]
+            or recipe_version != STORE_RECIPE_VERSIONS[kind]
         ):
             raise SourceArtError("source registration recipe is invalid")
         if not isinstance(payload, bytes) or not payload or len(payload) > MAX_SOURCE_BYTES:
             raise SourceResourceError("invalid source derivative payload")
         if not isinstance(mime, str) or mime not in {"image/jpeg", "image/png"}:
             raise SourceArtError("source registration MIME is invalid")
-        if (kind in {"poster", "backdrop"} and mime != "image/jpeg") or (
+        if (kind in {"poster", "backdrop", "landscape"} and mime != "image/jpeg") or (
             kind == "logo" and mime != "image/png"
         ):
             raise SourceArtError("source registration MIME is invalid")

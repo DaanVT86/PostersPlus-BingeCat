@@ -635,10 +635,17 @@ from v2_enrich import (
     build_runtime as build_v2_enrichment_runtime,
     enrich as enrich_v2,
 )
+from landscape_spec import (
+    LandscapeEnrichmentRequest,
+    LandscapeRenderInputBundle,
+    is_landscape_config,
+)
 from v2_render import (
     RENDERER_REVISION,
     RenderError as V2RenderError,
+    landscape_preset_catalog,
     render as render_v2_bundle,
+    render_landscape as render_v2_landscape_bundle,
     requirements_metadata,
     requirements_sha256,
 )
@@ -3335,6 +3342,43 @@ async def v2_presets_endpoint(request: Request):
     )
 
 
+@app.get("/v2/presets/landscape")
+async def v2_landscape_presets_endpoint(request: Request):
+    """Landscape variants of the public presets.  A separate path because the
+    portrait catalog's consumers reject unknown fields."""
+    secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await verify_v2_request(
+            request,
+            secret.encode("utf-8"),
+            "bingecat",
+            "postersplus",
+            await _get_v2_nonce_store(),
+        )
+    except V2AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    return JSONResponse(content=landscape_preset_catalog())
+
+
+def _v2_landscape_body(body: bytes) -> bool:
+    """Whether a v2 render/enrich body targets a landscape config.  Malformed
+    bodies return False and fail in the portrait model's validation."""
+    try:
+        document = json.loads(body)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(document, dict):
+        return False
+    configs = document.get("canonical_configs")
+    return (
+        is_landscape_config(document.get("canonical_config"))
+        or "known_landscape_art" in document
+        or (isinstance(configs, list) and any(is_landscape_config(item) for item in configs))
+    )
+
+
 @app.post("/v2/render")
 async def v2_render_endpoint(request: Request):
     secret = _cfg.POSTERSPLUS_BINGECAT_REQUEST_SECRET
@@ -3350,8 +3394,12 @@ async def v2_render_endpoint(request: Request):
         )
     except V2AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    body = await request.body()
+    landscape = _v2_landscape_body(body)
     try:
-        contract = RenderInputBundle.model_validate_json(await request.body())
+        contract = (
+            LandscapeRenderInputBundle if landscape else RenderInputBundle
+        ).model_validate_json(body)
     except ValidationError as exc:
         details = [
             {
@@ -3365,11 +3413,11 @@ async def v2_render_endpoint(request: Request):
     try:
         source_store = (
             await _get_v2_source_store()
-            if contract.snapshot.source_art
+            if contract.snapshot.source_art or getattr(contract.snapshot, "landscape_art", ())
             else None
         )
         payload, metadata = await asyncio.to_thread(
-            render_v2_bundle,
+            render_v2_landscape_bundle if landscape else render_v2_bundle,
             contract,
             source_store=source_store,
         )
@@ -3406,8 +3454,11 @@ async def v2_enrich_endpoint(request: Request):
         )
     except V2AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.code) from None
+    body = await request.body()
     try:
-        contract = EnrichmentRequest.model_validate_json(await request.body())
+        contract = (
+            LandscapeEnrichmentRequest if _v2_landscape_body(body) else EnrichmentRequest
+        ).model_validate_json(body)
     except ValidationError as exc:
         details = [
             {

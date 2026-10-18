@@ -33,7 +33,17 @@ from integration_contract import (
     RenderResultMetadata,
     SourceArtReference,
 )
-from preset_registry import get_preset
+from landscape import build_landscape
+from landscape_spec import (
+    ORIGINAL_POLICY,
+    LandscapeArtReference,
+    LandscapeRenderInputBundle,
+    LandscapeRenderSnapshot,
+    LandscapeRenderSpec,
+    canonicalize_landscape_config,
+    landscape_requirements,
+)
+from preset_registry import get_preset, list_public_presets
 from render_spec import (
     CanonicalRenderSpec,
     DataRequirements,
@@ -42,7 +52,13 @@ from render_spec import (
     weighted_rating_needed,
     compile_requirements,
 )
-from source_art import RECIPE_VERSIONS, SourceArtStore, SourceDigestMismatch
+from source_art import (
+    LANDSCAPE_CANVAS_SIZE,
+    RECIPE_VERSIONS,
+    STORE_RECIPE_VERSIONS,
+    SourceArtStore,
+    SourceDigestMismatch,
+)
 
 _BASE_DIR = Path(__file__).resolve().parent
 _CANVAS_SIZE = (500, 750)
@@ -1600,7 +1616,377 @@ def render(
     return payload, metadata
 
 
+# ---------------------------------------------------------------------------
+# Landscape (16:9) renderer.  A separate renderer with its own revision: none of
+# the definitions below are reachable from the portrait revision roots, so the
+# portrait RENDERER_REVISION is unaffected by anything in this section.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_landscape_spec(bundle: LandscapeRenderInputBundle) -> LandscapeRenderSpec:
+    try:
+        spec = canonicalize_landscape_config(bundle.canonical_config)
+    except (TypeError, ValueError) as exc:
+        raise RenderInputError("invalid_custom_config") from exc
+    if _json_compatible(bundle.canonical_config) != spec.canonical_config():
+        raise RenderInputError("canonical_config_required")
+    if spec.sha256() != bundle.config_sha256:
+        raise RenderConflict("config_hash_mismatch")
+    return spec
+
+
+def _select_landscape_reference(
+    spec: LandscapeRenderSpec,
+    snapshot: LandscapeRenderSnapshot,
+    locale: str,
+) -> LandscapeArtReference | None:
+    # Upstream semantics: the requested art first, the other kind as fallback,
+    # the genre canvas when the title has no backdrop at all.
+    order = ("landscape.original", "landscape.textless")
+    if spec.landscape_art != "original":
+        order = order[::-1]
+    for policy in order:
+        candidates = [item for item in snapshot.landscape_art if item.policy_key == policy]
+        if candidates:
+            return min(
+                candidates,
+                key=lambda item: (*_locale_rank(item.locale, locale), item.sha256),
+            )
+    return None
+
+
+def _landscape_selection(
+    spec: LandscapeRenderSpec,
+    snapshot: LandscapeRenderSnapshot,
+    locale: str,
+) -> tuple[LandscapeArtReference | None, SourceArtReference | None, bool]:
+    """Return (art, logo, text_art).  Art that carries its own title gets
+    neither our logo nor a fallback title."""
+    base_reference = _select_landscape_reference(spec, snapshot, locale)
+    text_art = base_reference is not None and base_reference.policy_key == ORIGINAL_POLICY
+    logo_reference = None if text_art else _select_logo_reference(spec.fact_spec(), snapshot)
+    return base_reference, logo_reference, text_art
+
+
+def landscape_snapshot_visual_projection(
+    snapshot: LandscapeRenderSnapshot,
+    *,
+    media: MediaIdentity,
+    spec: LandscapeRenderSpec,
+    locale: str,
+) -> dict[str, Any]:
+    """Landscape counterpart of ``snapshot_visual_projection``."""
+
+    fact_spec = spec.fact_spec()
+    requirements = compile_requirements(fact_spec)
+    base_reference, logo_reference, text_art = _landscape_selection(spec, snapshot, locale)
+    used_ratings = _used_ratings(fact_spec, requirements, snapshot, media)
+    used_fact_fields = _used_fact_fields(
+        fact_spec,
+        requirements,
+        snapshot,
+        base_reference=base_reference,
+        logo_reference=logo_reference,
+    )
+    ratings = [
+        {
+            "metric": rating.metric,
+            "normalized_score": rating.normalized_score,
+            "provider": rating.provider,
+            "source": rating.source,
+        }
+        for rating in sorted(
+            used_ratings,
+            key=lambda item: (item.provider, item.metric, item.source, item.normalized_score),
+        )
+    ]
+    source_art = [
+        item.visual_projection()
+        for item in sorted(
+            tuple(item for item in (base_reference, logo_reference) if item is not None),
+            key=lambda item: (item.role, item.policy_key, item.locale or "neutral", item.sha256),
+        )
+    ]
+    sources = {
+        field_name: group.source
+        for group in snapshot.facts.provenance
+        for field_name in group.fields
+        if field_name in used_fact_fields
+    }
+    fact_values = snapshot.facts.values.model_dump(
+        mode="json",
+        include=used_fact_fields,
+        exclude_none=True,
+    )
+    uses_fallback_title = logo_reference is None and not text_art
+    title_locale = locale if locale in snapshot.titles_by_locale else "en"
+    return {
+        "facts": {"sources": dict(sorted(sources.items())), "values": fact_values},
+        "media": media.model_dump(mode="json", exclude_none=True),
+        "ratings": ratings,
+        "shape": "landscape",
+        "source_art": source_art,
+        "titles_by_locale": (
+            {title_locale: snapshot.titles_by_locale[title_locale]}
+            if uses_fallback_title
+            else {}
+        ),
+    }
+
+
+def canonical_landscape_snapshot_sha256(
+    snapshot: LandscapeRenderSnapshot,
+    *,
+    media: MediaIdentity,
+    spec: LandscapeRenderSpec,
+    locale: str,
+) -> str:
+    payload = _canonical_json(
+        landscape_snapshot_visual_projection(snapshot, media=media, spec=spec, locale=locale)
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_landscape_art_freshness(
+    snapshot: LandscapeRenderSnapshot,
+    reference: LandscapeArtReference,
+) -> None:
+    if reference.recipe_version != STORE_RECIPE_VERSIONS[reference.kind]:
+        raise RenderConflict("source_art_recipe_mismatch")
+    evaluated_at = snapshot.evaluated_at
+    if reference.checked_at > evaluated_at:
+        # Same artwork-clock rule as the portrait source-art references.
+        evaluated_at = snapshot.artwork_evaluated_at
+        if evaluated_at is None:
+            raise RenderConflict("future_source_art_provenance")
+    _validate_interval(
+        observed_at=reference.observed_at,
+        checked_at=reference.checked_at,
+        expires_at=reference.expires_at,
+        evaluated_at=evaluated_at,
+        stale_code="stale_source_art",
+        future_code="future_source_art_provenance",
+    )
+
+
+def _landscape_fallback_canvas(engine, genre: str) -> Image.Image:
+    # Upstream paints its gradient canvas natively at 16:9.  The fork's canvas
+    # is a horizontally uniform vertical gradient, so stretching it to 16:9 is
+    # the same picture without touching the portrait canvas code.
+    genre_ids = [
+        genre_id for genre_id, name in engine._cfg.GENRE_MAP.items() if name == genre
+    ][:1]
+    return engine._make_fallback_canvas(genre_ids).resize(
+        LANDSCAPE_CANVAS_SIZE, Image.Resampling.LANCZOS
+    )
+
+
+def _compose_landscape(
+    bundle: LandscapeRenderInputBundle,
+    spec: LandscapeRenderSpec,
+    source_store: SourceArtStore | None,
+    *,
+    base_reference: LandscapeArtReference | None,
+    logo_reference: SourceArtReference | None,
+    text_art: bool,
+    used_ratings: tuple[ProviderRating, ...],
+    used_fact_fields: frozenset[str],
+) -> Image.Image:
+    engine = _composition_engine()
+    facts = bundle.snapshot.facts.values
+    genre = facts.genre if "genre" in used_fact_fields and facts.genre else ""
+    if base_reference is None:
+        image = _landscape_fallback_canvas(engine, genre)
+    else:
+        image = _load_derivative(base_reference, source_store, bundle.snapshot.evaluated_at)
+        if image.size != LANDSCAPE_CANVAS_SIZE:
+            raise RenderConflict("source_art_recipe_mismatch")
+    logo = None
+    if logo_reference is not None:
+        logo = _load_derivative(logo_reference, source_store, bundle.snapshot.evaluated_at)
+    fallback_title = (
+        _title(bundle.snapshot, bundle.locale) if logo is None and not text_art else None
+    )
+    score = _score(spec.fact_spec(), bundle, used_ratings)
+    rendered = build_landscape(
+        image,
+        score if score is not None else "N/A",
+        genre,
+        _request_config(engine, spec.base, bundle.locale),
+        logo=logo,
+        fallback_title=fallback_title,
+        discovery_meta=_discovery_meta(engine, spec.base, bundle, used_fact_fields),
+        release_year=(
+            str(facts.release_year) if "release_year" in used_fact_fields else None
+        ),
+        badge_position=spec.landscape_badge_pos,
+    )
+    return rendered.convert("RGB")
+
+
+LANDSCAPE_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "v2_render.py",
+        (
+            "_compose_landscape",
+            "_encode_webp",
+            "_resolve_landscape_spec",
+            "canonical_landscape_snapshot_sha256",
+            "landscape_snapshot_visual_projection",
+        ),
+    ),
+    ("landscape.py", ("*",)),
+    ("landscape_spec.py", ("*",)),
+    ("main.py", ("RequestConfig", "_make_fallback_canvas")),
+    ("ratings.py", ("_cairo_pill_mask",)),
+    ("config.py", _COMPOSITOR_CONFIG_INPUTS),
+    ("render_spec.py", ("CanonicalRenderSpec", "canonicalize_config", "compile_requirements")),
+    ("discovery.py", ("DiscoveryMeta", "pick_sash")),
+    ("i18n.py", ("load_languages", "normalize_locale", "translate_genre", "translate_sash")),
+    (
+        "integration_contract.py",
+        ("ImmutableRenderSnapshot", "RenderInputBundle", "SourceArtReference"),
+    ),
+)
+
+
+def _compute_landscape_renderer_revision(
+    *,
+    source_overrides: Mapping[str, str] | None = None,
+) -> str:
+    return _compute_semantic_revision(
+        b"postersplus-bingecat-v2-landscape-renderer",
+        LANDSCAPE_REVISION_CODE_ROOTS,
+        assets=RENDERER_REVISION_ASSET_MANIFEST,
+        environment={
+            **_renderer_environment(),
+            "landscape_canvas": LANDSCAPE_CANVAS_SIZE,
+            "landscape_recipe": STORE_RECIPE_VERSIONS["landscape"],
+        },
+        source_overrides=source_overrides,
+    )
+
+
+# No byte-parity binding (unlike the portrait revision): the landscape revision
+# is its build fingerprint, so any code, asset or library drift re-renders it.
+LANDSCAPE_RENDERER_REVISION = _compute_landscape_renderer_revision()
+
+# Startup guard for the landscape revision, pinned separately from the
+# portrait one so a deployment approves both explicitly.
+if os.environ.get("POSTERSPLUS_EXPECTED_LANDSCAPE_RENDERER_REVISION", "").strip() not in (
+    "",
+    LANDSCAPE_RENDERER_REVISION,
+):
+    raise RuntimeError(
+        "landscape renderer revision mismatch: expected "
+        f"{os.environ['POSTERSPLUS_EXPECTED_LANDSCAPE_RENDERER_REVISION'].strip()}, "
+        f"computed {LANDSCAPE_RENDERER_REVISION}"
+    )
+
+
+def render_landscape(
+    bundle: LandscapeRenderInputBundle,
+    *,
+    source_store: SourceArtStore | None = None,
+) -> tuple[bytes, RenderResultMetadata]:
+    """Render one landscape bundle; same offline guarantees as ``render``."""
+
+    if not isinstance(bundle, LandscapeRenderInputBundle):
+        raise RenderInputError("invalid_render_bundle")
+    spec = _resolve_landscape_spec(bundle)
+    fact_spec = spec.fact_spec()
+    requirements = compile_requirements(fact_spec)
+    base_reference, logo_reference, text_art = _landscape_selection(
+        spec, bundle.snapshot, bundle.locale
+    )
+    used_ratings = _used_ratings(fact_spec, requirements, bundle.snapshot, bundle.media)
+    used_fact_fields = _used_fact_fields(
+        fact_spec,
+        requirements,
+        bundle.snapshot,
+        base_reference=base_reference,
+        logo_reference=logo_reference,
+    )
+    if (
+        canonical_landscape_snapshot_sha256(
+            bundle.snapshot, media=bundle.media, spec=spec, locale=bundle.locale
+        )
+        != bundle.snapshot_sha256
+    ):
+        raise RenderConflict("snapshot_hash_mismatch")
+    _validate_freshness(
+        bundle.snapshot,
+        ratings=used_ratings,
+        fact_fields=used_fact_fields,
+        source_art=(logo_reference,) if logo_reference is not None else (),
+    )
+    if base_reference is not None:
+        _validate_landscape_art_freshness(bundle.snapshot, base_reference)
+    try:
+        image = _compose_landscape(
+            bundle,
+            spec,
+            source_store,
+            base_reference=base_reference,
+            logo_reference=logo_reference,
+            text_art=text_art,
+            used_ratings=used_ratings,
+            used_fact_fields=used_fact_fields,
+        )
+        payload = _encode_webp(image)
+    except RenderError:
+        raise
+    except MemoryError as exc:
+        raise RenderUnavailable("render_resource_limit") from exc
+    except Exception as exc:
+        raise RenderUnavailable("render_failed") from exc
+    metadata = RenderResultMetadata(
+        schema=CONTRACT_SCHEMA,
+        version=CONTRACT_VERSION,
+        content_sha256=hashlib.sha256(payload).hexdigest(),
+        renderer_revision=LANDSCAPE_RENDERER_REVISION,
+        config_sha256=bundle.config_sha256,
+        snapshot_sha256=bundle.snapshot_sha256,
+        byte_size=len(payload),
+    )
+    return payload, metadata
+
+
+def landscape_preset_catalog() -> dict[str, Any]:
+    """Landscape variant of every public preset, for ``GET /v2/presets/landscape``.
+
+    The portrait catalog stays byte-identical; BingeCat addresses a landscape
+    preset by its explicit canonical config (never by ``preset_ref``).
+    """
+
+    presets = []
+    for metadata in list_public_presets():
+        spec = LandscapeRenderSpec(base=get_preset(metadata.ref).config)
+        requirements = landscape_requirements(spec)
+        presets.append(
+            {
+                **metadata.to_dict(),
+                "shape": "landscape",
+                "portrait_config_sha256": metadata.config_sha256,
+                "config_sha256": spec.sha256(),
+                "canonical_config": spec.canonical_config(),
+                "requirements": requirements_metadata(requirements),
+                "requirements_sha256": requirements_sha256(requirements),
+            }
+        )
+    return {
+        "schema": CONTRACT_SCHEMA,
+        "version": CONTRACT_VERSION,
+        "shape": "landscape",
+        "renderer_revision": LANDSCAPE_RENDERER_REVISION,
+        "portrait_renderer_revision": RENDERER_REVISION,
+        "presets": presets,
+    }
+
+
 __all__ = [
+    "LANDSCAPE_RENDERER_REVISION",
+    "LANDSCAPE_REVISION_CODE_ROOTS",
     "RENDER_POLICY_REVISION",
     "RENDERER_REVISION",
     "RENDERER_BUILD_FINGERPRINT",
@@ -1612,8 +1998,11 @@ __all__ = [
     "RenderError",
     "RenderInputError",
     "RenderUnavailable",
+    "canonical_landscape_snapshot_sha256",
     "canonical_snapshot_sha256",
+    "landscape_preset_catalog",
     "render",
+    "render_landscape",
     "requirements_metadata",
     "requirements_sha256",
     "snapshot_visual_projection",

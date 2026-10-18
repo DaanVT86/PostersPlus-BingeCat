@@ -27,7 +27,8 @@ import config
 from service_auth import AuthError, SQLiteNonceStore, verify_request
 from source_art import (
     MAX_SOURCE_BYTES,
-    RECIPE_VERSIONS,
+    LANDSCAPE_CANVAS_SIZE,
+    STORE_RECIPE_VERSIONS,
     SourceArtError,
     SourceArtStore,
     SourceDigestMismatch,
@@ -249,10 +250,10 @@ def _validate_normalized(
 ) -> None:
     if (
         not isinstance(kind, str)
-        or kind not in RECIPE_VERSIONS
+        or kind not in STORE_RECIPE_VERSIONS
         or isinstance(recipe_version, bool)
         or not isinstance(recipe_version, int)
-        or recipe_version != RECIPE_VERSIONS[kind]
+        or recipe_version != STORE_RECIPE_VERSIONS[kind]
     ):
         raise SourceArtError("source recipe is invalid")
     if len(payload) != expected_size or hashlib.sha256(payload).hexdigest() != expected_digest:
@@ -261,6 +262,8 @@ def _validate_normalized(
     if mime != expected_mime:
         raise SourceArtError("source MIME is invalid for kind")
     if kind in {"poster", "backdrop"} and (width, height) != (500, 750):
+        raise SourceArtError("source dimensions are invalid for kind")
+    if kind == "landscape" and (width, height) != LANDSCAPE_CANVAS_SIZE:
         raise SourceArtError("source dimensions are invalid for kind")
     if kind == "logo" and (width > 1000 or height > 400):
         raise SourceArtError("source dimensions are invalid for kind")
@@ -285,7 +288,7 @@ def _artifact_relpath(store: SourceArtStore, derivative: Any) -> str:
         raise SourceResourceError("registered artifact escaped source root") from exc
     value = relative.as_posix()
     if (
-        not re.fullmatch(r"(poster|backdrop|logo)/[0-9a-f]{2}/[0-9a-f]{64}\.(jpg|png)", value)
+        not re.fullmatch(r"(poster|backdrop|logo|landscape)/[0-9a-f]{2}/[0-9a-f]{64}\.(jpg|png)", value)
         or value.split("/")[0] != derivative.kind
         or value.split("/")[2].split(".")[0] != derivative.sha256
     ):
@@ -486,7 +489,7 @@ async def lookup_endpoint(request: Request):
             {"schema", "version", "kind", "recipe_version", "sha256"},
         )
         kind = data["kind"]
-        if not isinstance(kind, str) or kind not in RECIPE_VERSIONS:
+        if not isinstance(kind, str) or kind not in STORE_RECIPE_VERSIONS:
             raise SourceArtError("kind is invalid")
         recipe_version = _int(
             data["recipe_version"],
@@ -494,7 +497,7 @@ async def lookup_endpoint(request: Request):
             minimum=1,
             maximum=65535,
         )
-        if recipe_version != RECIPE_VERSIONS[kind]:
+        if recipe_version != STORE_RECIPE_VERSIONS[kind]:
             raise SourceArtError("recipe_version is invalid")
         digest = _sha256(data["sha256"])
         store, _ = _runtime.require_ready()
@@ -541,7 +544,7 @@ async def register_endpoint(request: Request):
         token = _token(data["reservation_token"], "reservation_token")
         staged = _staged_path(data["staged_filename"])
         kind = data["kind"]
-        if not isinstance(kind, str) or kind not in RECIPE_VERSIONS:
+        if not isinstance(kind, str) or kind not in STORE_RECIPE_VERSIONS:
             raise SourceArtError("kind is invalid")
         recipe_version = _int(data["recipe_version"], "recipe_version", minimum=1, maximum=65535)
         digest = _sha256(data["sha256"])
