@@ -35,6 +35,16 @@ from integration_contract import (
     ProviderResultStatus,
     SourceArtReference,
 )
+from landscape_spec import (
+    ORIGINAL_POLICY,
+    TEXTLESS_POLICY,
+    LandscapeArtReference,
+    LandscapeEnrichmentResult,
+    LandscapeRenderSpec,
+    canonicalize_landscape_config,
+    is_landscape_config,
+    landscape_reference,
+)
 from preset_registry import get_preset
 from ratings import RatingFetchDetails, fetch_rating_details
 from render_spec import (
@@ -44,7 +54,7 @@ from render_spec import (
     compile_requirements,
 )
 from source_art import (
-    RECIPE_VERSIONS,
+    STORE_RECIPE_VERSIONS,
     SourceArtError,
     SourceArtStore,
     SourceDerivative,
@@ -140,6 +150,21 @@ async def _default_materialize_art(
 ) -> SourceArtReference:
     if runtime.art_role is None or runtime.art_policy_key is None:
         raise SourceArtError("source art materialization requires a pinned selection policy")
+    if candidate.kind == "landscape":
+        derivative = await fetch_derivative(
+            candidate.locator,
+            kind="landscape",
+            recipe_version=STORE_RECIPE_VERSIONS["landscape"],
+            store=runtime.source_store,
+            now=evaluated_at,
+        )
+        return landscape_reference(
+            derivative,
+            locator=candidate.locator,
+            locale=candidate.locale,
+            policy_key=runtime.art_policy_key,
+            evaluated_at=evaluated_at,
+        )
     recipe = {"poster": 1, "backdrop": 5, "logo": 1}[candidate.kind]
     derivative = await fetch_derivative(
         candidate.locator,
@@ -340,10 +365,19 @@ def _render_specs(request: EnrichmentRequest) -> tuple[CanonicalRenderSpec, ...]
         except KeyError as exc:
             raise UnsupportedPresetVersion(ref) from exc
     for raw in request.canonical_configs:
-        specs.append(canonicalize_config(raw))
-    if not specs:
+        if not is_landscape_config(raw):
+            specs.append(canonicalize_config(raw))
+    if not specs and not _landscape_specs(request):
         raise ValueError("enrichment request has no render target")
     return tuple(specs)
+
+
+def _landscape_specs(request: EnrichmentRequest) -> tuple[LandscapeRenderSpec, ...]:
+    return tuple(
+        canonicalize_landscape_config(raw)
+        for raw in request.canonical_configs
+        if is_landscape_config(raw)
+    )
 
 
 def _requirements(specs: tuple[CanonicalRenderSpec, ...]) -> DataRequirements:
@@ -448,7 +482,7 @@ def _dedupe_known_source_art(
     for art in items:
         if not preserve_expired and art.expires_at <= evaluated_at:
             continue
-        if art.recipe_version != RECIPE_VERSIONS[art.kind]:
+        if art.recipe_version != STORE_RECIPE_VERSIONS[art.kind]:
             continue
         key = (art.role, art.policy_key, art.locale or "neutral")
         current = selected.get(key)
@@ -854,8 +888,12 @@ async def enrich(
     if runtime is None:
         raise RuntimeError("v2 enrichment runtime is not configured")
     specs = _render_specs(request)
-    requirements = _requirements(specs)
-    sash_slots = _requested_sash_slots(specs)
+    # Landscape configs share the portrait facts/ratings/logo pipeline through
+    # their portrait projection; only their art differs (``landscape_art``).
+    landscape_specs = _landscape_specs(request)
+    fact_specs = specs + tuple(spec.fact_spec() for spec in landscape_specs)
+    requirements = _requirements(fact_specs)
+    sash_slots = _requested_sash_slots(fact_specs)
     required_fact_fields = _required_fact_fields(sash_slots)
     hooks = runtime.hooks
     art_runtime = replace(
@@ -916,13 +954,22 @@ async def enrich(
         evaluated_at,
         runtime.source_store,
     )
+    landscape_art: list[LandscapeArtReference] = await _ensure_known_source_art(
+        _dedupe_known_source_art(
+            getattr(request, "known_landscape_art", ()),
+            evaluated_at,
+            preserve_expired=request.artwork_only,
+        ),
+        evaluated_at,
+        runtime.source_store,
+    )
 
     mdblist_missing = () if request.artwork_only else _missing_mdblist_fields(
         requirements,
         required_fact_fields,
         facts,
         ratings,
-        specs=specs,
+        specs=fact_specs,
         media_type=provider_media_type,
     )
     if not request.artwork_only and mdblist_missing and runtime.mdblist_key and imdb_id is None:
@@ -1046,7 +1093,7 @@ async def enrich(
                         required_fact_fields,
                         facts,
                         ratings,
-                        specs=specs,
+                        specs=fact_specs,
                         media_type=provider_media_type,
                     )
                     statuses.append(
@@ -1098,7 +1145,7 @@ async def enrich(
     )
     missing_art_kinds: set[str] = {"poster"} if missing_poster_needs else set()
     logo_specs = tuple(
-        spec for spec in specs if compile_requirements(spec).logo
+        spec for spec in fact_specs if compile_requirements(spec).logo
     )
     missing_logo_specs = tuple({
         (spec.logo_language, spec.logo_priority): spec
@@ -1110,11 +1157,15 @@ async def enrich(
     }.values())
     if missing_logo_specs:
         missing_art_kinds.add("logo")
-    if requirements.fallback_art and (
+    if _requirements(specs).fallback_art and (
         "fallback_backdrop",
         "fallback.backdrop",
     ) not in fresh_selection_policies:
         missing_art_kinds.add("backdrop")
+    # Any landscape art satisfies every landscape spec: a missing preferred
+    # kind falls back to the other one, as upstream does.
+    if landscape_specs and not landscape_art:
+        missing_art_kinds.add("landscape")
     tmdb_fact_fields = (
         frozenset()
         if request.artwork_only
@@ -1138,7 +1189,7 @@ async def enrich(
         if request.artwork_only
         else any(
             not spec.hide_genre and spec.rating_display_mode in {1, 2, 3, 4}
-            for spec in specs
+            for spec in fact_specs
         )
     )
     genre_missing = genre_required and "genre" not in facts
@@ -1582,6 +1633,59 @@ async def enrich(
                     still_missing.append(spec)
             pending_logo_specs = still_missing
 
+    landscape_preferred = tuple(
+        dict.fromkeys(
+            ORIGINAL_POLICY if spec.landscape_art == "original" else TEXTLESS_POLICY
+            for spec in landscape_specs
+        )
+    )
+
+    async def install_landscape(pool: list[V2ArtworkCandidate]) -> bool:
+        """Install the preferred landscape art kinds; the other kind only when
+        nothing was found.  Missing-only: present landscape art is kept (no
+        improvement churn) until it expires."""
+
+        backdrops = [candidate for candidate in pool if candidate.kind == "backdrop"]
+        policies = landscape_preferred + tuple(
+            policy for policy in (TEXTLESS_POLICY, ORIGINAL_POLICY)
+            if policy not in landscape_preferred
+        )
+        for policy in policies:
+            if policy not in landscape_preferred and landscape_art:
+                break
+            options = sorted(
+                (
+                    candidate
+                    for candidate in backdrops
+                    if (candidate.locale == "neutral") == (policy == TEXTLESS_POLICY)
+                ),
+                key=lambda candidate: _candidate_order(candidate, request.locales),
+            )[:3]
+            for candidate in options:
+                try:
+                    installed = await _maybe_await(
+                        hooks.materialize_art(
+                            replace(candidate, kind="landscape"),
+                            evaluated_at,
+                            replace(
+                                art_runtime,
+                                art_role="landscape_backdrop",
+                                art_policy_key=policy,
+                                require_ocr=False,
+                            ),
+                        )
+                    )
+                except Exception:
+                    continue
+                if isinstance(installed, LandscapeArtReference) and installed.policy_key == policy:
+                    landscape_art.append(installed)
+                    break
+        return bool(landscape_art)
+
+    unresolved_landscape = "landscape" in missing_art_kinds and not await install_landscape(
+        candidates
+    )
+
     # An artwork-only refresh may have deliberately kept a usable old logo
     # after finding no strict improvement.  It is no longer unresolved and
     # must not trigger a TVDB fallback request.
@@ -1596,7 +1700,7 @@ async def enrich(
     tvdb_candidates: list[V2ArtworkCandidate] = []
     unresolved_kinds = {
         *({"poster"} if unresolved_poster_needs else set()),
-        *({"backdrop"} if unresolved_backdrop else set()),
+        *({"backdrop"} if unresolved_backdrop or unresolved_landscape else set()),
         *({"logo"} if pending_logo_specs else set()),
     }
     if unresolved_kinds and not request.artwork_only:
@@ -1666,6 +1770,9 @@ async def enrich(
                 "fallback_backdrop", "fallback.backdrop"
             )
 
+    if unresolved_landscape:
+        unresolved_landscape = not await install_landscape(tvdb_candidates)
+
     still_missing_logos = []
     for spec in pending_logo_specs:
         options = _logo_options(
@@ -1713,6 +1820,7 @@ async def enrich(
         *({"poster"} if unresolved_poster_needs else set()),
         *({"backdrop"} if unresolved_backdrop else set()),
         *({"logo"} if pending_logo_specs else set()),
+        *({"landscape"} if unresolved_landscape else set()),
     }
     for kind in sorted(unresolved):
         statuses.append(
@@ -1763,7 +1871,7 @@ async def enrich(
         tmdb_id=int(tmdb_id) if tmdb_id is not None else None,
         imdb_id=imdb_id,
     )
-    return EnrichmentResult(
+    result = dict(
         schema=CONTRACT_SCHEMA,
         version=CONTRACT_VERSION,
         media=media,
@@ -1776,6 +1884,11 @@ async def enrich(
         partial=partial,
         retry_at=retry_at,
     )
+    if landscape_specs:
+        # Only landscape requests get the extra field, so portrait responses
+        # stay byte-identical for strict consumers.
+        return LandscapeEnrichmentResult(**result, landscape_art=tuple(landscape_art))
+    return EnrichmentResult(**result)
 
 
 __all__ = [
