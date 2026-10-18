@@ -116,7 +116,12 @@ def test_startup_guard_accepts_both_revisions_and_rejects_landscape_drift():
     base = Path(render.__file__).parent
 
     def load(**expected):
-        env = {**os.environ, **expected}
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("POSTERSPLUS_EXPECTED_")
+        }
+        env.update(expected)
         return subprocess.run(
             [sys.executable, "-c", "import v2_render"],
             cwd=base, env=env, capture_output=True, text=True,
@@ -134,6 +139,13 @@ def test_startup_guard_accepts_both_revisions_and_rejects_landscape_drift():
     assert drift.returncode != 0
     assert "landscape renderer revision mismatch" in drift.stderr
 
+    # Core-first rollout: an unset landscape pin keeps the portrait guard only.
+    portrait_only = load(POSTERSPLUS_EXPECTED_RENDERER_REVISION=render.RENDERER_REVISION)
+    assert portrait_only.returncode == 0, portrait_only.stderr
+    portrait_drift = load(POSTERSPLUS_EXPECTED_RENDERER_REVISION="0" * 64)
+    assert portrait_drift.returncode != 0
+    assert "renderer revision mismatch" in portrait_drift.stderr
+    assert "landscape renderer revision mismatch" not in portrait_drift.stderr
 
 
 # --- config and envelope -----------------------------------------------------------
