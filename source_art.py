@@ -38,6 +38,11 @@ CAPACITY_RESERVATION_SECONDS = 300
 STAGING_RECLAIM_SCAN_LIMIT = 4096
 STAGING_RESERVATION_CLOCK_SKEW_SECONDS = 60
 RECIPE_VERSIONS = {"poster": 1, "backdrop": 5, "logo": 1}
+# Landscape (16:9) derivatives are a separate store kind.  They are kept out
+# of RECIPE_VERSIONS so the portrait source-recipe identity stays unchanged;
+# store and registry validation use this superset.
+LANDSCAPE_CANVAS_SIZE = (1000, 563)
+STORE_RECIPE_VERSIONS = {**RECIPE_VERSIONS, "landscape": 1}
 SOURCE_ART_SCHEMA = "postersplus.source_art"
 SOURCE_ART_VERSION = 1
 SOURCE_VERIFICATION_SCHEMA = "postersplus.source_art.verification"
@@ -48,10 +53,10 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,79}$")
 _STAGED_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _RECLAIMABLE_STAGED_FILENAME_RE = re.compile(
-    r"(?:raw-[A-Za-z0-9_-]{6}|normalized-(?:poster|backdrop|logo)-[0-9a-f]{32}\.(?:jpg|png))"
+    r"(?:raw-[A-Za-z0-9_-]{6}|normalized-(?:poster|backdrop|logo|landscape)-[0-9a-f]{32}\.(?:jpg|png))"
 )
 _ARTIFACT_RELPATH_RE = re.compile(
-    r"^(poster|backdrop|logo)/([0-9a-f]{2})/([0-9a-f]{64})\.(jpg|png)$"
+    r"^(poster|backdrop|logo|landscape)/([0-9a-f]{2})/([0-9a-f]{64})\.(jpg|png)$"
 )
 _source_download_semaphore: asyncio.Semaphore | None = None
 _source_download_semaphore_loop: asyncio.AbstractEventLoop | None = None
@@ -235,7 +240,7 @@ class DownloadedSource:
 @dataclass(frozen=True)
 class SourceDerivative:
     source_art_id: str
-    kind: Literal["poster", "backdrop", "logo"]
+    kind: Literal["poster", "backdrop", "logo", "landscape"]
     sha256: str
     byte_size: int
     mime: Literal["image/jpeg", "image/png"]
@@ -398,6 +403,7 @@ def validate_locator_for_kind(
         allowed_sizes = {
             "poster": {"original", "w342", "w500", "w780"},
             "backdrop": {"original", "w780", "w1280"},
+            "landscape": {"original", "w780", "w1280"},
             "logo": {"original", "w300", "w500", "w780"},
         }
         if size not in allowed_sizes[kind]:
@@ -405,7 +411,7 @@ def validate_locator_for_kind(
         return
 
     if locator.provider == "tvdb":
-        if kind not in {"poster", "backdrop", "logo"}:
+        if kind not in STORE_RECIPE_VERSIONS:
             raise SourceSecurityError("TVDB artwork kind is not allowlisted")
         if not re.fullmatch(
             r"/(?:banners|artworks|series|movies)/[A-Za-z0-9_./@+-]+\.(?:jpe?g|png|webp)",
@@ -1093,7 +1099,7 @@ class SourceArtStore:
 
         if (
             not isinstance(kind, str)
-            or kind not in RECIPE_VERSIONS
+            or kind not in STORE_RECIPE_VERSIONS
             or not isinstance(sha256, str)
             or not _SHA256_RE.fullmatch(sha256)
         ):
@@ -1145,7 +1151,7 @@ class SourceArtStore:
     def _ensure_artifact_dirs(self, kind: str, sha256: str) -> Path:
         if (
             not isinstance(kind, str)
-            or kind not in RECIPE_VERSIONS
+            or kind not in STORE_RECIPE_VERSIONS
             or not isinstance(sha256, str)
             or not _SHA256_RE.fullmatch(sha256)
         ):
@@ -1439,15 +1445,15 @@ class SourceArtStore:
             raise SourceResourceError("invalid source derivative payload")
         if (
             not isinstance(kind, str)
-            or kind not in RECIPE_VERSIONS
+            or kind not in STORE_RECIPE_VERSIONS
             or isinstance(recipe_version, bool)
             or not isinstance(recipe_version, int)
-            or recipe_version != RECIPE_VERSIONS[kind]
+            or recipe_version != STORE_RECIPE_VERSIONS[kind]
         ):
             raise SourceArtError(f"unsupported {kind} recipe version")
         if not isinstance(mime, str) or mime not in {"image/jpeg", "image/png"}:
             raise SourceArtError("unsupported normalized source MIME")
-        if kind in {"poster", "backdrop"} and mime != "image/jpeg":
+        if kind in {"poster", "backdrop", "landscape"} and mime != "image/jpeg":
             raise SourceArtError("poster and backdrop derivatives must be JPEG")
         if kind == "logo" and mime != "image/png":
             raise SourceArtError("logo derivatives must be PNG")
@@ -1646,6 +1652,44 @@ def _normalize_payload(
     return encoded.getvalue(), out_mime, image.width, image.height
 
 
+def _normalize_landscape_payload(
+    kind: Literal["landscape"],
+    raw: BinaryIO,
+    recipe_version: int,
+    *,
+    declared_mime: str | None = None,
+) -> tuple[bytes, Literal["image/jpeg"], int, int]:
+    """Fit-cover a backdrop to the 16:9 landscape canvas (upstream
+    ``normalise_landscape``).  Same JPEG encoding as the portrait recipes."""
+
+    if kind != "landscape" or recipe_version != STORE_RECIPE_VERSIONS["landscape"]:
+        raise SourceArtError(f"unsupported {kind} recipe version")
+    image = _load_source_image(_read_bounded(raw), declared_mime).convert("RGB")
+    target_w, target_h = LANDSCAPE_CANVAS_SIZE
+    scale = max(target_w / image.width, target_h / image.height)
+    resized = image.resize(
+        (round(image.width * scale), round(image.height * scale)),
+        Image.Resampling.LANCZOS,
+    )
+    left = round((resized.width - target_w) / 2)
+    top = round((resized.height - target_h) / 2)
+    image = resized.crop((left, top, left + target_w, top + target_h))
+    encoded = io.BytesIO()
+    image.save(
+        encoded,
+        format="JPEG",
+        quality=92,
+        optimize=False,
+        progressive=False,
+        subsampling=0,
+    )
+    return encoded.getvalue(), "image/jpeg", image.width, image.height
+
+
+def _normalizer(kind: str):
+    return _normalize_landscape_payload if kind == "landscape" else _normalize_payload
+
+
 def normalize_and_store(
     kind: Literal["poster", "backdrop", "logo"],
     raw: BinaryIO,
@@ -1658,7 +1702,7 @@ def normalize_and_store(
     pinned: bool = False,
     reconstructable: bool | None = None,
 ) -> SourceDerivative:
-    payload, out_mime, width, height = _normalize_payload(
+    payload, out_mime, width, height = _normalizer(kind)(
         kind,
         raw,
         recipe_version,
@@ -1736,7 +1780,7 @@ async def fetch_derivative(
             if not downloaded.content_type:
                 raise SourceArtError("source MIME header is required")
             with downloaded.path.open("rb") as raw:
-                payload, mime, width, height = _normalize_payload(
+                payload, mime, width, height = _normalizer(kind)(
                     kind,
                     raw,
                     recipe_version,
@@ -1781,7 +1825,9 @@ __all__ = [
     "DownloadedSource",
     "MAX_SOURCE_BYTES",
     "PinnedHTTPResponse",
+    "LANDSCAPE_CANVAS_SIZE",
     "RECIPE_VERSIONS",
+    "STORE_RECIPE_VERSIONS",
     "SourceArtError",
     "SourceArtStore",
     "SourceDerivative",
