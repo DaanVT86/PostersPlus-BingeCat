@@ -135,6 +135,7 @@ def test_startup_guard_accepts_both_revisions_and_rejects_landscape_drift():
     assert "landscape renderer revision mismatch" in drift.stderr
 
 
+
 # --- config and envelope -----------------------------------------------------------
 
 
@@ -300,7 +301,7 @@ def _rating():
     )
 
 
-def _enrich(monkeypatch, store, candidates, payloads, configs):
+def _enrich(monkeypatch, store, candidates, payloads, configs, *, now=NOW, **request_changes):
     async def downloader(locator, kind, *, temp_dir):
         path = Path(temp_dir) / f"raw-{uuid4().hex[:6]}"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -341,8 +342,9 @@ def _enrich(monkeypatch, store, candidates, payloads, configs):
         locales=("en",), titles_by_locale={"en": "Example Title"},
         canonical_configs=tuple(configs),
         known_ratings=(_rating(),), known_facts=_known_facts(),
+        **request_changes,
     )
-    return asyncio.run(enrich_module.enrich(request, NOW, runtime=runtime))
+    return asyncio.run(enrich_module.enrich(request, now, runtime=runtime))
 
 
 def _render_landscape(result, raw_config, store):
@@ -424,6 +426,69 @@ def test_landscape_golden_through_enrich_and_render(monkeypatch, tmp_path, case)
 
     if IN_APPROVED_RUNTIME:
         assert metadata.content_sha256 == LANDSCAPE_GOLDENS[case]
+
+
+def _backdrops(*specs):
+    candidates, payloads = [], {}
+    for locale, name in specs:
+        candidate = _candidate("backdrop", locale, name)
+        candidates.append(candidate)
+        color = (40 + len(name) * 9, 70, 110)  # distinct bytes, distinct content ID
+        payloads[candidate.locator.url] = _backdrop(color, title_text=locale != "neutral")
+    return candidates, payloads
+
+
+@pytest.mark.parametrize("first,then", [("textless", "original"), ("original", "textless")])
+def test_carried_landscape_art_does_not_satisfy_another_requested_policy(
+    monkeypatch, tmp_path, first, then
+):
+    store = SourceArtStore(tmp_path / "art", tmp_path / "art.sqlite")
+    candidates, payloads = _backdrops(("neutral", "plain"), ("en", "titled"))
+    carried = _enrich(monkeypatch, store, candidates, payloads, [_landscape_config(art=first)])
+    assert {item.policy_key for item in carried.landscape_art} == {f"landscape.{first}"}
+
+    result = _enrich(
+        monkeypatch, store, candidates, payloads, [_landscape_config(art=then)],
+        known_landscape_art=carried.landscape_art,
+    )
+    assert sorted(item.policy_key for item in result.landscape_art) == sorted(
+        [f"landscape.{first}", f"landscape.{then}"]
+    )
+
+
+def test_artwork_only_refreshes_the_requested_policy_over_a_carried_fallback(monkeypatch, tmp_path):
+    store = SourceArtStore(tmp_path / "art", tmp_path / "art.sqlite")
+    raw = _landscape_config(art="textless")
+    candidates, payloads = _backdrops(("en", "titled"))
+    fallback = _enrich(monkeypatch, store, candidates, payloads, [raw])
+    assert [item.policy_key for item in fallback.landscape_art] == ["landscape.original"]
+
+    # The requested textless art appears later: the artwork-only lane fetches
+    # it although the original fallback is still fresh.
+    candidates, payloads = _backdrops(("en", "titled"), ("neutral", "plain"))
+    refreshed = _enrich(
+        monkeypatch, store, candidates, payloads, [raw],
+        artwork_only=True, known_landscape_art=fallback.landscape_art,
+    )
+    by_policy = {item.policy_key: item for item in refreshed.landscape_art}
+    assert set(by_policy) == {"landscape.textless", "landscape.original"}
+    assert by_policy["landscape.original"] == fallback.landscape_art[0]
+
+    # Once expired, the textless reference is replaced, not duplicated; the
+    # expired fallback stays carried because the requested art was found.
+    candidates, payloads = _backdrops(("en", "titled"), ("neutral", "refreshed"))
+    later = _enrich(
+        monkeypatch, store, candidates, payloads, [raw],
+        now=NOW + timedelta(days=40),
+        artwork_only=True, known_landscape_art=refreshed.landscape_art,
+    )
+    textless = [item for item in later.landscape_art if item.policy_key == "landscape.textless"]
+    assert len(textless) == 1
+    assert textless[0].source_art_id != by_policy["landscape.textless"].source_art_id
+    assert [item for item in later.landscape_art if item.policy_key == "landscape.original"] == [
+        by_policy["landscape.original"]
+    ]
+    assert not any(s.missing_fields == ("landscape",) for s in later.provider_statuses)
 
 
 def test_landscape_render_endpoint_and_portrait_enrich_contract(monkeypatch, tmp_path):

@@ -1162,9 +1162,23 @@ async def enrich(
         "fallback.backdrop",
     ) not in fresh_selection_policies:
         missing_art_kinds.add("backdrop")
-    # Any landscape art satisfies every landscape spec: a missing preferred
-    # kind falls back to the other one, as upstream does.
-    if landscape_specs and not landscape_art:
+    # Each landscape spec requests one art policy.  A requested policy is
+    # fetched while it has no fresh reference, even when the other policy is
+    # carried as a fallback; an expired reference kept by the artwork-only
+    # lane stays usable but is refreshed.
+    landscape_requested = tuple(
+        dict.fromkeys(
+            ORIGINAL_POLICY if spec.landscape_art == "original" else TEXTLESS_POLICY
+            for spec in landscape_specs
+        )
+    )
+    fresh_landscape_policies = {
+        art.policy_key for art in landscape_art if art.expires_at > evaluated_at
+    }
+    landscape_missing = [
+        policy for policy in landscape_requested if policy not in fresh_landscape_policies
+    ]
+    if landscape_missing:
         missing_art_kinds.add("landscape")
     tmdb_fact_fields = (
         frozenset()
@@ -1633,58 +1647,51 @@ async def enrich(
                     still_missing.append(spec)
             pending_logo_specs = still_missing
 
-    landscape_preferred = tuple(
-        dict.fromkeys(
-            ORIGINAL_POLICY if spec.landscape_art == "original" else TEXTLESS_POLICY
-            for spec in landscape_specs
-        )
-    )
+    async def install_landscape(pool: list[V2ArtworkCandidate], policy: str) -> bool:
+        """Install one landscape policy from ``pool``, replacing every carried
+        reference of that policy."""
 
-    async def install_landscape(pool: list[V2ArtworkCandidate]) -> bool:
-        """Install the preferred landscape art kinds; the other kind only when
-        nothing was found.  Missing-only: present landscape art is kept (no
-        improvement churn) until it expires."""
-
-        backdrops = [candidate for candidate in pool if candidate.kind == "backdrop"]
-        policies = landscape_preferred + tuple(
-            policy for policy in (TEXTLESS_POLICY, ORIGINAL_POLICY)
-            if policy not in landscape_preferred
-        )
-        for policy in policies:
-            if policy not in landscape_preferred and landscape_art:
-                break
-            options = sorted(
-                (
-                    candidate
-                    for candidate in backdrops
-                    if (candidate.locale == "neutral") == (policy == TEXTLESS_POLICY)
-                ),
-                key=lambda candidate: _candidate_order(candidate, request.locales),
-            )[:3]
-            for candidate in options:
-                try:
-                    installed = await _maybe_await(
-                        hooks.materialize_art(
-                            replace(candidate, kind="landscape"),
-                            evaluated_at,
-                            replace(
-                                art_runtime,
-                                art_role="landscape_backdrop",
-                                art_policy_key=policy,
-                                require_ocr=False,
-                            ),
-                        )
+        options = sorted(
+            (
+                candidate
+                for candidate in pool
+                if candidate.kind == "backdrop"
+                and (candidate.locale == "neutral") == (policy == TEXTLESS_POLICY)
+            ),
+            key=lambda candidate: _candidate_order(candidate, request.locales),
+        )[:3]
+        for candidate in options:
+            try:
+                installed = await _maybe_await(
+                    hooks.materialize_art(
+                        replace(candidate, kind="landscape"),
+                        evaluated_at,
+                        replace(
+                            art_runtime,
+                            art_role="landscape_backdrop",
+                            art_policy_key=policy,
+                            require_ocr=False,
+                        ),
                     )
-                except Exception:
-                    continue
-                if isinstance(installed, LandscapeArtReference) and installed.policy_key == policy:
-                    landscape_art.append(installed)
-                    break
-        return bool(landscape_art)
+                )
+            except Exception:
+                continue
+            if isinstance(installed, LandscapeArtReference) and installed.policy_key == policy:
+                landscape_art[:] = [
+                    art
+                    for art in landscape_art
+                    if art.policy_key != policy and art.source_art_id != installed.source_art_id
+                ]
+                landscape_art.append(installed)
+                return True
+        return False
 
-    unresolved_landscape = "landscape" in missing_art_kinds and not await install_landscape(
-        candidates
-    )
+    async def install_landscape_requested(pool: list[V2ArtworkCandidate]) -> None:
+        for policy in tuple(landscape_missing):
+            if await install_landscape(pool, policy):
+                landscape_missing.remove(policy)
+
+    await install_landscape_requested(candidates)
 
     # An artwork-only refresh may have deliberately kept a usable old logo
     # after finding no strict improvement.  It is no longer unresolved and
@@ -1700,7 +1707,7 @@ async def enrich(
     tvdb_candidates: list[V2ArtworkCandidate] = []
     unresolved_kinds = {
         *({"poster"} if unresolved_poster_needs else set()),
-        *({"backdrop"} if unresolved_backdrop or unresolved_landscape else set()),
+        *({"backdrop"} if unresolved_backdrop or landscape_missing else set()),
         *({"logo"} if pending_logo_specs else set()),
     }
     if unresolved_kinds and not request.artwork_only:
@@ -1770,8 +1777,19 @@ async def enrich(
                 "fallback_backdrop", "fallback.backdrop"
             )
 
-    if unresolved_landscape:
-        unresolved_landscape = not await install_landscape(tvdb_candidates)
+    if landscape_missing:
+        await install_landscape_requested(tvdb_candidates)
+    # Upstream semantics: the other policy is a fallback, installed only after
+    # the requested lookup missed and when no fresh fallback is carried.
+    for policy in (TEXTLESS_POLICY, ORIGINAL_POLICY):
+        if (
+            landscape_missing
+            and policy not in landscape_requested
+            and policy not in fresh_landscape_policies
+            and not await install_landscape(candidates, policy)
+        ):
+            await install_landscape(tvdb_candidates, policy)
+    unresolved_landscape = bool(landscape_specs) and not landscape_art
 
     still_missing_logos = []
     for spec in pending_logo_specs:
