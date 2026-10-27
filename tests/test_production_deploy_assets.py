@@ -16,6 +16,9 @@ def test_production_compose_is_private_and_isolated() -> None:
     assert "cloudflared" not in compose
     assert "posterplus.bingecat.com" not in compose
     assert "NETWORK_ALIAS:-postersplus-v2-private" not in compose
+    # Render workers neither swap nor grow without bound.
+    assert "mem_limit: 12g\n    # A swapped-out heap stalls a render worker (GIL) on swap-in.\n    memswap_limit: 12g" in compose
+    assert 'UVICORN_LIMIT_MAX_REQUESTS: "10000"' in compose
 
 
 def test_deploy_wrapper_cannot_activate_the_live_alias_or_other_stacks() -> None:
