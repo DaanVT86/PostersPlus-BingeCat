@@ -630,6 +630,33 @@ def test_artwork_only_does_not_return_bad_backdrop_without_replacement(tmp_path,
     assert any(item.missing_fields == ("backdrop",) for item in result.provider_statuses)
 
 
+def test_artwork_only_skips_unverified_new_backdrop_and_tries_next_candidate():
+    hooks = _hooks(Counter(), (
+        _candidate("poster", "poster.jpg"),
+        _candidate("backdrop", "unverified.jpg", score=8),
+        _candidate("backdrop", "clean.jpg", score=7),
+        _candidate("logo", "logo.png", "en"),
+    ), fail_kinds=frozenset({"poster"}))
+    materialize = hooks.materialize_art
+    attempted = []
+    async def choose(candidate, evaluated_at, runtime):
+        installed = await materialize(candidate, evaluated_at, runtime)
+        if candidate.kind == "backdrop":
+            attempted.append(candidate.locator.url.rsplit("/", 1)[1])
+            assert runtime.require_ocr is True
+            if candidate.locator.url.endswith("unverified.jpg"):
+                installed = installed.model_copy(update={
+                    "textless_verified": None, "verification_recipe": None,
+                    "verified_at": None, "verification_source_digest": None,
+                })
+        return installed
+    from dataclasses import replace
+    result = asyncio.run(enrich(_request(), NOW, runtime=_runtime(replace(hooks, materialize_art=choose))))
+    base, = (item for item in result.source_art if item.role == "fallback_backdrop")
+    assert attempted == ["unverified.jpg", "clean.jpg"]
+    assert base.textless_verified and base.locator.url.endswith("clean.jpg")
+
+
 def test_ordinary_enrich_keeps_existing_unverified_backdrop_without_ocr(monkeypatch):
     import v2_enrich
 
