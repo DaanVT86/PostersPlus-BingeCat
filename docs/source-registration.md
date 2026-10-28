@@ -378,6 +378,16 @@ when no candidate improves it. The app sends all facts needed by its selected
 configs; missing facts stay missing/partial and are not fetched as a side
 effect. This flag never changes renderer inputs or renderer hash construction.
 
+For portrait fallback bases, artwork-only enrichment also verifies previously
+unverified `fallback_backdrop` references against their exact stored crop. It
+uses the same source-owner OCR memo as textless posters, including cached
+`text` and `unknown` rejections. Rejected references are omitted and selection
+tries the next bounded candidate; new fallback backdrops also require OCR.
+Verified backdrops carry the existing digest-bound verification fields and
+remain reusable without another scan. The app must keep the currently published
+poster until a verified replacement is fully prepared and published. Ordinary
+enrichment, rendering, and the legacy service do not acquire this extra work.
+
 Provider artwork candidates remain the existing bounded internal
 `V2ArtworkCandidate` shape:
 

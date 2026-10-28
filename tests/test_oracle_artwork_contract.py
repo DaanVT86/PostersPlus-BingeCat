@@ -138,6 +138,10 @@ def _old_fallback_backdrop() -> SourceArtReference:
         observed_at=NOW - timedelta(days=30),
         checked_at=NOW - timedelta(days=29),
         expires_at=NOW - timedelta(days=1),
+        textless_verified=True,
+        verification_recipe="ppocr.textless.v1",
+        verified_at=NOW - timedelta(days=30),
+        verification_source_digest=digest,
     )
 
 
@@ -208,7 +212,7 @@ def _hooks(
         if candidate.kind in fail_kinds:
             raise SourceArtError(f"fixture {candidate.kind} failed")
         digest = hashlib.sha256(candidate.locator.url.encode()).hexdigest()
-        textless = runtime.art_role == "textless_poster"
+        textless = runtime.require_ocr
         return SourceArtReference(
             source_art_id=f"fixture-{candidate.kind}-{digest[:12]}",
             kind=candidate.kind,
@@ -516,6 +520,10 @@ def test_artwork_only_keeps_stale_but_intact_art_and_does_not_refresh_verificati
         observed_at=NOW - timedelta(days=9),
         checked_at=old_checked_at,
         expires_at=old_expires_at,
+        textless_verified=True,
+        verification_recipe="ppocr.textless.v1",
+        verified_at=old_verified_at,
+        verification_source_digest=backdrop.sha256,
     )
     candidates = (
         _candidate("poster", "new-poster-0.jpg", "pt", 0),
@@ -537,3 +545,108 @@ def test_artwork_only_keeps_stale_but_intact_art_and_does_not_refresh_verificati
     assert old_poster in result.source_art
     assert old_backdrop in result.source_art
     assert calls == Counter({"tmdb": 1, "materialize": 1})
+
+
+def _installed_unverified_backdrop(store):
+    raw = io.BytesIO()
+    Image.new("RGB", (500, 750), (10, 20, 30)).save(raw, format="JPEG")
+    derivative = store.install(
+        kind="backdrop", recipe_version=5, payload=raw.getvalue(),
+        mime="image/jpeg", width=500, height=750, locator=_locator("old.jpg"),
+        now=NOW, pinned=False, reconstructable=False,
+    )
+    return _old_fallback_backdrop().model_copy(update={
+        "source_art_id": derivative.source_art_id,
+        "sha256": derivative.sha256,
+        "byte_size": derivative.byte_size,
+        "locator": derivative.locator,
+        "textless_verified": None,
+        "verification_recipe": None,
+        "verified_at": None,
+        "verification_source_digest": None,
+    })
+
+
+@pytest.mark.parametrize("scan_result", [False, True, None])
+def test_artwork_only_verifies_old_backdrop_crop_and_memoizes_all_decisions(
+    tmp_path, monkeypatch, scan_result,
+):
+    import text_detect
+
+    store = SourceArtStore(tmp_path / "sources", tmp_path / "sources.sqlite")
+    old = _installed_unverified_backdrop(store)
+    scans = []
+    def scan(image, **kwargs):
+        scans.append((image.size, kwargs))
+        return scan_result
+    monkeypatch.setattr(text_detect, "poster_has_burned_in_text", scan)
+    calls = Counter()
+    hooks = _hooks(calls, (
+        _candidate("poster", "poster.jpg"),
+        _candidate("backdrop", "clean.jpg"),
+        _candidate("logo", "logo.png", "en"),
+    ), fail_kinds=frozenset({"poster"}))
+    for _ in range(2):
+        result = asyncio.run(enrich(
+            _request(known_source_art=(old,)), NOW,
+            runtime=_runtime(hooks, source_store=store),
+        ))
+        base, = (item for item in result.source_art if item.role == "fallback_backdrop")
+        assert base.textless_verified is True
+        assert base.verification_source_digest == base.sha256
+        if scan_result is False:
+            assert base.sha256 == old.sha256
+            assert base.observed_at == old.observed_at
+            assert base.checked_at == base.verified_at == NOW
+            assert base.expires_at > NOW
+        else:
+            assert base.sha256 != old.sha256
+            assert base.locator.url.endswith("clean.jpg")
+    assert scans == [((500, 750), {"title": ("The Matrix",), "source": "backdrop"})]
+    if scan_result is False:
+        monkeypatch.setattr(text_detect, "poster_has_burned_in_text", lambda *a, **kw: pytest.fail("verified art must not rescan"))
+        assert base in asyncio.run(enrich(
+            _request(known_source_art=(base,)), NOW,
+            runtime=_runtime(hooks, source_store=store),
+        )).source_art
+
+
+def test_artwork_only_does_not_return_bad_backdrop_without_replacement(tmp_path, monkeypatch):
+    import text_detect
+
+    store = SourceArtStore(tmp_path / "sources", tmp_path / "sources.sqlite")
+    old = _installed_unverified_backdrop(store)
+    monkeypatch.setattr(text_detect, "poster_has_burned_in_text", lambda *a, **kw: True)
+    hooks = _hooks(Counter(), (
+        _candidate("poster", "poster.jpg"),
+        _candidate("backdrop", "still-bad.jpg"),
+        _candidate("logo", "logo.png", "en"),
+    ), fail_kinds=frozenset({"poster", "backdrop"}))
+    result = asyncio.run(enrich(
+        _request(known_source_art=(old,)), NOW,
+        runtime=_runtime(hooks, source_store=store),
+    ))
+    assert not any(item.role == "fallback_backdrop" for item in result.source_art)
+    assert any(item.missing_fields == ("backdrop",) for item in result.provider_statuses)
+
+
+def test_ordinary_enrich_keeps_existing_unverified_backdrop_without_ocr(monkeypatch):
+    import v2_enrich
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("ordinary existing artwork must not trigger OCR or provider work")
+    monkeypatch.setattr(v2_enrich, "_textless_verification", forbidden)
+    old = _old_fallback_backdrop().model_copy(update={
+        "expires_at": NOW + timedelta(days=1), "textless_verified": None,
+        "verification_recipe": None, "verified_at": None,
+        "verification_source_digest": None,
+    })
+    logo = _old_logo().model_copy(update={"expires_at": NOW + timedelta(days=1)})
+    request = _request(known_source_art=(_old_poster(), old, logo)).model_copy(update={
+        "artwork_only": False, "preset_refs": (), "canonical_configs": ({
+            "rating_display_mode": 0, "show_award_sash": False,
+            "badge_display_mode": 0, "use_original_art": False, "textless": False,
+        },),
+    })
+    result = asyncio.run(enrich(request, NOW, runtime=_runtime(ProviderHooks.all(forbidden))))
+    assert old in result.source_art
