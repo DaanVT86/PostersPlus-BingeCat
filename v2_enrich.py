@@ -143,6 +143,89 @@ def _http_rate_limit_retry(exc: Exception, evaluated_at: datetime) -> datetime |
     return evaluated_at + timedelta(seconds=seconds)
 
 
+async def _textless_verification(
+    derivative: SourceDerivative,
+    evaluated_at: datetime,
+    runtime: EnrichmentRuntime,
+) -> dict[str, Any]:
+    """Verify exact normalized bytes, sharing the source owner's OCR memo."""
+    from PIL import Image
+
+    from text_detect import (
+        build_ocr_memo_key,
+        decision_for_detection,
+        parse_ocr_memo_entry,
+        poster_has_burned_in_text,
+    )
+
+    memo_key = build_ocr_memo_key(
+        derivative.sha256,
+        derivative.kind,
+        runtime.ocr_titles,
+    )
+    memo_entry = None
+    memo_store = runtime.source_store
+    lookup_verification = getattr(memo_store, "lookup_verification", None)
+    register_verification = getattr(memo_store, "register_verification", None)
+    if (lookup_verification is None) != (register_verification is None):
+        raise SourceArtError("source verification memo adapter is incomplete")
+    if lookup_verification is not None:
+        try:
+            memo_response = await asyncio.to_thread(
+                lookup_verification,
+                memo_key.payload(),
+            )
+            memo_entry = parse_ocr_memo_entry(
+                memo_response,
+                expected_key=memo_key,
+            )
+        except Exception as exc:
+            raise SourceArtError("source verification lookup failed") from exc
+
+    def scan_derivative() -> bool | None:
+        with Image.open(derivative.path) as image:
+            return poster_has_burned_in_text(
+                image.convert("RGB"),
+                title=runtime.ocr_titles,
+                source=derivative.kind,
+            )
+
+    if memo_entry is None:
+        text_result = await asyncio.to_thread(scan_derivative)
+        if register_verification is not None:
+            try:
+                registered = await asyncio.to_thread(
+                    register_verification,
+                    memo_key.payload(),
+                    result=decision_for_detection(text_result),
+                    verified_at=evaluated_at,
+                )
+                memo_entry = parse_ocr_memo_entry(
+                    registered,
+                    expected_key=memo_key,
+                )
+                if memo_entry is None:
+                    raise SourceArtError("source verification registration did not converge")
+            except SourceArtError:
+                raise
+            except Exception as exc:
+                raise SourceArtError("source verification registration failed") from exc
+    else:
+        # A source-owner hit is authoritative, including the explicit
+        # unknown result.  Unknown must not be treated as a cache miss and
+        # must never cause a second OCR scan.
+        text_result = memo_entry.value
+    if text_result is not False:
+        reason = "contains text" if text_result else "could not be verified textless"
+        raise SourceArtError(f"source {derivative.kind} {reason}")
+    return {
+        "textless_verified": True,
+        "verified_at": (memo_entry.verified_at if memo_entry is not None else None) or evaluated_at,
+        "verification_recipe": memo_key.detection_rules,
+        "verification_source_digest": derivative.sha256,
+    }
+
+
 async def _default_materialize_art(
     candidate: V2ArtworkCandidate,
     evaluated_at: datetime,
@@ -173,85 +256,12 @@ async def _default_materialize_art(
         store=runtime.source_store,
         now=evaluated_at,
     )
-    textless_verified: bool | None = None
-    if runtime.require_ocr and derivative.kind in {"poster", "backdrop"}:
-        from PIL import Image
-
-        from text_detect import (
-            build_ocr_memo_key,
-            decision_for_detection,
-            parse_ocr_memo_entry,
-            poster_has_burned_in_text,
-        )
-
-        memo_key = build_ocr_memo_key(
-            derivative.sha256,
-            derivative.kind,
-            runtime.ocr_titles,
-        )
-        memo_entry = None
-        memo_store = runtime.source_store
-        lookup_verification = getattr(memo_store, "lookup_verification", None)
-        register_verification = getattr(memo_store, "register_verification", None)
-        if (lookup_verification is None) != (register_verification is None):
-            raise SourceArtError("source verification memo adapter is incomplete")
-        if lookup_verification is not None:
-            try:
-                memo_response = await asyncio.to_thread(
-                    lookup_verification,
-                    memo_key.payload(),
-                )
-                memo_entry = parse_ocr_memo_entry(
-                    memo_response,
-                    expected_key=memo_key,
-                )
-            except Exception as exc:
-                raise SourceArtError("source verification lookup failed") from exc
-
-        def scan_derivative() -> bool | None:
-            with Image.open(derivative.path) as image:
-                return poster_has_burned_in_text(
-                    image.convert("RGB"),
-                    title=runtime.ocr_titles,
-                    source=derivative.kind,
-                )
-
-        if memo_entry is None:
-            text_result = await asyncio.to_thread(scan_derivative)
-            if register_verification is not None:
-                try:
-                    registered = await asyncio.to_thread(
-                        register_verification,
-                        memo_key.payload(),
-                        result=decision_for_detection(text_result),
-                        verified_at=evaluated_at,
-                    )
-                    memo_entry = parse_ocr_memo_entry(
-                        registered,
-                        expected_key=memo_key,
-                    )
-                    if memo_entry is None:
-                        raise SourceArtError("source verification registration did not converge")
-                except SourceArtError:
-                    raise
-                except Exception as exc:
-                    raise SourceArtError("source verification registration failed") from exc
-        else:
-            # A source-owner hit is authoritative, including the explicit
-            # unknown result.  Unknown must not be treated as a cache miss and
-            # must never cause a second OCR scan.
-            text_result = memo_entry.value
-        if text_result is not False:
-            reason = "contains text" if text_result else "could not be verified textless"
-            raise SourceArtError(f"source {derivative.kind} {reason}")
-        textless_verified = True
-        verified_at = (
-            memo_entry.verified_at if memo_entry is not None else None
-        ) or evaluated_at
-        verification_recipe = memo_key.detection_rules
-    else:
-        verified_at = None
-        verification_recipe = None
+    verification = (
+        await _textless_verification(derivative, evaluated_at, runtime)
+        if runtime.require_ocr and derivative.kind in {"poster", "backdrop"}
+        else {}
+    )
+    verified_at = verification.get("verified_at")
     reference_observed_at = (
         min(evaluated_at, verified_at) if verified_at is not None else evaluated_at
     )
@@ -270,10 +280,7 @@ async def _default_materialize_art(
         observed_at=reference_observed_at,
         checked_at=evaluated_at,
         expires_at=evaluated_at + timedelta(days=30),
-        textless_verified=textless_verified,
-        verification_recipe=verification_recipe if textless_verified else None,
-        verified_at=verified_at if textless_verified else None,
-        verification_source_digest=derivative.sha256 if textless_verified else None,
+        **verification,
     )
 
 
@@ -954,6 +961,36 @@ async def enrich(
         evaluated_at,
         runtime.source_store,
     )
+    if request.artwork_only:
+        # Oracle rechecks the exact old crop before treating a backdrop as a
+        # clean base. Ordinary enrich/render requests keep serving old art.
+        verified_art = []
+        for reference in source_art:
+            if reference.role != "fallback_backdrop" or reference.textless_verified is True:
+                verified_art.append(reference)
+                continue
+            if runtime.source_store is None:
+                continue
+            try:
+                derivative = await asyncio.to_thread(
+                    runtime.source_store.get, reference.sha256, reference.kind,
+                    reference.recipe_version, now=evaluated_at,
+                )
+                if derivative is None or not _derivative_matches_reference(derivative, reference):
+                    continue
+                verification = await _textless_verification(derivative, evaluated_at, art_runtime)
+            except SourceArtError:
+                # Rejected and unknown decisions stay in the source-owner
+                # memo; candidate selection below can find a clean replacement.
+                continue
+            verified_art.append(SourceArtReference.model_validate({
+                **reference.model_dump(),
+                **verification,
+                "observed_at": min(reference.observed_at, verification["verified_at"]),
+                "checked_at": evaluated_at,
+                "expires_at": evaluated_at + timedelta(days=30),
+            }))
+        source_art = verified_art
     landscape_art: list[LandscapeArtReference] = await _ensure_known_source_art(
         _dedupe_known_source_art(
             getattr(request, "known_landscape_art", ()),
@@ -1557,7 +1594,9 @@ async def enrich(
                             art_runtime,
                             art_role=role,
                             art_policy_key=policy_key,
-                            require_ocr=role == "textless_poster",
+                            require_ocr=(role == "textless_poster" or (
+                                request.artwork_only and role == "fallback_backdrop"
+                            )),
                         ),
                     )
                 )
@@ -1565,6 +1604,8 @@ async def enrich(
                     raise SourceArtError("art materializer returned an invalid reference")
                 if (installed.role, installed.policy_key) != (role, policy_key):
                     raise SourceArtError("art materializer returned the wrong selection policy")
+                if request.artwork_only and role == "fallback_backdrop" and installed.textless_verified is not True:
+                    raise SourceArtError("fallback backdrop was not verified textless")
                 installed_locator_policies.add(locator_policy)
                 replace_same_locale_reference(
                     installed,
