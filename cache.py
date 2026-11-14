@@ -33,6 +33,7 @@ from config import (
     COMPOSITE_CACHE_TTL_JITTER,
     COMPOSITE_MAX_ENTRIES,
     COMPOSITE_MEM_ENTRIES,
+    COMPOSITE_MEM_MAX_BYTES,
     QUALITY_OLD_CACHE_DURATION,
     DIGITAL_RELEASE_MAX_AGE_DAYS,
     RATING_MIN_VOTES,
@@ -496,6 +497,9 @@ def init_db() -> None:
     # A provisional render kept for PROVISIONAL_CACHE_TTL: a hit on it must
     # be answered as one (no validator).
     _add_column_if_missing(conn, "final_poster_cache", "provisional", "INTEGER")
+    # sha256 of jpeg_bytes, checked on every SQLite read: a row whose bytes
+    # don't match is a miss, never served.  NULL rows predate the column.
+    _add_column_if_missing(conn, "final_poster_cache", "content_sha256", "TEXT")
 
     # Which source a trending snapshot came from.  Without this, changing
     # TRENDING_SOURCE_* had no visible effect until the snapshot aged out on its
@@ -635,6 +639,21 @@ _composite_l1: OrderedDict[str, tuple[int, bytes, int, "dict | None", bool]] = O
 _composite_l1_lock = threading.Lock()
 
 
+def _l1_put(cache_key: str, entry: tuple) -> None:
+    """Insert into the L1 LRU, evicting the oldest past the entry and byte caps."""
+    if COMPOSITE_MEM_ENTRIES <= 0:
+        return
+    with _composite_l1_lock:
+        _composite_l1[cache_key] = entry
+        _composite_l1.move_to_end(cache_key)
+        total = sum(len(item[1]) for item in _composite_l1.values()) if COMPOSITE_MEM_MAX_BYTES > 0 else 0
+        while _composite_l1 and (
+            len(_composite_l1) > COMPOSITE_MEM_ENTRIES
+            or (COMPOSITE_MEM_MAX_BYTES > 0 and total > COMPOSITE_MEM_MAX_BYTES)
+        ):
+            total -= len(_composite_l1.popitem(last=False)[1][1])
+
+
 def composite_l1_stats() -> dict:
     with _composite_l1_lock:
         count = len(_composite_l1)
@@ -690,13 +709,13 @@ def get_cached_final_poster_entry(cache_key: str) -> "tuple[bytes, int, bool] | 
     # L2: SQLite with TTL check
     try:
         row = get_db().execute(
-            "SELECT jpeg_bytes, cached_at, expires_at, render_rev, render_facts, provisional "
-            "FROM final_poster_cache WHERE cache_key = ?",
+            "SELECT jpeg_bytes, cached_at, expires_at, render_rev, render_facts, provisional, "
+            "content_sha256 FROM final_poster_cache WHERE cache_key = ?",
             (cache_key,),
         ).fetchone()
         if not row:
             return None
-        jpeg_bytes, cached_at, expires_at, render_rev, render_facts, provisional = row
+        jpeg_bytes, cached_at, expires_at, render_rev, render_facts, provisional, content_sha256 = row
         if expires_at is None:
             expires_at = _composite_expiry(cache_key, cached_at)
         if now > expires_at:
@@ -711,16 +730,19 @@ def get_cached_final_poster_entry(cache_key: str) -> "tuple[bytes, int, bool] | 
                 get_db().commit()
             return None
         data = bytes(jpeg_bytes)
-        # Promote to L1
-        if COMPOSITE_MEM_ENTRIES > 0:
-            with _composite_l1_lock:
-                _composite_l1[cache_key] = (
-                    int(expires_at), data, render_rev or 0, _load_render_facts(render_facts),
-                    bool(provisional),
+        if content_sha256 and hashlib.sha256(data).hexdigest() != content_sha256:
+            logger.warning("Final poster cache digest mismatch for %s", cache_key)
+            with _db_lock:
+                get_db().execute(
+                    "DELETE FROM final_poster_cache WHERE cache_key = ?", (cache_key,)
                 )
-                _composite_l1.move_to_end(cache_key)
-                while len(_composite_l1) > COMPOSITE_MEM_ENTRIES:
-                    _composite_l1.popitem(last=False)
+                get_db().commit()
+            return None
+        # Promote to L1
+        _l1_put(cache_key, (
+            int(expires_at), data, render_rev or 0, _load_render_facts(render_facts),
+            bool(provisional),
+        ))
         return data, int(expires_at), bool(provisional)
     except Exception as exc:
         logger.error(f"Final poster cache read error: {exc}")
@@ -882,12 +904,12 @@ def set_cached_final_poster(
                 """
                 INSERT OR REPLACE INTO final_poster_cache
                     (cache_key, jpeg_bytes, cached_at, request_params, expires_at,
-                     render_rev, render_facts, provisional)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     render_rev, render_facts, provisional, content_sha256)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (cache_key, jpeg_bytes, now, request_params, expires_at, render_rev,
                  json.dumps(render_facts) if render_facts is not None else None,
-                 1 if provisional else None),
+                 1 if provisional else None, hashlib.sha256(jpeg_bytes).hexdigest()),
             )
             if COMPOSITE_MAX_ENTRIES > 0:
                 _enforce_composite_cap()
@@ -904,12 +926,7 @@ def set_cached_final_poster(
     _drop_l1(evicted_keys)
 
     # L1: store the freshly-rendered composite so the next hit skips SQLite
-    if COMPOSITE_MEM_ENTRIES > 0:
-        with _composite_l1_lock:
-            _composite_l1[cache_key] = (expires_at, jpeg_bytes, render_rev, render_facts, provisional)
-            _composite_l1.move_to_end(cache_key)
-            while len(_composite_l1) > COMPOSITE_MEM_ENTRIES:
-                _composite_l1.popitem(last=False)
+    _l1_put(cache_key, (expires_at, jpeg_bytes, render_rev, render_facts, provisional))
 
     return expires_at
 

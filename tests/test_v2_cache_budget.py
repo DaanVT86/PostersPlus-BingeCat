@@ -457,6 +457,35 @@ def test_composite_insert_rejects_payload_that_cannot_fit_hard_limit(tmp_path: P
         _close_cache_connection()
 
 
+def test_composite_whose_bytes_do_not_match_their_digest_is_a_miss(tmp_path: Path) -> None:
+    _init_cache(tmp_path)
+    try:
+        with patch.object(cache, "COMPOSITE_MEM_ENTRIES", 0):
+            cache.set_cached_final_poster("good", b"poster-bytes")
+            cache.set_cached_final_poster("bad", b"poster-bytes")
+            db = cache.get_db()
+            db.execute("UPDATE final_poster_cache SET jpeg_bytes=? WHERE cache_key='bad'", (b"tampered",))
+            db.commit()
+            assert cache.get_cached_final_poster("good") == b"poster-bytes"
+            assert cache.get_cached_final_poster("bad") is None
+        assert db.execute("SELECT 1 FROM final_poster_cache WHERE cache_key='bad'").fetchone() is None
+    finally:
+        _close_cache_connection()
+
+
+def test_l1_enforces_its_byte_cap() -> None:
+    cache._composite_l1.clear()
+    with (
+        patch.object(cache, "COMPOSITE_MEM_ENTRIES", 10),
+        patch.object(cache, "COMPOSITE_MEM_MAX_BYTES", 5),
+    ):
+        cache._l1_put("first", (time.time() + 60, b"1234", 0, None, False))
+        cache._l1_put("second", (time.time() + 60, b"5678", 0, None, False))
+        assert list(cache._composite_l1) == ["second"]
+        assert cache.composite_l1_stats() == {"entries": 1, "bytes": 4}
+    cache._composite_l1.clear()
+
+
 def test_source_install_is_atomic_at_hard_limit(tmp_path: Path) -> None:
     store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
     with patch.object(config, "SOURCE_CACHE_MAX_BYTES", 4):
