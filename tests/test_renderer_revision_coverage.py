@@ -271,3 +271,37 @@ def test_optional_backends_that_change_pixels_change_the_revision():
         assert render._compute_renderer_revision() != base
     assert "models/face_detection_yunet.onnx" in render.RENDERER_REVISION_ASSET_MANIFEST
     assert set(render._renderer_environment()["backends"]) == {"skia", "cairosvg", "face_detector"}
+
+
+def test_every_svg_raster_package_and_native_cairo_change_the_revisions():
+    # cairosvg rasterises the SVG marks through cairocffi's own native cairo,
+    # parsing CSS with tinycss2/cssselect2: each version is pixel input.
+    import importlib.metadata
+
+    import cairocffi
+
+    def revisions():
+        return (render._compute_renderer_revision(),
+                render._compute_landscape_renderer_revision(),
+                render._compute_source_recipe_revision())
+
+    base = revisions()
+    assert base[2] == render.SOURCE_RECIPE_REVISION
+    backend = render._svg_raster_backend()
+    assert backend["available"] and backend["native_cairo"] == cairocffi.cairo_version_string()
+    assert set(backend["versions"]) >= {"CairoSVG", "cairocffi", "cssselect2", "tinycss2"}
+    real_version = importlib.metadata.version
+    for name in render._SVG_RASTER_DISTRIBUTIONS:
+        bumped = lambda dist, _name=name: "0.0-test" if dist == _name else real_version(dist)
+        with patch.object(importlib.metadata, "version", bumped):
+            changed = revisions()
+        assert all(new != old for new, old in zip(changed, base)), name
+    with patch.object(cairocffi, "cairo_version_string", lambda: "0.0-test"):
+        assert all(new != old for new, old in zip(revisions(), base))
+
+    def no_cairo():
+        raise OSError("no libcairo")
+
+    with patch.object(cairocffi, "cairo_version_string", no_cairo):
+        assert render._svg_raster_backend()["available"] is False
+        assert all(new != old for new, old in zip(revisions(), base))

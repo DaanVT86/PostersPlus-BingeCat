@@ -1453,12 +1453,46 @@ def _image_library_versions() -> dict[str, str]:
     try:
         import cairo
 
-        versions["cairo"] = cairo.cairo_version_string()
+        versions["pycairo_cairo"] = cairo.cairo_version_string()
         versions["pycairo"] = getattr(cairo, "version", "unknown")
     except ImportError:
-        versions["cairo"] = "unavailable"
+        versions["pycairo_cairo"] = "unavailable"
         versions["pycairo"] = "unavailable"
     return versions
+
+
+# Every distribution cairosvg's import and rasterisation load (CSS parsing and
+# matching, the XML parser, the cffi binding to native cairo).  Pillow is in
+# _image_library_versions.
+_SVG_RASTER_DISTRIBUTIONS = (
+    "CairoSVG", "cairocffi", "cffi", "pycparser",
+    "cssselect2", "tinycss2", "webencodings", "defusedxml",
+)
+
+
+def _svg_raster_backend() -> dict[str, Any]:
+    """cairosvg draws SVG badge marks and logos through cairocffi, which loads
+    native cairo itself, so pycairo's absence says nothing about it."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    def _dist(name: str) -> str:
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return "unavailable"
+
+    try:
+        import cairocffi
+        import cairosvg  # noqa: F401
+
+        native_cairo = cairocffi.cairo_version_string()
+    except Exception:
+        native_cairo = "unavailable"
+    return {
+        "available": native_cairo != "unavailable",
+        "native_cairo": native_cairo,
+        "versions": {name: _dist(name) for name in _SVG_RASTER_DISTRIBUTIONS},
+    }
 
 
 def _compute_semantic_revision(
@@ -1511,15 +1545,9 @@ def _optional_render_backends() -> dict[str, Any]:
         except PackageNotFoundError:
             return "unavailable"
 
-    try:
-        import cairosvg  # noqa: F401
-
-        cairosvg_ok = True
-    except Exception:
-        cairosvg_ok = False
     return {
         "skia": {"available": bool(awards._HAS_SKIA), "version": _dist("skia-python")},
-        "cairosvg": {"available": cairosvg_ok, "version": _dist("CairoSVG")},
+        "cairosvg": _svg_raster_backend(),
         "face_detector": {
             "available": face_detect.available(),
             "model_sha256": face_detect.model_sha256(),
@@ -1554,13 +1582,7 @@ def _source_recipe_environment() -> dict[str, Any]:
         versions["opencv"] = cv2.__version__
     except ImportError:
         versions["opencv"] = "unavailable"
-    try:
-        from importlib.metadata import version
-
-        versions["cairosvg"] = version("CairoSVG")
-    except Exception:
-        versions["cairosvg"] = "unavailable"
-    return {"libraries": versions}
+    return {"libraries": versions, "svg_raster": _svg_raster_backend()}
 
 
 def _compute_renderer_revision(
@@ -1581,6 +1603,15 @@ def _compute_render_policy_revision(*, source_overrides: Mapping[str, str] | Non
         b"postersplus-bingecat-v2-render-policy",
         RENDER_POLICY_REVISION_CODE_ROOTS,
         source_overrides=source_overrides,
+    )
+
+
+def _compute_source_recipe_revision() -> str:
+    return _compute_semantic_revision(
+        b"postersplus-bingecat-v2-source-recipe",
+        SOURCE_RECIPE_REVISION_CODE_ROOTS,
+        assets=SOURCE_RECIPE_REVISION_ASSET_MANIFEST,
+        environment=_source_recipe_environment(),
     )
 
 
@@ -1619,12 +1650,7 @@ if os.environ.get("POSTERSPLUS_EXPECTED_RENDERER_REVISION", "").strip() not in (
         f"computed {RENDERER_REVISION} "
         f"(build fingerprint {RENDERER_BUILD_FINGERPRINT})"
     )
-SOURCE_RECIPE_REVISION = _compute_semantic_revision(
-    b"postersplus-bingecat-v2-source-recipe",
-    SOURCE_RECIPE_REVISION_CODE_ROOTS,
-    assets=SOURCE_RECIPE_REVISION_ASSET_MANIFEST,
-    environment=_source_recipe_environment(),
-)
+SOURCE_RECIPE_REVISION = _compute_source_recipe_revision()
 
 
 def render(
