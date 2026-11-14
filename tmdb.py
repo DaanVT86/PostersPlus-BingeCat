@@ -369,6 +369,10 @@ class V2TMDBMetadata:
     cast: tuple[str, ...] = ()
     imdb_id: str | None = None
     candidates: tuple[V2ArtworkCandidate, ...] = ()
+    # Raw ``{"id", "logo_path"}`` rows for the graphic-badge facts; v2_enrich
+    # validates them.  Part of the details body, so no extra TMDB call.
+    networks: tuple[dict, ...] = ()
+    companies: tuple[dict, ...] = ()
 
     def lifecycle_payload(self) -> dict:
         return {
@@ -568,6 +572,8 @@ async def fetch_v2_metadata(
         cast=cast,
         imdb_id=imdb_id,
         candidates=_v2_artwork_candidates(data.get("images") or {}) if need_images else (),
+        networks=tuple(item for item in (data.get("networks") or [])[:16] if isinstance(item, dict)),
+        companies=tuple(item for item in (data.get("production_companies") or [])[:32] if isinstance(item, dict)),
     )
     if cache_mode == "read_write":
         _V2_METADATA_CACHE[cache_key] = (time.monotonic() + _V2_METADATA_CACHE_TTL, metadata)
