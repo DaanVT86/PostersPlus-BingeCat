@@ -334,6 +334,12 @@ TRENDING_FETCH_TIME          = os.environ.get("TRENDING_FETCH_TIME", "").strip()
 TRENDING_FETCH_TIMEZONE      = os.environ.get("TRENDING_FETCH_TIMEZONE", "UTC").strip()
 TRENDING_FETCH_COUNT         = int(os.environ.get("TRENDING_FETCH_COUNT", "40"))
 TRENDING_BROAD_FETCH_COUNT   = int(os.environ.get("TRENDING_BROAD_FETCH_COUNT", "100"))
+
+# Blockbuster sash: a film among the top-grossing of its release year, by
+# TMDB's worldwide revenue (see box_office.py).  Same defaults as upstream; the
+# upstream sync replaces these two lines with its settings-registry form.
+BLOCKBUSTER_TOP_N            = int(os.environ.get("BLOCKBUSTER_TOP_N", "10"))
+BLOCKBUSTER_MIN_REVENUE      = int(os.environ.get("BLOCKBUSTER_MIN_REVENUE", "100000000"))
 # Quality (AIOStreams) TTL — separate from rating TTL because stream availability
 # for older titles is very stable.  New content keeps the 1-day window so fresh
 # encodes are picked up quickly; old content is cached for much longer.
