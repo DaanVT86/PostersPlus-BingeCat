@@ -61,7 +61,7 @@ APPROVED_SOURCE_RECIPE_REVISION = "91cac721c050ee45072277ad4afe3e3880243c478fa73
 # 980745e7…).  ``ast.dump`` differs per Python minor, hence the map; the R2
 # image runs 3.14, pinned once it is built.
 PORTRAIT_CODE_IDENTITY = {
-    (3, 12): "df21ba7967ce6530c83f20f11c1735e99daa42bbd26eb93de1d0411604fafb58",
+    (3, 12): "748de619f37de9ea707cff14fc3bb5e09cbb964f328644825318889d5530fd3e",
 }
 IN_APPROVED_RUNTIME = render.RENDERER_BUILD_FINGERPRINT == APPROVED_FINGERPRINT
 

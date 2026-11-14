@@ -1477,6 +1477,19 @@ def test_render_endpoint_draws_graphic_badges_only_from_present_facts(tmp_path, 
     assert certified.status_code == 200, certified.text
     assert certified.content != response.content
 
+    # A certificate string reaches the chip as its label, never as int(age).
+    by_cert = {}
+    for cert in ("PG-13", "R", "16+", "16", "NR"):
+        rendered = post(graphic, _facts({"genre": "Drama", "certification": cert}))
+        assert rendered.status_code == 200, (cert, rendered.text)
+        by_cert[cert] = rendered.content
+    assert by_cert["PG-13"] not in (response.content, by_cert["R"], by_cert["16+"])
+    # A known "16+" is drawn as-is, which is what age 16 alone draws ("{age}+").
+    assert by_cert["16+"] == certified.content
+    assert by_cert["16"] not in (response.content, by_cert["16+"])
+    # A certificate no board issues has nothing to draw and no age to fall back on.
+    assert by_cert["NR"] == response.content
+
 
 def test_render_endpoint_auth_headers_replay_and_no_public_cache(tmp_path, monkeypatch):
     import main

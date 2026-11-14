@@ -1286,13 +1286,12 @@ def _compose(
     fallback_title = None
     if logo is None and not spec.textless and not spec.use_original_art:
         fallback_title = title
-    age_rating = (
-        facts.age_rating
-        if "age_rating" in used_fact_fields
-        else facts.certification
-        if "certification" in used_fact_fields
-        else None
-    )
+    certification = facts.certification if "certification" in used_fact_fields else None
+    age_rating = facts.age_rating if "age_rating" in used_fact_fields else None
+    if age_rating is None and spec.badge_display_mode != 7:
+        # Mode 3's age badge prints the certificate text as-is; the graphic
+        # chip takes it as ``certification`` and int()s ``age_rating``.
+        age_rating = certification
     score = _score(spec, bundle, used_ratings)
     labels_token = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
     try:
@@ -1309,6 +1308,7 @@ def _compose(
                 str(facts.release_year) if "release_year" in used_fact_fields else None
             ),
             age_rating=age_rating,
+            certification=certification,
             no_poster=base_reference is None,
             metacritic_score=_metacritic_score(used_ratings),
             ratings=_badge_ratings(bundle, used_ratings),
