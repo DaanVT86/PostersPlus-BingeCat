@@ -15,9 +15,11 @@ class ImportSafetyTests(unittest.TestCase):
         cls.body = html[start:html.index("\n}\n", start)]
         cls.html = html
 
-    def test_keys_fill_empty_fields_only(self):
-        self.assertIn("if (field.value) _keptKeys.push(", self.body)
-        self.assertNotRegex(self.body, r"getElementById\('cfg-(tmdb|mdblist)-key'\)\.value\s*=")
+    def test_keys_are_never_imported(self):
+        # BingeCat fork: an imported URL's keys are ignored, not just kept out
+        # of filled fields (see test_access_key_source for storage).
+        self.assertIsNone(re.search(r"cfg-(tmdb|mdblist)-key", self.body))
+        self.assertIn("if (p.has('tmdb_key') || p.has('mdblist_key')) clearPersistedApiKeys();", self.body)
 
     def test_domain_and_access_key_are_never_imported(self):
         self.assertNotIn("cfg-domain", self.body.split("if (!settingsOnly)")[1].split("// Generated URLs")[0])

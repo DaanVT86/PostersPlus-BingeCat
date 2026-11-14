@@ -78,5 +78,15 @@ class ConfiguratorProtectedExternally(unittest.TestCase):
         self.assertIn("if (serverCaps.access_key && vEl('cfg-access-key') !== serverCaps.access_key)", HTML)
 
 
+
+class ConfiguratorNeverKeepsProviderKeys(unittest.TestCase):
+    """BingeCat fork: TMDB/MDBList keys are neither stored nor imported."""
+
+    def test_provider_keys_are_never_written_to_or_read_from_storage(self):
+        self.assertIsNone(re.search(
+            r"localStorage\.(getItem|setItem)\('postersplus_(tmdb|mdblist)_key'", HTML))
+        self.assertIn("const STORED_API_KEY_NAMES = ['postersplus_tmdb_key', 'postersplus_mdblist_key'];", HTML)
+
+
 if __name__ == "__main__":
     unittest.main()

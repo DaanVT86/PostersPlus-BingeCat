@@ -5949,9 +5949,16 @@ function loadSashOrder() {
   } catch(e) {}
 }
 
+// BingeCat fork: provider API keys are never kept in browser storage (a typed
+// key is used for this session's URLs only), and keys stored by older builds
+// are removed.
+const STORED_API_KEY_NAMES = ['postersplus_tmdb_key', 'postersplus_mdblist_key'];
+function clearPersistedApiKeys() {
+  try { STORED_API_KEY_NAMES.forEach(name => localStorage.removeItem(name)); } catch (e) {}
+}
+
 function saveApiKeys() {
-  localStorage.setItem('postersplus_tmdb_key',    vEl('cfg-tmdb-key'));
-  localStorage.setItem('postersplus_mdblist_key', vEl('cfg-mdblist-key'));
+  clearPersistedApiKeys();
   localStorage.setItem('postersplus_language', vEl('cfg-language'));
   localStorage.setItem('postersplus_primary_client', vEl('cfg-primary-client'));
 }
@@ -6013,14 +6020,11 @@ function persistImdbId(imdbId, tmdbId) {
 }
 
 function hydrateFromLocalStorage() {
-  const tmdb = localStorage.getItem('postersplus_tmdb_key');
-  const mdbl = localStorage.getItem('postersplus_mdblist_key');
+  clearPersistedApiKeys();
   const lang = localStorage.getItem('postersplus_language');
   const client = localStorage.getItem('postersplus_primary_client');
   if (lang) document.getElementById('cfg-language').value = lang;
   if (client && PRIMARY_CLIENTS.has(client)) document.getElementById('cfg-primary-client').value = client;
-  if (tmdb) document.getElementById('cfg-tmdb-key').value = tmdb;
-  if (mdbl) document.getElementById('cfg-mdblist-key').value = mdbl;
   try {
     const raw = localStorage.getItem('postersplus_selection');
     if (!raw) return;
@@ -11043,7 +11047,6 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
     p.set('landscape_vignette_poster_color_top', 'true');
   }
   p.delete('landscape_vignette_top');
-  const _keptKeys = [];   // API keys the URL carried but the fields already had
   // A landscape URL is read the way the server reads it: each "landscape_"
   // per-shape value stands in for the plain one, which older landscape URLs
   // (and presets) still use.  A dual URL keeps the plain names for the
@@ -11088,17 +11091,10 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
       onPrimaryClientChange({ rebuild: false });
     }
 
-    // A URL's API keys fill empty fields only (and never placeholder tokens):
-    // restoring your own URL in a new browser works, but a link someone else
-    // hands you can't swap your keys for theirs, which would send your
-    // lookups through their account.
-    for (const [param, id] of [['tmdb_key', 'cfg-tmdb-key'], ['mdblist_key', 'cfg-mdblist-key']]) {
-      const incoming = (p.get(param) || '').trim();
-      const field = document.getElementById(id);
-      if (!incoming || incoming.startsWith('{') || incoming === field.value) continue;
-      if (field.value) _keptKeys.push(param === 'tmdb_key' ? 'TMDB' : 'MDBList');
-      else field.value = incoming;
-    }
+    // BingeCat fork: API keys in an imported URL are ignored.  An older
+    // generated URL may carry server-side keys; copying them into the form
+    // would show and persist them in the browser.
+    if (p.has('tmdb_key') || p.has('mdblist_key')) clearPersistedApiKeys();
 
     // ── Media identity (skip template placeholders) ────────────────────────
     // Only well-formed ids (template placeholders and anything else are
@@ -11489,7 +11485,7 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
     _saveShapeStash();
   }
 
-  // ── Persist API keys and rebuild ────────────────────────────────────────
+  // ── Persist language/client (never API keys) and rebuild ────────────────────
   if (!settingsOnly) saveApiKeys();
   // Assigning .value never fires change, so the segmented buttons above every
   // imported <select> would still be highlighting whatever they showed before
@@ -11498,11 +11494,6 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
   build();
   queuePreviewReload();
   if (!silent) setStatus('Settings imported from URL.', 'ok');
-  if (!silent && _keptKeys.length) {
-    alert(`Imported. Your ${_keptKeys.join(' and ')} key${_keptKeys.length > 1 ? 's were' : ' was'} kept: `
-      + `an imported URL never replaces a key you already have. To use the URL's key, `
-      + `clear the field first and import again.`);
-  }
   return true;
 }
 
