@@ -5,12 +5,15 @@ names within one module.  Cross-module calls (``fonts.label_font``,
 ``graphic_badges.cinema_ink``, a function-local ``from main import ...``) need
 their own roots, or a change there would alter pixels under an unchanged
 revision.  This traces representative renders the v2 contract can ask for and
-fails on any executed top-level function outside the closure.
+fails on any executed top-level function outside the closure, or on any
+network access (renders are offline).
 """
 from __future__ import annotations
 
 import ast
+import socket
 import sys
+from unittest.mock import patch
 from datetime import date
 from pathlib import Path
 
@@ -74,11 +77,17 @@ def _trace(fn) -> set[tuple[str, str]]:
             return
         called.add((path.name, top))
 
+    def offline(*_args, **_kwargs):
+        raise AssertionError("a v2 render opened a network connection")
+
     sys.setprofile(profile)
     try:
-        fn()
+        with patch.object(socket.socket, "connect", offline), \
+                patch.object(socket, "getaddrinfo", offline):
+            fn()
     finally:
         sys.setprofile(None)
+    assert not [name for _, name in called if "fetch" in name or name == "ensure_assets"]
     return called
 
 
@@ -128,6 +137,16 @@ _CUSTOM = [
     {"rating_display_mode": 5, "sash_mode": "notch", "sash_badge_pos": "right", "sash_badge_style": "black",
      "top_gradient": "custom", "top_gradient_opacity": 0.6, "top_gradient_height": 0.3},
     {"rating_display_mode": 0, "sash_mode": "hidden", "muted": True, "fallback_bg_style": "photoreal"},
+    # R2 options.
+    {"rating_display_mode": 1, "score_glow_color": "match", "vignette_poster_color_top": True,
+     "vignette_poster_color_bottom": True, "vignette_color_style": "muted", "label_font": "rubik"},
+    {"rating_display_mode": 2, "badge_display_mode": 7, "sash_mode": "notch", "sash_badge_pos": "auto",
+     "badge_group2": "tl:2:network,studio", "badge_group3": "br:1:cinema", "badge_cert_style": "frosted",
+     "vignette_poster_color_bottom": True, "vignette_color_style": "reference"},
+    {"rating_display_mode": 3, "minimalist_append_mode": 2, "sash_mode": "notch",
+     "sash_badge_pos": "edge_right", "sash_edge_y": 0.3, "label_font": "oswald"},
+    {"rating_display_mode": 4, "sash_mode": "notch", "sash_badge_pos": "left", "sash_chip_x": 0.1,
+     "sash_chip_y": 0.05, "badge_display_mode": 7, "badge_overflow": "hide"},
 ]
 
 

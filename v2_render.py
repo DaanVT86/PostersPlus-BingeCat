@@ -167,7 +167,7 @@ RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("graphic_badges.py", ("*",)),
     ("fonts.py", ("*",)),
     ("pxscale.py", ("*",)),
-    ("certifications.py", ("DEFAULT_COUNTRY",)),
+    ("certifications.py", ("*",)),
     ("config.py", _COMPOSITOR_CONFIG_INPUTS),
     # Not JSON values, so hashed as definitions (rating badges normalise with them).
     ("config.py", ("SCORE_NORMALISERS", "LANDSCAPE_WIDTH", "LANDSCAPE_HEIGHT")),
@@ -1903,7 +1903,7 @@ LANDSCAPE_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("graphic_badges.py", ("*",)),
     ("fonts.py", ("*",)),
     ("pxscale.py", ("*",)),
-    ("certifications.py", ("DEFAULT_COUNTRY",)),
+    ("certifications.py", ("*",)),
     ("tmdb.py", ("ensure_light_logo", "poster_canvas")),
     ("config.py", _COMPOSITOR_CONFIG_INPUTS),
     # Not JSON values, so hashed as definitions (rating badges normalise with them).

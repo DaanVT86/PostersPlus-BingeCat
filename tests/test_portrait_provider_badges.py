@@ -48,7 +48,12 @@ def test_missing_expired_and_unused_ratings_have_the_expected_dependencies():
     {"rating_badges": "myanimelist"}, {"rating_badges": "anilist"},
     {"sash_badge_pad": 0.49}, {"sash_badge_pad": 1.51}, {"sash_badge_pad": True},
     {"sash_badge_pad": float("nan")}, {"meta_order": "genre,year,year"},
-    {"sash_badge_pos": "auto"}, {"minimalist_separator": "star"},
+    {"sash_badge_pos": "top"}, {"minimalist_separator": "star"},
+    {"badge_display_mode": 7, "badge_group1": "chip:4:video,cert"},
+    {"badge_display_mode": 7, "badge_group1": "chip:4:cert", "badge_group2": "tl:2:cert"},
+    {"badge_group1": "chip:04:cert"}, {"resolution": 600}, {"label_font": "custom-x"},
+    {"score_glow_color": "red"}, {"sash_chip_x": 0.3}, {"vignette_color_style": "loud"},
+    {"badge_display_mode": 5},
 ])
 def test_strict_extension_boundary(options):
     with pytest.raises((ValueError, TypeError)):
@@ -142,3 +147,25 @@ def test_weighted_fallback_does_not_reintroduce_ineligible_badge_at_composition(
     v2_render._compose(bundle, spec, None, base_reference=None, logo_reference=None,
                        used_ratings=selected, used_fact_fields=frozenset())
     assert captured["ratings"] == {}
+
+
+def test_r2_options_are_absent_unless_active_and_reach_the_engine():
+    base = canonicalize_config({"rating_display_mode": 2, "sash_mode": "notch"})
+    # Defaults and options that do nothing for this layout leave the hash alone.
+    for extra in ({"badge_group1": "chip:4:cert"}, {"badge_group2": "tl:2:network"},
+                  {"sash_chip_x": 0.1}, {"score_glow_color": "match"},
+                  {"vignette_color_style": "muted"}, {"sash_badge_pos": "auto"}):
+        assert canonicalize_config({"rating_display_mode": 2, "sash_mode": "notch", **extra}).sha256() == base.sha256()
+    graphic = canonicalize_config({
+        "rating_display_mode": 2, "sash_mode": "notch", "sash_badge_pos": "auto",
+        "badge_display_mode": 7, "badge_group2": "tl:2:network,studio", "badge_logo_scale": 1.5,
+        "vignette_poster_color_bottom": True, "label_font": "rubik",
+    })
+    canonical = json.loads(graphic.canonical_json())
+    assert canonical["badge_group2"] == "tl:2:network,studio"
+    assert canonical["sash_badge_pos"] == "auto" and canonical["badge_logo_scale"] == 1.5
+    assert "badge_group1" not in canonical and "badge_cert_style" not in canonical
+    assert canonicalize_config(canonical).sha256() == graphic.sha256()
+    cfg = _request_config(main, graphic, "en")
+    assert (cfg.badge_display_mode, cfg.badge_group1, cfg.badge_group2) == (7, "chip:4:cert", "tl:2:network,studio")
+    assert cfg.vignette_poster_color_bottom and cfg.label_font == "rubik" and cfg.badge_logo_scale == 1.5
