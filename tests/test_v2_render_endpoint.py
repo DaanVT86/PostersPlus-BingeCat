@@ -1440,6 +1440,37 @@ def test_locale_title_fallback_and_badge_policy_are_deterministic(tmp_path):
     assert fallback_bytes == direct_bytes
 
 
+def test_render_endpoint_draws_graphic_badges_only_from_present_facts(tmp_path, monkeypatch):
+    import main
+
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    art = _install_art(store)
+    monkeypatch.setattr(main._cfg, "POSTERSPLUS_BINGECAT_REQUEST_SECRET", SECRET.decode())
+    monkeypatch.setattr(main, "_V2_NONCE_STORE", MemoryNonceStore())
+    monkeypatch.setattr(main, "_V2_SOURCE_STORE", store)
+    client = TestClient(main.app)
+
+    def post(config, facts):
+        body = _bundle(config, _snapshot(source_art=(art,), facts=facts)).model_dump_json(
+            by_alias=True).encode()
+        return client.post("/v2/render", content=body,
+                           headers=_signed_headers("POST", "/v2/render", body))
+
+    graphic = _canonical_config(
+        use_original_art=True, hide_genre=True, badge_display_mode=7,
+        badge_group2="tl:2:network,studio", badge_group3="br:1:cinema",
+    )
+    plain = _canonical_config(use_original_art=True, hide_genre=True)
+    bare = _facts({"genre": "Drama"})
+    response = post(graphic, bare)
+    assert response.status_code == 200, response.text
+    # No certificate, network, studio or cinema facts: no badge is drawn.
+    assert response.content == post(plain, bare).content
+    certified = post(graphic, _facts({"genre": "Drama", "age_rating": 16}))
+    assert certified.status_code == 200, certified.text
+    assert certified.content != response.content
+
+
 def test_render_endpoint_auth_headers_replay_and_no_public_cache(tmp_path, monkeypatch):
     import main
 

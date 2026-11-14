@@ -452,8 +452,6 @@ def _resolve_spec(bundle: RenderInputBundle) -> CanonicalRenderSpec:
         expected = json.loads(spec.canonical_json())
         if _json_compatible(bundle.canonical_config) != expected:
             raise RenderInputError("canonical_config_required")
-        if spec.badge_display_mode not in {0, 3}:
-            raise RenderInputError("unsupported_badge_mode")
 
     if spec.sha256() != bundle.config_sha256:
         raise RenderConflict("config_hash_mismatch")

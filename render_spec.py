@@ -76,7 +76,7 @@ PORTRAIT_DEFAULTS = {
     "badge_group1": "chip:4:cert", "badge_group2": "", "badge_group3": "", "badge_group4": "",
     "badge_cert_style": "solid", "badge_logo_style": "solid", "badge_cinema_style": "auto",
     "badge_logo_scale": 1.0, "badge_overflow": "move",
-    "resolution": 500, "label_font": "inter",
+    "label_font": "inter",
 }
 # Optional floats must be written as JSON floats in the canonical form.
 PORTRAIT_FLOAT_FIELDS = frozenset(name for name, value in PORTRAIT_DEFAULTS.items() if isinstance(value, float))
@@ -95,7 +95,6 @@ LABEL_FONTS = (
     "inter", "almarai", "rubik", "jakarta", "manrope", "montserrat", "robotocondensed",
     "barlowcondensed", "oswald", "spacegrotesk", "exo2", "fira", "opensans",
 )
-POSTER_RESOLUTIONS = (500, 780, 1000, 1500, 2000)
 _GLOW_COLOR = re.compile(r"^#[0-9a-f]{6}$")
 BADGE_PROVIDERS = (
     "imdb", "tmdb", "letterboxd", "trakt", "tomatoes", "popcorn",
@@ -213,10 +212,6 @@ def _validated_r2_options(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid score_glow_color")
     out["score_glow_color"] = glow
     out["vignette_color_style"] = config.get("vignette_color_style", PORTRAIT_DEFAULTS["vignette_color_style"])
-    resolution = config.get("resolution", PORTRAIT_DEFAULTS["resolution"])
-    if isinstance(resolution, bool) or not isinstance(resolution, int) or resolution not in POSTER_RESOLUTIONS:
-        raise ValueError("invalid resolution")
-    out["resolution"] = resolution
     taken: set[str] = set()
     for name in GRAPHIC_BADGE_GROUPS:
         raw = config.get(name, PORTRAIT_DEFAULTS[name])
@@ -328,7 +323,7 @@ def portrait_options(config: Mapping[str, Any]) -> dict[str, Any]:
         "badge_logo_style": graphic and bool(group_slots & {"network", "studio"}),
         "badge_logo_scale": graphic and bool(group_slots & {"network", "studio"}),
         "badge_cinema_style": graphic and "cinema" in group_slots,
-        "resolution": True, "label_font": True,
+        "label_font": True,
     }
     values = dict(config, sash_badge_pad=float(pad), rating_badges=providers, **extra)
     for name, enabled in active.items():
@@ -455,7 +450,6 @@ class CanonicalRenderSpec:
     badge_cinema_style: str = "auto"
     badge_logo_scale: float = 1.0
     badge_overflow: str = "move"
-    resolution: int = 500
     label_font: str = "inter"
 
     def canonical_json(self) -> str:
@@ -636,7 +630,11 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         values.setdefault("sash_badge_inset", client_insets[1])
     top_gradient = _choice(values.get("top_gradient"), defaults.top_gradient, {"off", "low", "medium", "high", "custom"})
     bottom_gradient = _choice(values.get("bottom_gradient"), defaults.bottom_gradient, {"off", "low", "medium", "high", "custom"})
-    badge_display_mode = _int(values.get("badge_display_mode"), defaults.badge_display_mode, 0, 7)
+    if "resolution" in values:
+        # The v2 canvas is fixed at 500x750; upstream's larger canvases are not offered.
+        raise ValueError("resolution is not supported by the v2 contract")
+    # One past the highest mode, so a larger value is rejected instead of clamped onto 7.
+    badge_display_mode = _int(values.get("badge_display_mode"), defaults.badge_display_mode, 0, GRAPHIC_BADGE_MODE + 1)
     if badge_display_mode not in {0, 3, GRAPHIC_BADGE_MODE}:
         raise ValueError("badge_display_mode is restricted to 0, 3 or 7 for BingeCat custom configs")
     sash_input = values.get("sash_priority")
