@@ -17,7 +17,6 @@ from unittest.mock import patch
 from datetime import date
 from pathlib import Path
 
-import pytest
 from PIL import Image
 
 import v2_render as render

@@ -1,11 +1,9 @@
 from dataclasses import asdict, replace
 from datetime import timedelta
-import hashlib
-import io
 import json
 from pathlib import Path
 
-from PIL import Image, ImageFont
+from PIL import Image
 import pytest
 
 import awards
