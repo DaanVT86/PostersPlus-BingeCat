@@ -3055,6 +3055,18 @@ def _render_config_signature(cfg: "RequestConfig") -> str:
         fields["sash_priority"] = list(_SASH_PRIORITY_V1)
     elif fields.get("sash_priority") == list(_SASH_PRIORITY_V1):
         fields["sash_priority"] = [*_SASH_PRIORITY_V1, "#v1"]
+    # BingeCat fork: values that draw nothing don't split the key.  sash_badge
+    # is a parser alias (sash_mode is what renders); explicit default weights
+    # score as omitted ones; custom gradient and palette values only count
+    # when their mode is on.
+    fields.pop("sash_badge", None)
+    for _name, _default in (("movie_weights", _cfg.MOVIE_WEIGHTS), ("tv_weights", _cfg.TV_WEIGHTS)):
+        fields[_name] = {k: float(v) for k, v in sorted((fields[_name] or _default).items())}
+    for _side in ("top", "bottom"):
+        if fields.get(f"{_side}_gradient") != "custom":
+            fields[f"{_side}_gradient_opacity"] = fields[f"{_side}_gradient_height"] = None
+    if cfg.score_color_mode != 3 and cfg.bar_accent != "palette_custom":
+        fields["score_custom_palette"] = None
     return json.dumps(fields, sort_keys=True, default=_stable)
 
 
