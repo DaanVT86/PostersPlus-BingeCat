@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import httpx
 
+import box_office
 import tvdb
 from awards import FETCH_FAILED, _RateLimited, parse_mdblist_awards
 from bingecat_resolver import ResolvedIdentity, resolve_v2_identity
@@ -23,6 +24,8 @@ from discovery import (
     NOTABLE_STUDIOS,
 )
 from integration_contract import (
+    BadgeFactsEnvelope,
+    BadgeLogoEntry,
     CONTRACT_SCHEMA,
     CONTRACT_VERSION,
     EnrichmentRequest,
@@ -102,10 +105,12 @@ class ProviderHooks:
     fetch_release: ProviderCallable
     fetch_tvdb: ProviderCallable
     materialize_art: ProviderCallable
+    # None skips the Blockbuster lookup (tests that wire only the core hooks).
+    fetch_box_office: ProviderCallable | None = None
 
     @classmethod
     def all(cls, value: ProviderCallable) -> "ProviderHooks":
-        return cls(value, value, value, value, value, value, value)
+        return cls(value, value, value, value, value, value, value, value)
 
 
 @dataclass(frozen=True)
@@ -292,6 +297,7 @@ DEFAULT_HOOKS = ProviderHooks(
     fetch_release=fetch_v2_release_status,
     fetch_tvdb=tvdb.fetch_v2_artwork_candidates,
     materialize_art=_default_materialize_art,
+    fetch_box_office=box_office.is_blockbuster,
 )
 
 
@@ -362,6 +368,64 @@ _TMDB_DERIVED_FACTS = frozenset(
         "release_status",
     }
 )
+
+
+def _badge_logo_entries(rows: tuple[dict, ...]) -> tuple[BadgeLogoEntry, ...]:
+    """TMDB rows reduced as upstream ``_logo_entries``; a malformed logo path
+    keeps the id (upstream's streamer lookup needs ids without logos too)."""
+    entries: list[BadgeLogoEntry] = []
+    for row in rows:
+        for path in (row.get("logo_path"), None):
+            try:
+                entries.append(BadgeLogoEntry(id=row.get("id"), logo_path=path))
+                break
+            except ValueError:
+                continue
+    return tuple(entries)
+
+
+async def _badge_facts(
+    metadata: V2TMDBMetadata,
+    runtime: EnrichmentRuntime,
+    evaluated_at: datetime,
+) -> BadgeFactsEnvelope:
+    """Graphic-badge and Blockbuster facts, a by-product of a TMDB metadata
+    fetch: networks and companies come from the same details body, and the
+    Blockbuster list is one cached call per release year (box_office.py).
+
+    No renderer requirement asks for them yet, so they never trigger a provider
+    call of their own, never make a result partial and add no provider status.
+    A Blockbuster list that can't be had leaves the fact absent, not False.
+    """
+    groups: list[tuple[str, dict[str, Any]]] = []
+    logos: dict[str, Any] = {"companies": _badge_logo_entries(metadata.companies)}
+    if metadata.media_type == "series":
+        logos["networks"] = _badge_logo_entries(metadata.networks)
+    groups.append(("tmdb", logos))
+    lookup = runtime.hooks.fetch_box_office
+    if metadata.media_type == "movie" and lookup is not None and runtime.tmdb_key:
+        try:
+            hit = await _maybe_await(
+                lookup(runtime.client, metadata.tmdb_id, metadata.release_date, runtime.tmdb_key)
+            )
+        except Exception:
+            hit = None
+        if isinstance(hit, bool):
+            groups.append(("tmdb_box_office", {"is_blockbuster": hit}))
+    expires_at = evaluated_at + timedelta(days=7)
+    return BadgeFactsEnvelope(
+        values={name: value for _source, values in groups for name, value in values.items()},
+        provenance=tuple(
+            {
+                "fields": tuple(values),
+                "source": source,
+                "observed_at": evaluated_at,
+                "checked_at": evaluated_at,
+                "expires_at": expires_at,
+            }
+            for source, values in groups
+        ),
+    )
 
 
 def _render_specs(request: EnrichmentRequest) -> tuple[CanonicalRenderSpec, ...]:
@@ -1402,6 +1466,12 @@ async def enrich(
             expires_at=evaluated_at + timedelta(days=7),
         )
 
+    badge_facts = (
+        await _badge_facts(metadata, runtime, evaluated_at)
+        if metadata is not None and not request.artwork_only
+        else None
+    )
+
     if (
         not request.artwork_only
         and requirements.trending
@@ -1942,6 +2012,7 @@ async def enrich(
         source_art=tuple(source_art),
         partial=partial,
         retry_at=retry_at,
+        badge_facts=badge_facts,
     )
     if landscape_specs:
         # Only landscape requests get the extra field, so portrait responses
