@@ -4111,7 +4111,7 @@ def _fog_faces(poster: Image.Image) -> list[tuple[float, float, float, float]]:
         # Cached by the pixels themselves: the same art comes back for every
         # settings variant, rank change and cache bust, and YuNet was a fifth
         # of a vignette render (serialised across render threads, too).
-        key = f"{face_detect.DETECTOR_SIGNATURE}:{poster.mode}:{poster.width}x{poster.height}:" + \
+        key = f"{face_detect.cache_signature()}:{poster.mode}:{poster.width}x{poster.height}:" + \
             hashlib.blake2b(poster.tobytes(), digest_size=16).hexdigest()
         boxes = get_cached_face_boxes(key)
         if boxes is None:

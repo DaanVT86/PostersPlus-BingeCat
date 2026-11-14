@@ -1517,16 +1517,12 @@ def _optional_render_backends() -> dict[str, Any]:
         cairosvg_ok = True
     except Exception:
         cairosvg_ok = False
-    try:
-        model_sha256 = hashlib.sha256(Path(face_detect._MODEL_PATH).read_bytes()).hexdigest()
-    except OSError:
-        model_sha256 = "unavailable"
     return {
         "skia": {"available": bool(awards._HAS_SKIA), "version": _dist("skia-python")},
         "cairosvg": {"available": cairosvg_ok, "version": _dist("CairoSVG")},
         "face_detector": {
             "available": face_detect.available(),
-            "model_sha256": model_sha256,
+            "model_sha256": face_detect.model_sha256(),
             "opencv": face_detect._cv2.__version__ if face_detect._HAS_CV2 else "unavailable",
             "signature": face_detect.DETECTOR_SIGNATURE,
         },

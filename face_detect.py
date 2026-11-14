@@ -14,6 +14,8 @@ the saliency crop.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import logging
 import os
 import threading
@@ -56,6 +58,26 @@ _MAX_SIDE = 1280
 DETECTOR_SIGNATURE = (
     f"yunet:{os.path.basename(_MODEL_PATH)}:{_SCORE_THRESHOLD}:half{_RETRY_MIN_WIDTH}"
 )
+
+
+
+@functools.cache
+def model_sha256() -> str:
+    """Digest of the YuNet model file; "unavailable" when it can't be read."""
+    try:
+        with open(_MODEL_PATH, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return "unavailable"
+
+
+def cache_signature() -> str:
+    """face_box_cache key prefix: DETECTOR_SIGNATURE plus the OpenCV version and
+    model digest (the values the renderer environment fingerprint records), so
+    a persistent cache never serves boxes an older detector found."""
+    opencv = _cv2.__version__ if _HAS_CV2 else "unavailable"
+    return f"{DETECTOR_SIGNATURE}:cv{opencv}:{model_sha256()}"
+
 
 _detector = None
 _load_failed = False

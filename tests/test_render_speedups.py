@@ -151,6 +151,26 @@ class FaceBoxCacheTests(_TempDb):
              mock.patch.object(face_detect, "available", lambda: True):
             self.assertEqual(main._fog_faces(art), [(1.0, 2.0, 3.0, 4.0)])
 
+    def test_detector_change_misses_the_cache(self):
+        art = _art()
+        calls = []
+
+        def _detect(image):
+            calls.append(image.size)
+            return [(1.0, 2.0, 3.0, 4.0, 0.99)]
+        with mock.patch.object(face_detect, "detect_face_boxes", _detect), \
+             mock.patch.object(face_detect, "available", lambda: True):
+            main._fog_faces(art)
+            main._fog_faces(art)
+            self.assertEqual(len(calls), 1)
+            if face_detect._HAS_CV2:
+                with mock.patch.object(face_detect._cv2, "__version__", "0.0.0-older"):
+                    main._fog_faces(art)
+                self.assertEqual(len(calls), 2)                # OpenCV version is keyed
+            with mock.patch.object(face_detect, "model_sha256", lambda: "0" * 64):
+                main._fog_faces(art)
+            self.assertEqual(len(calls), 3 if face_detect._HAS_CV2 else 2)  # model digest is keyed
+
 
 if __name__ == "__main__":
     unittest.main()
