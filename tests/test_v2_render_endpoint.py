@@ -356,16 +356,23 @@ def _legacy_config_from_canonical_query(spec, *, locale: str):
         elif field_name == "sash_priority":
             exclusions = tuple(f"-{slot}" for slot in spec.sash_exclusions)
             params[field_name] = ",".join((*value, *exclusions))
-        elif field_name == "minimalist_append_mode" and value == 3:
-            # The query string spells the contract's Dual rating as 4 (its 3
-            # is upstream's Split).
-            params[field_name] = "4"
         else:
             params[field_name] = str(value)
     # Request locale controls labels; logo policy remains the preset's asset
     # language and is set independently by the v2 adapter.
     params["logo_language"] = locale
     return main.build_request_config(params)
+
+
+def test_legacy_query_minimalist_append_3_stays_dual_rating():
+    import main
+
+    # This fork's URLs spelled Dual rating as 3 before the upstream sync; the
+    # engine numbers it 4 (its 3 is upstream's Split, 4 in the URL).
+    assert main.build_request_config({"minimalist_append_mode": "3"}).minimalist_append_mode == 4
+    assert main.build_request_config({"minimalist_append_mode": "4"}).minimalist_append_mode == 3
+    assert main.build_request_config({"minimalist_append_mode": "2"}).minimalist_append_mode == 2
+    assert main.build_request_config({}).minimalist_append_mode == 0
 
 
 def _signed_headers(method: str, path: str, body: bytes, *, request_id=None):

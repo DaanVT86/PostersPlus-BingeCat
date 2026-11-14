@@ -3456,7 +3456,12 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.minimalist_mode_font_size_ratio = _f("minimalist_mode_font_size_ratio", cfg.minimalist_mode_font_size_ratio, 0.0, 0.5)
     cfg.minimalist_mode_font_x_offset = _f("minimalist_mode_font_x_offset", cfg.minimalist_mode_font_x_offset, 0.0, 1.0)
     cfg.minimalist_mode_font_y_offset = _f("minimalist_mode_font_y_offset", cfg.minimalist_mode_font_y_offset, 0.0, 1.0)
-    cfg.minimalist_append_mode = _i("minimalist_append_mode", cfg.minimalist_append_mode, 0, 4)
+    # URL 3 is Dual rating, as in this fork's URLs from before the upstream sync
+    # (and the v2 contract); upstream's Split takes 4 in the URL.  The engine
+    # keeps upstream's numbering: 3 = Split, 4 = Dual.
+    if "minimalist_append_mode" in params:
+        _mam = _i("minimalist_append_mode", cfg.minimalist_append_mode, 0, 4)
+        cfg.minimalist_append_mode = {3: 4, 4: 3}.get(_mam, _mam)
     cfg.minimalist_score_out_of_10 = _b("minimalist_score_out_of_10", cfg.minimalist_score_out_of_10)
     cfg.minimalist_center = _b("minimalist_center", cfg.minimalist_center)
     _msep = (params.get("minimalist_separator") or "").strip().lower()

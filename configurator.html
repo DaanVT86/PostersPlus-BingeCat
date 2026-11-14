@@ -2973,7 +2973,8 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                     <option value="0" selected>Year</option>
                     <option value="1">Rating</option>
                     <option value="2">Both</option>
-                    <option value="3">Split</option>
+                    <option value="3">Dual rating</option>
+                    <option value="4">Split</option>
                   </select>
                   <div class="segmented" data-for="cfg-min-append"></div>
                 </div>
@@ -10141,9 +10142,9 @@ function _updateMinimalistRows() {
   const hideRating = c('tog-hide-rating');
 
   const row = document.getElementById('minimalist-center-row');
-  if (row) row.style.display = (isMinimal && append !== 3) ? '' : 'none';
+  if (row) row.style.display = (isMinimal && append !== 4) ? '' : 'none';
 
-  // Year (0), Both (2) and Split (3) draw the genre|year separator; Rating (1)
+  // Year (0), Both (2) and Split (4; 3 is Dual rating in this fork's URLs) draw the genre|year separator; Rating (1)
   // and Both draw the one before the score.
   const showField  = isMinimal && append !== 1;
   // Rating badges stand where the score's separator would, so it has nothing
@@ -10189,7 +10190,7 @@ function _ratingLabelParts() {
     genre: mode >= 1,
     // Rating Bar: Year (0) / Year + Sash (2).  Minimalist: every layout but
     // Rating (1).  Bar: the labels that name the year.  Clean never shows it.
-    year: (mode === 1 && accentAppend !== 1) || (mode === 3 && minAppend !== 1)
+    year: (mode === 1 && accentAppend !== 1) || (mode === 3 && minAppend !== 1 && minAppend !== 3)
           || (mode === 4 && (barAppend === 'rating_year' || barAppend === 'year')),
     // A printed score, or the Rating Bar / rating-fill Bar that draws one.
     score: mode === 1 || mode === 2 || mode === 3
@@ -10230,7 +10231,7 @@ function _updateLabelRows() {
   const NAMES = { genre: 'Genre', year: 'Year', rating: 'Rating' };
   // Minimalist's Split hangs the rating off a margin of its own: the left
   // one when it comes first, the right one otherwise, wherever else it is.
-  const split = !landscape && _effRatingMode() === 3 && vEl('cfg-min-append') === '3';
+  const split = !landscape && _effRatingMode() === 3 && vEl('cfg-min-append') === '4';
   const effect = o => {
     const ks = o.value.split(',').filter(k => printed[k]);
     if (!split || !ks.includes('rating')) return ks.join(',');
