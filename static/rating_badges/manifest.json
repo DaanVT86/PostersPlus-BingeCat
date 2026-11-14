@@ -1,59 +1,61 @@
 {
-  "source": "Simple Icons 13.20.0 (CC0); Wikimedia Commons public-domain RT audience mark; generic Material Symbols thumbs-up (Apache-2.0). Brand marks remain their owners\u2019 trademarks.",
-  "sources": [
-    {
-      "name": "imdb",
-      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/imdb.svg",
-      "sha256": "c6eff80e69ce5511d4c7bed436fb367f6fa5d9e2d1b68cc56753a1b5c00e4c25"
+  "note": "Pinned rating-badge marks (rating_badges._FILES), packaged so a render never fetches them and every Core draws identical badges. Sources and licences as listed in rating_badges.py; brand marks remain their owners' trademarks.",
+  "files": {
+    "imdb": {
+      "file": "0a1b5cd02f8aecdf4b9bbf1bda2950487e5c29c0.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/IMDB_Logo_2016.svg"
     },
-    {
-      "name": "themoviedatabase",
-      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/themoviedatabase.svg",
-      "sha256": "e136b127f5184f95b999e68548618a8507c878587f5f73af5293c56c59e854a5"
+    "rt_fresh": {
+      "file": "5099a1d8f0dccfa0584f25387d08ecc1434cb375.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Rotten_Tomatoes.svg"
     },
-    {
-      "name": "letterboxd",
-      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/letterboxd.svg",
-      "sha256": "8ff6cf562b555ae1fdc3437e0a30bea6f20cc3ab76774b587c60ed7e51c2162e"
+    "rt_lettered": {
+      "file": "bcadeaaf2bd2b4f1421cbf5b1e8fe318e17856d0.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Rotten_Tomatoes_alternative_logo.svg"
     },
-    {
-      "name": "trakt",
-      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/trakt.svg",
-      "sha256": "f7d71f8dc4a5dcfb164b46f1455273b80ce8ea676abc96c98cfbaa73d29845c1"
+    "rt_rotten": {
+      "file": "4b2867d30f31941105f80f544acf1e283946e4e8.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Rotten_Tomatoes_rotten.svg"
     },
-    {
-      "name": "rottentomatoes",
-      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/rottentomatoes.svg",
-      "sha256": "31ee403cde05ab5cd78c9a0ba4f1448a6114fd63f4d8a20da4e2c342672da732"
+    "rt_upright": {
+      "file": "63bbcf6deb1bf8ec8268052e1cc41681794fed93.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Rotten_Tomatoes_positive_audience.svg"
     },
-    {
-      "name": "metacritic",
-      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/13.20.0/icons/metacritic.svg",
-      "sha256": "a25ab4c4c04e10a4af5092e37d6fd1c0791cd0b7c182e95f00f101f12283a69b"
+    "rt_spilled": {
+      "file": "83ecbf269edf953837f6c930af510043e42e3964.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Rotten_Tomatoes_negative_audience.svg"
     },
-    {
-      "name": "popcorn",
-      "url": "https://commons.wikimedia.org/wiki/Special:FilePath/Rotten_Tomatoes_positive_audience.svg",
-      "sha1": "63bbcf6deb1bf8ec8268052e1cc41681794fed93",
-      "sha256": "2ad511c7a101a7f2f8810434911df8c13cc126fa691272242037237172600bc3"
+    "metacritic": {
+      "file": "f36dd4ffb2045f91a84ae91cc73dd1fd33369cde.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Metacritic_logo_Roundel.svg"
     },
-    {
-      "name": "thumb_up",
-      "url": "https://cdn.jsdelivr.net/npm/@material-symbols/svg-700@0.47.5/rounded/thumb_up-fill.svg",
-      "upstream_sha1": "7f052d1f2827686651bc2f22bdc105dedb48ca07",
-      "note": "Gold fill prepared locally; generic convention, not an official RogerEbert.com logo."
+    "letterboxd": {
+      "file": "3c22c25f6e1ce3a26c0bd59e7f70729ddbaddb6b.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Letterboxd_2018_logo_(vertical).svg"
+    },
+    "trakt": {
+      "file": "87ee5c6b8e0e4370837299905c1f105f32b23843.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Trakt.tv-favicon.svg"
+    },
+    "myanimelist": {
+      "file": "a4ef3a65aaed28a1e32f7c070230427f1e3ca8b6.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/MyAnimeList_favicon.svg"
+    },
+    "anilist": {
+      "file": "9ca4ba567100a290d007d43c6beae38728061909.svg",
+      "source": "https://commons.wikimedia.org/wiki/Special:FilePath/AniList_logo.svg"
+    },
+    "tmdb": {
+      "file": "bbdb45a8e78cf26bb19bc994a4553efcee54f38c.svg",
+      "source": "https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6bffa71d7f5c4.svg"
+    },
+    "kitsu": {
+      "file": "317e69e7dcc993124443042f080eff50b0179401.svg",
+      "source": "https://cdn.jsdelivr.net/npm/simple-icons@16.32.0/icons/kitsu.svg"
+    },
+    "thumb_up": {
+      "file": "7f052d1f2827686651bc2f22bdc105dedb48ca07.svg",
+      "source": "https://cdn.jsdelivr.net/npm/@material-symbols/svg-700@0.47.5/rounded/thumb_up-fill.svg"
     }
-  ],
-  "assets": {
-    "imdb.png": "4e572a5a017fdaf0681bcbde9caba622acc0919909878b630c2b7b149cc3b525",
-    "letterboxd.png": "780239b9415278e4d1c94f3d646e8478ef38694bf70984dceadc1b10aa8e3989",
-    "metacritic.png": "7948231bfd1a524025da634df64f2b534c3424e1b7d783aa450f04738dfbad95",
-    "metacriticuser.png": "1cd95e7e481e3089e560b8d5b5aedc230071b70cffe6ac4d100842308973c9f8",
-    "popcorn.png": "eb9df00894fe3103b96351aabc949ba100f09e3a1034df4a8061037eaeefb512",
-    "rogerebert.png": "89fb100214cefbbec08aff50aa01c2d6f6310a344d20d8835bfe06e5ae02c210",
-    "tmdb.png": "0e42aa6990afed5fa44e3b293d19cfe9cb50c6cc78c195bb10151d9dc5da7f29",
-    "tomatoes.png": "2745b6a8263e0281d78f38ab3c68844d5483b5b61160f15b94975f6efcd480fe",
-    "trakt.png": "a1c92abe5c31fc8dc872d8a5ed0f9bb37d3f8063cef4bafa75e6c21816570a8a"
-  },
-  "notes": "MC user uses the Metacritic mark in user green. Popcorn uses the fixed upright audience bucket, independent of score. Roger Ebert uses the generic thumbs-up convention, not an official RogerEbert.com logo."
+  }
 }

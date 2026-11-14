@@ -142,8 +142,9 @@ RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "draw_frosted_bar",
             "draw_score_bar",
             "draw_score_bar_vertical",
-            "sample_frosted_bar_rgb",
             "score_color_for_mode",
+            "bar_fill_color",
+            "frosted_bar_box",
         ),
     ),
     (
@@ -151,21 +152,38 @@ RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "draw_award_badge",
             "draw_award_sash",
-            "sample_frosted_notch_rgb",
-            "sample_frosted_sash_rgb",
+            "dominant_frost_rgb",
+            "_frosted_tint",
+            "side_chip_band",
+            "_notch_heights",
+            "_SIDE_MARGIN",
         ),
     ),
-    # Cross-module imports are not followed by the per-module AST closure.
+    # Cross-module imports are not followed by the per-module AST closure, so
+    # every module the engine calls into is listed (whole modules for the
+    # small render-only ones).  tests/test_renderer_revision_coverage.py traces
+    # renders and fails on executed code outside this closure.
     ("rating_badges.py", ("*",)),
+    ("graphic_badges.py", ("*",)),
+    ("fonts.py", ("*",)),
+    ("pxscale.py", ("*",)),
+    ("certifications.py", ("DEFAULT_COUNTRY",)),
     ("config.py", _COMPOSITOR_CONFIG_INPUTS),
+    # Not JSON values, so hashed as definitions (rating badges normalise with them).
+    ("config.py", ("SCORE_NORMALISERS", "LANDSCAPE_WIDTH", "LANDSCAPE_HEIGHT")),
     ("render_spec.py", (
         "PORTRAIT_DEFAULTS", "BADGE_PROVIDERS", "portrait_options",
         "badge_layout", "weighted_rating_needed",
     )),
-    ("age_badge.py", ("draw_quality_age_badge", "draw_tier_bar", "_score_points")),
-    ("discovery.py", ("DiscoveryMeta", "pick_sash")),
-    ("tmdb.py", ("LOGO_ABS_MAX_H", "composite_logo", "logo_centre_y")),
-    ("i18n.py", ("load_languages", "translate_genre", "translate_sash")),
+    ("age_badge.py", (
+        "draw_quality_age_badge", "draw_quality_corner_bookmark", "draw_tier_bar", "_score_points",
+    )),
+    ("discovery.py", ("DiscoveryMeta", "TRENDING_SLOTS", "pick_sash", "shown_trending_rank")),
+    ("tmdb.py", ("LOGO_ABS_MAX_H", "composite_logo", "ensure_light_logo", "logo_centre_y", "poster_canvas")),
+    ("i18n.py", (
+        "language_text", "load_languages", "native_digits", "needs_shaping",
+        "translate_genre", "translate_sash", "upper_label", "visual",
+    )),
 )
 
 
@@ -174,7 +192,7 @@ def _renderer_assets() -> tuple[str, ...]:
         (_BASE_DIR / "fonts", frozenset({".ttf"})),
         (_BASE_DIR / "static" / "genre_bg", frozenset({".png"})),
         (_BASE_DIR / "static" / "logos", frozenset({".png"})),
-        (_BASE_DIR / "static" / "rating_badges", frozenset({".png"})),
+        (_BASE_DIR / "static" / "rating_badges", frozenset({".svg"})),
     )
     paths = [
         path.relative_to(_BASE_DIR).as_posix()
@@ -1097,7 +1115,33 @@ def _request_config(engine, spec: CanonicalRenderSpec, locale: str):
     config.badge_display_mode = spec.badge_display_mode
     config.wait_for_quality = False
     config.greyscale_no_quality = False
+    # The contract's Minimalist "Dual rating" (3) is the engine's mode 4; the
+    # engine's own 3 is upstream's Split, which the contract does not offer.
+    if spec.minimalist_append_mode == 3:
+        config.minimalist_append_mode = 4
     return config
+
+
+# Native provider scales, so a badge prints the provider's own form ("7.8",
+# "3.9") from the snapshot's normalized score.  Everything else is a percentage.
+_BADGE_NATIVE_SCALES = {"imdb": 10.0, "letterboxd": 5.0, "metacriticuser": 10.0, "rogerebert": 4.0}
+
+
+def _badge_ratings(
+    bundle: RenderInputBundle,
+    used_ratings: tuple[ProviderRating, ...],
+) -> dict[str, float]:
+    """Per-provider scores for rating badges, in MDBList's native form."""
+    out: dict[str, float] = {}
+    for rating in reversed(used_ratings):
+        if (
+            rating.metric == "score"
+            and (rating.vote_count is None or rating.vote_count >= 10)
+            and rating.checked_at <= bundle.snapshot.evaluated_at < rating.expires_at
+        ):
+            scale = _BADGE_NATIVE_SCALES.get(rating.provider, 100.0)
+            out[rating.provider] = rating.normalized_score * scale / 100.0
+    return out
 
 
 def _discovery_meta(
@@ -1248,31 +1292,29 @@ def _compose(
         else None
     )
     score = _score(spec, bundle, used_ratings)
-    rendered = engine.build_poster(
-        image,
-        score if score is not None else "N/A",
-        genre,
-        _request_config(engine, spec, bundle.locale),
-        logo=logo,
-        fallback_title=fallback_title,
-        discovery_meta=_discovery_meta(engine, spec, bundle, used_fact_fields),
-        quality_tokens=[],
-        release_year=(
-            str(facts.release_year) if "release_year" in used_fact_fields else None
-        ),
-        age_rating=age_rating,
-        no_poster=base_reference is None,
-        metacritic_score=_metacritic_score(used_ratings),
-        rating_badge_scores={
-            rating.provider: rating.normalized_score
-            for rating in reversed(used_ratings)
-            if rating.metric == "score"
-            and (rating.vote_count is None or rating.vote_count >= 10)
-            and rating.checked_at <= bundle.snapshot.evaluated_at < rating.expires_at
-        },
-        **({"sash_date_label": f"{facts.upcoming_release_window.title()} · {facts.upcoming_release_date.isoformat()}"}
-           if "upcoming_release_date" in used_fact_fields else {}),
-    )
+    labels_token = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
+    try:
+        rendered = engine.build_poster(
+            image,
+            score if score is not None else "N/A",
+            genre,
+            _request_config(engine, spec, bundle.locale),
+            logo=logo,
+            fallback_title=fallback_title,
+            discovery_meta=_discovery_meta(engine, spec, bundle, used_fact_fields),
+            quality_tokens=[],
+            release_year=(
+                str(facts.release_year) if "release_year" in used_fact_fields else None
+            ),
+            age_rating=age_rating,
+            no_poster=base_reference is None,
+            metacritic_score=_metacritic_score(used_ratings),
+            ratings=_badge_ratings(bundle, used_ratings),
+            **({"sash_date_label": f"{facts.upcoming_release_window.title()} · {facts.upcoming_release_date.isoformat()}"}
+               if "upcoming_release_date" in used_fact_fields else {}),
+        )
+    finally:
+        engine.i18n.BUNDLED_LABELS_ONLY.reset(labels_token)
     return rendered.convert("RGB")
 
 
@@ -1808,19 +1850,24 @@ def _compose_landscape(
         _title(bundle.snapshot, bundle.locale) if logo is None and not text_art else None
     )
     score = _score(spec.fact_spec(), bundle, used_ratings)
-    rendered = build_landscape(
-        image,
-        score if score is not None else "N/A",
-        genre,
-        _request_config(engine, spec.base, bundle.locale),
-        logo=logo,
-        fallback_title=fallback_title,
-        discovery_meta=_discovery_meta(engine, spec.base, bundle, used_fact_fields),
-        release_year=(
-            str(facts.release_year) if "release_year" in used_fact_fields else None
-        ),
-        badge_position=spec.landscape_badge_pos,
-    )
+    config = _request_config(engine, spec.base, bundle.locale)
+    config.landscape_badge_pos = spec.landscape_badge_pos
+    labels_token = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
+    try:
+        rendered = build_landscape(
+            image,
+            score if score is not None else "N/A",
+            genre,
+            config,
+            logo=logo,
+            fallback_title=fallback_title,
+            discovery_meta=_discovery_meta(engine, spec.base, bundle, used_fact_fields),
+            release_year=(
+                str(facts.release_year) if "release_year" in used_fact_fields else None
+            ),
+        )
+    finally:
+        engine.i18n.BUNDLED_LABELS_ONLY.reset(labels_token)
     return rendered.convert("RGB")
 
 
@@ -1837,12 +1884,36 @@ LANDSCAPE_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("landscape.py", ("*",)),
     ("landscape_spec.py", ("*",)),
-    ("main.py", ("RequestConfig", "_make_fallback_canvas")),
-    ("ratings.py", ("_cairo_pill_mask",)),
+    # landscape.py imports these from main.py inside its functions.
+    ("main.py", (
+        "RequestConfig", "_make_fallback_canvas", "_gradient_alpha", "_meta_sorted",
+        "_greyscale_wanted", "greyscale_rgba", "_claim_footprint", "_legacy_badge",
+        "_draw_custom_group", "_draw_legacy_bookmark", "_draw_logo_group", "_occupied_cols",
+        "_fog_pick", "_fog_faces", "_vignette_tint_band", "_vignette_frost_band",
+        "_vignette_level_band", "_vignette_composite", "_vignette_fog_ramp",
+        "_VIGNETTE_SAT_FULL", "_VIGNETTE_MATCH_MIN_CONF", "_VIGNETTE_SEAM_H",
+    )),
+    ("ratings.py", (
+        "_cairo_pill_mask", "_soften", "bar_fill_color", "draw_frosted_bar",
+        "frosted_bar_box", "parse_custom_score_palette", "score_color_for_mode",
+    )),
+    ("awards.py", ("_CHIP_RADIUS", "_frost_ink", "_frosted_tint", "dominant_frost_rgb")),
+    ("age_badge.py", ("_score_points",)),
+    ("rating_badges.py", ("*",)),
+    ("graphic_badges.py", ("*",)),
+    ("fonts.py", ("*",)),
+    ("pxscale.py", ("*",)),
+    ("certifications.py", ("DEFAULT_COUNTRY",)),
+    ("tmdb.py", ("ensure_light_logo", "poster_canvas")),
     ("config.py", _COMPOSITOR_CONFIG_INPUTS),
+    # Not JSON values, so hashed as definitions (rating badges normalise with them).
+    ("config.py", ("SCORE_NORMALISERS", "LANDSCAPE_WIDTH", "LANDSCAPE_HEIGHT")),
     ("render_spec.py", ("CanonicalRenderSpec", "canonicalize_config", "compile_requirements")),
-    ("discovery.py", ("DiscoveryMeta", "pick_sash")),
-    ("i18n.py", ("load_languages", "normalize_locale", "translate_genre", "translate_sash")),
+    ("discovery.py", ("DiscoveryMeta", "TRENDING_SLOTS", "pick_sash", "shown_trending_rank")),
+    ("i18n.py", (
+        "language_text", "load_languages", "native_digits", "needs_shaping",
+        "normalize_locale", "translate_genre", "translate_sash", "upper_label", "visual",
+    )),
     (
         "integration_contract.py",
         ("ImmutableRenderSnapshot", "RenderInputBundle", "SourceArtReference"),

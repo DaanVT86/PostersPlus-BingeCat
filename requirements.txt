@@ -5,11 +5,14 @@
 fastapi>=0.100,<1.0
 pydantic>=2.12,<3
 uvicorn>=0.20,<1.0
-Pillow>=10.0,<12
+Pillow>=13.0,<14
 httpx>=0.25,<1.0
 asyncpg>=0.29,<1
 numpy>=1.26,<3
 pycairo>=1.25,<2
+# Draws the diagonal sash at 1x with native anti-aliasing (CPU raster only).
+# The module links libEGL/libGL, which the dockerfile provides as bare stubs.
+skia-python>=144.0,<145
 # Rasterises SVG title logos (TMDB serves many of its highest-voted logos as SVG).
 # Pulls cairocffi/tinycss2/cssselect2; cairo runtime lib is already in the image.
 cairosvg>=2.7,<3
@@ -18,3 +21,8 @@ cairosvg>=2.7,<3
 opencv-python-headless>=4.8,<5
 onnxruntime>=1.17,<2
 rapidocr>=3.8,<4
+# Bidi reordering for right-to-left labels (Hebrew); Pillow here has no libraqm.
+python-bidi>=0.6,<1
+# Preparing fonts the operator uploads as label fonts (custom_fonts, fontprep):
+# CFF outlines to TrueType, the ★ added.  Imported only on upload.
+fonttools>=4.50,<5

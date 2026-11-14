@@ -1,0 +1,298 @@
+"""Frosted quality badges, quality before digital release, TVDB revivals of
+shows TMDB has closed, TVDB landscape art, and the portrait settings brought
+to landscape."""
+
+import asyncio
+import unittest
+from datetime import date
+from unittest import mock
+
+from PIL import Image
+
+import graphic_badges as gb
+import landscape
+import main
+import tvdb
+from discovery import DiscoveryMeta, tvdb_revival
+
+
+TODAY = date(2026, 10, 1)
+
+
+class TvdbRevivalTests(unittest.TestCase):
+    """A show TMDB calls Ended that TVDB carries on with."""
+
+    # Cyberpunk: Edgerunners as both had it on 2026-10-01.
+    TMDB = {"last_episode": {"season_number": 1, "air_date": "2022-09-13"},
+            "seasons": [{"season_number": 1}]}
+
+    def _tvdb(self, **kw):
+        return {"status": "continuing", "next_aired": "2026-10-20",
+                "last_aired": "2026-10-20", "seasons": [1, 2], **kw}
+
+    def test_a_later_dated_season_is_a_dated_renewal(self):
+        self.assertEqual(tvdb_revival("Ended", self.TMDB, self._tvdb(), today=TODAY),
+                         ("Renewed", "2026-10-20", "Season 2"))
+
+    def test_cancelled_shows_are_revived_too(self):
+        self.assertEqual(tvdb_revival("Cancelled", self.TMDB, self._tvdb(), today=TODAY)[0], "Renewed")
+
+    def test_needs_a_season_past_tmdbs_last(self):
+        self.assertIsNone(tvdb_revival("Ended", self.TMDB, self._tvdb(seasons=[1]), today=TODAY))
+
+    def test_needs_a_sign_of_life(self):
+        # TVDB splits some anime into more seasons than TMDB; ended is ended.
+        self.assertIsNone(tvdb_revival(
+            "Ended", self.TMDB, self._tvdb(status="ended", next_aired=None, last_aired="2022-09-13"),
+            today=TODAY))
+
+    def test_a_future_episode_is_a_sign_of_life_on_its_own(self):
+        self.assertIsNotNone(tvdb_revival("Ended", self.TMDB, self._tvdb(status="ended"), today=TODAY))
+
+    def test_a_season_airing_now_is_on_air(self):
+        self.assertEqual(tvdb_revival("Ended", self.TMDB,
+                                      self._tvdb(next_aired="2026-10-08", last_aired="2026-09-24"),
+                                      today=TODAY), ("Airing", None, None))
+        self.assertEqual(tvdb_revival("Ended", self.TMDB,
+                                      self._tvdb(next_aired=None, last_aired="2026-09-24"),
+                                      today=TODAY), ("Airing", None, None))
+
+    def test_continuing_without_a_date_is_not_enough(self):
+        # TVDB leaves "continuing" on some finished shows.
+        self.assertIsNone(tvdb_revival("Ended", self.TMDB,
+                                       self._tvdb(next_aired=None, last_aired="2022-09-13"),
+                                       today=TODAY))
+
+    def test_only_closed_shows_and_only_with_episode_data(self):
+        self.assertIsNone(tvdb_revival("Airing", self.TMDB, self._tvdb(), today=TODAY))
+        self.assertIsNone(tvdb_revival("Ended", self.TMDB, None, today=TODAY))
+        # An anime provider's series: one entry per season, no episode list.
+        self.assertIsNone(tvdb_revival("Ended", {}, self._tvdb(), today=TODAY))
+
+
+class SeriesStatusFetchTests(unittest.TestCase):
+    def test_keeps_status_days_and_official_seasons(self):
+        record = {"id": 384541, "status": {"name": "Continuing"},
+                  "nextAired": "2026-10-20", "lastAired": "2026-10-20",
+                  "seasons": [{"number": 1, "type": {"type": "absolute"}},
+                              {"number": 1, "type": {"type": "official"}},
+                              {"number": 0, "type": {"type": "official"}},
+                              {"number": 2, "type": {"type": "official"}}]}
+        with mock.patch.object(tvdb, "tvdb_enabled", return_value=True), \
+             mock.patch.object(tvdb, "resolve_tvdb_id", mock.AsyncMock(return_value=384541)), \
+             mock.patch.object(tvdb, "get_cached_tvdb_json", return_value=None), \
+             mock.patch.object(tvdb, "set_cached_tvdb_json") as store, \
+             mock.patch.object(tvdb, "_authed_get", mock.AsyncMock(return_value=record)):
+            got = asyncio.run(tvdb.fetch_series_status(None, tmdb_id="105248"))
+        self.assertEqual(got, {"status": "continuing", "next_aired": "2026-10-20",
+                               "last_aired": "2026-10-20", "seasons": [1, 2]})
+        self.assertEqual(store.call_args[0][0], "status:v1:384541")
+
+
+class TvdbBackgroundPickTests(unittest.TestCase):
+    ARTS = {"backgrounds": [
+        {"url": "eng-clean", "language": "eng", "score": 9, "text": False},
+        {"url": "eng-title", "language": "eng", "score": 8, "text": True},
+        {"url": "neutral", "language": None, "score": 7, "text": False},
+    ], "posters": []}
+
+    def _pick(self, languages):
+        with mock.patch.object(tvdb, "poster_source_enabled", return_value=True), \
+             mock.patch.object(tvdb, "resolve_tvdb_id", mock.AsyncMock(return_value=1)), \
+             mock.patch.object(tvdb, "fetch_tvdb_artworks", mock.AsyncMock(return_value=self.ARTS)):
+            return asyncio.run(tvdb.tvdb_poster_url(None, media_type="series", tmdb_id="1",
+                                                    languages=languages, kind="backgrounds"))
+
+    def test_textless_takes_the_untagged_background(self):
+        self.assertEqual(self._pick(None), "neutral")
+
+    def test_original_passes_over_a_tagged_background_marked_clean(self):
+        self.assertEqual(self._pick(["en"]), "eng-title")
+
+
+class FrostedQualityTests(unittest.TestCase):
+    def test_style_parses_and_defaults_to_solid(self):
+        self.assertEqual(main.build_request_config({}).badge_quality_style, "solid")
+        self.assertEqual(main.build_request_config({"badge_quality_style": "frosted"}).badge_quality_style,
+                         "frosted")
+        self.assertEqual(main.build_request_config({"badge_quality_style": "x"}).badge_quality_style, "solid")
+
+    def test_quality_marks_become_chips_and_the_certificate_does_not(self):
+        items = dict(gb.row_items(["4K", "HDR10"], "R", None, 30, ("video", "res", "cert"), True,
+                                  quality_look="rgb:200,210,230"))
+        self.assertEqual(items["res"].info["frost_chip"][0], "rgb:200,210,230")
+        self.assertEqual(items["video"].info["frost_chip"][0], "rgb:200,210,230")
+        self.assertNotIn("frost_chip", items["cert"].info)
+        solid = dict(gb.row_items(["4K"], None, None, 30, ("res",), True))
+        self.assertNotIn("frost_chip", solid["res"].info)
+
+    def test_a_chip_is_the_solid_box_size_and_resolves_to_glass(self):
+        chip = dict(gb.row_items(["4K"], None, None, 30, ("res",), True, quality_look="auto"))["res"]
+        self.assertEqual(chip.size, gb._box("4K", 30, True).size)
+        img = Image.new("RGBA", (200, 100), (40, 90, 160, 255))
+        gb.draw_row(img, [("res", chip)], left_x=10, center_y=50, gap=4)
+        # Something landed, and it isn't the smoked placeholder.
+        self.assertNotEqual(img.getpixel((10 + chip.width // 2, 40)), (40, 90, 160, 255))
+
+    def test_marks_go_on_chips_too(self):
+        mark = Image.new("RGBA", (40, 20), (255, 255, 255, 255))
+        with mock.patch.object(gb, "_mark", side_effect=lambda name, h: mark.resize((h * 2, h))):
+            item = dict(gb.row_items(["DV"], None, None, 30, ("video",), True,
+                                     quality_look="rgb:200,100,50"))["video"]
+        self.assertEqual(item.info["frost_chip"][0], "rgb:200,100,50")
+        self.assertEqual(item.height, 30)
+
+    def test_quality_look_is_none_for_solid(self):
+        self.assertIsNone(gb.quality_look("solid", (1, 2, 3)))
+        self.assertEqual(gb.quality_look("frosted", None), "auto")
+        self.assertEqual(gb.quality_look("frosted", (1.2, 2.6, 3)), "rgb:1,3,3")
+
+
+class FrostedCertAndLogoTests(unittest.TestCase):
+    def test_styles_parse_and_default_to_solid(self):
+        cfg = main.build_request_config({})
+        self.assertEqual((cfg.badge_cert_style, cfg.badge_logo_style), ("solid", "solid"))
+        cfg = main.build_request_config({"badge_cert_style": "frosted", "badge_logo_style": "Frosted"})
+        self.assertEqual((cfg.badge_cert_style, cfg.badge_logo_style), ("frosted", "frosted"))
+        self.assertEqual(main.build_request_config({"badge_cert_style": "x"}).badge_cert_style, "solid")
+
+    def test_certificate_and_age_go_on_chips(self):
+        chip = dict(gb.row_items([], "R", None, 30, ("cert",), True, cert_look="auto"))["cert"]
+        self.assertEqual(chip.info["frost_chip"][0], "auto")
+        self.assertEqual(chip.height, 30)
+        age = dict(gb.row_items([], None, 14, 30, ("cert",), True, cert_look="auto"))["cert"]
+        self.assertIn("frost_chip", age.info)
+        self.assertEqual(gb.row_items([], None, None, 30, ("cert",), True, cert_look="auto"), [])
+
+    def test_logo_goes_on_a_chip_that_grows_with_its_scale(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(gb, "LOGO_DIR", d):
+            gb._logo_mark.cache_clear()
+            net = gb.Logo("network", 213, "/n.png")
+            logo = Image.new("RGBA", (140, 60), (0, 0, 0, 0))
+            logo.paste((255, 255, 255, 255), (10, 10, 130, 50))
+            logo.save(os.path.join(d, "network_213_n.png"))
+            chip = gb.row_items([], None, None, 30, ("network",), True, network=net,
+                                logo_look="rgb:1,2,3")[0][1]
+            big = gb.row_items([], None, None, 30, ("network",), True, network=net,
+                               logo_look="rgb:1,2,3", logo_scale=2.0)[0][1]
+            gb._logo_mark.cache_clear()
+        self.assertEqual(chip.info["frost_chip"][0], "rgb:1,2,3")
+        self.assertEqual(chip.height, 30)
+        self.assertGreater(big.height, 30)
+        img = Image.new("RGBA", (300, 100), (40, 90, 160, 255))
+        gb.draw_row(img, [("network", chip)], left_x=10, center_y=50, gap=4)
+        self.assertNotEqual(img.getpixel((12, 50)), (40, 90, 160, 255))
+
+    def test_frost_is_sampled_only_for_a_frosted_slot_in_a_group(self):
+        cfg = main.build_request_config({"badge_display_mode": "7", "badge_cert_style": "frosted",
+                                         "badge_group1": "tl:2:res,network"})
+        self.assertFalse(gb.chips_want_frost(cfg, True))
+        cfg.badge_group1 = "tl:2:res,cert"
+        self.assertTrue(gb.chips_want_frost(cfg, False))
+        looks = gb.chip_looks(cfg, (10, 20, 30), 0.5)
+        self.assertEqual(looks, {"quality_look": None, "cert_look": "rgb:10,20,30@128", "logo_look": None})
+
+
+class GreyscaleTests(unittest.TestCase):
+    def _meta(self, status):
+        m = DiscoveryMeta()
+        m.release_status = status
+        return m
+
+    def test_cinema_switch_is_the_shapes_own(self):
+        cfg = main.RequestConfig()
+        self.assertTrue(main._greyscale_wanted(cfg, self._meta("Cinema"), [], True))
+        self.assertFalse(main._greyscale_wanted(cfg, self._meta("Cinema"), [], False))
+        self.assertFalse(main._greyscale_wanted(cfg, self._meta("Streaming"), [], True))
+
+    def test_a_digital_source_keeps_colour_when_asked(self):
+        cfg = main.RequestConfig(cinema_greyscale_skip_if_available=True)
+        self.assertFalse(main._greyscale_wanted(cfg, self._meta("Cinema"), ["WEBDL"], True))
+
+    def test_landscape_greyscale_turns_the_bands_black(self):
+        cfg = main.build_request_config({"shape": "landscape", "landscape_greyscale": "true",
+                                         "vignette_poster_color_bottom": "true"})
+        meta = self._meta("Cinema")
+        meta.trending_rank = None
+        art = Image.new("RGB", (1000, 563), (200, 40, 40))
+        out = landscape.build_landscape(art, 80, "Horror", cfg, discovery_meta=meta)
+        r, g, b, _ = out.getpixel((500, 560))
+        self.assertTrue(abs(r - g) <= 2 and abs(g - b) <= 2, (r, g, b))
+
+
+class LandscapeSettingsTests(unittest.TestCase):
+    def test_defaults_leave_the_cache_key_alone(self):
+        before = main._render_config_signature(main.build_request_config({"shape": "landscape"}))
+        for name in ("landscape_greyscale", "landscape_badge_style", "landscape_badge_text_color",
+                     "landscape_badge_shape", "landscape_badge_case",
+                     "landscape_winner_star", "landscape_logo_scale", "landscape_rating_badges",
+                     "landscape_art_source", "quality_after_digital", "badge_quality_style"):
+            self.assertNotIn(name, before)
+
+    def test_frost_is_sampled_only_for_a_drawn_quality_badge(self):
+        cfg = main.build_request_config({"badge_display_mode": "7", "badge_quality_style": "frosted",
+                                         "badge_group1": "chip:4:cert"})
+        with mock.patch.object(main, "dominant_frost_rgb", wraps=main.dominant_frost_rgb) as sample:
+            main.build_poster(Image.new("RGBA", (500, 750), (40, 60, 90, 255)), 80, "Drama", cfg,
+                              quality_tokens=["4K"], certification="R")
+        self.assertFalse(sample.called)
+
+    def test_parse(self):
+        cfg = main.build_request_config({
+            "shape": "landscape", "landscape_badge_style": "gold", "landscape_badge_text_color": "F5C518",
+            "landscape_logo_scale": "9", "landscape_winner_star": "true", "landscape_rating_badges": "true"})
+        self.assertEqual(cfg.landscape_badge_style, "gold")
+        self.assertEqual(cfg.landscape_badge_text_color, (0xF5, 0xC5, 0x18))
+        self.assertEqual(cfg.landscape_logo_scale, 1.5)
+        self.assertTrue(cfg.landscape_winner_star and cfg.landscape_rating_badges)
+
+    def test_tvdb_art_source_needs_the_operator_switch(self):
+        params = {"shape": "landscape", "landscape_art_source": "tvdb"}
+        with mock.patch.object(tvdb, "poster_source_enabled", return_value=False):
+            self.assertEqual(main.build_request_config(params).landscape_art_source_tv, "tmdb")
+        with mock.patch.object(tvdb, "poster_source_enabled", return_value=True):
+            self.assertEqual(main.build_request_config(params).landscape_art_source_tv, "tvdb")
+            self.assertEqual(main.build_request_config({**params, "shape": "portrait"}).landscape_art_source_tv,
+                             "tmdb")
+
+    def test_rating_badges_take_the_scores_place_and_fall_back_to_text(self):
+        cfg = main.build_request_config({"shape": "landscape", "landscape_rating_badges": "true",
+                                         "rating_badges": "imdb,tomatoes"})
+        art = Image.new("RGB", (1000, 563), (30, 30, 30))
+        # Marks not on disk: each score is drawn as text alone, never dropped.
+        with mock.patch("rating_badges.badge", return_value=None):
+            out = landscape.build_landscape(art, 80, "Drama", cfg,
+                                            ratings={"imdb": 81, "tomatoes": 92})
+        self.assertEqual(out.size, (1000, 563))
+
+    def test_winner_star(self):
+        cfg = main.build_request_config({"shape": "landscape", "landscape_winner_star": "true"})
+        drawn = []
+        with mock.patch.object(landscape, "_draw_badge", side_effect=lambda img, label, *a, **k: drawn.append(label)), \
+             mock.patch("main.pick_sash", return_value=("Emmy Winner", "win")):
+            landscape.build_landscape(Image.new("RGB", (1000, 563)), 80, "Drama", cfg,
+                                      discovery_meta=DiscoveryMeta())
+        self.assertEqual(drawn, ["★ EMMY WINNER"])
+
+    def test_frosted_logo_chips_wear_the_glass_badges_tint(self):
+        # Portrait chips take the frosted notch's tint; the landscape ones took
+        # portrait's frost rule over the whole frame and came out a different
+        # colour from the glass badge beside them.
+        cfg = main.build_request_config({
+            "shape": "landscape", "landscape_badge_display_mode": "7",
+            "landscape_badge_group1": "chip:4:network,studio", "badge_logo_style": "frosted"})
+        art = Image.new("RGB", (1000, 563), (70, 130, 190))
+        tints = []
+        real_badge = landscape._draw_badge
+        with mock.patch.object(landscape, "_draw_badge",
+                               side_effect=lambda *a, **k: tints.append(real_badge(*a, **k)) or tints[-1]), \
+             mock.patch.object(gb, "chip_looks", wraps=gb.chip_looks) as looks, \
+             mock.patch("main.pick_sash", return_value=("Emmy Nominee", "nom")):
+            landscape.build_landscape(art, 80, "Drama", cfg, discovery_meta=DiscoveryMeta())
+        self.assertIsNotNone(tints[0])
+        self.assertEqual(looks.call_args.args[1], tints[0])
+
+
+if __name__ == "__main__":
+    unittest.main()

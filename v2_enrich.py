@@ -16,8 +16,8 @@ import tvdb
 from awards import FETCH_FAILED, _RateLimited, parse_mdblist_awards
 from bingecat_resolver import ResolvedIdentity, resolve_v2_identity
 from config import GENRE_MAP, GENRE_PRIORITY
+from festivals import festival_label, match_festival_keyword
 from discovery import (
-    FESTIVAL_KEYWORDS,
     NOTABLE_CAST,
     NOTABLE_DIRECTORS,
     NOTABLE_STUDIOS,
@@ -412,17 +412,30 @@ def _required_fact_fields(slots: frozenset[str]) -> frozenset[str]:
     return frozenset(_SLOT_FACT_FIELDS[slot] for slot in slots if slot in _SLOT_FACT_FIELDS)
 
 
-def _derive_keyword_facts(facts: dict[str, Any]) -> None:
+def _festival_from_keywords(
+    names: set[str] | frozenset[str],
+    tmdb_id: str | None,
+    imdb_id: str | None,
+) -> str | None:
+    """Upstream's festival rule: the keyword says a festival is involved; the
+    title's ids say whether it took the top prize ("Palme d'Or") or only won
+    there ("Cannes Winner")."""
+    keyword = match_festival_keyword(set(names))
+    return festival_label(keyword, tmdb_id, imdb_id) if keyword else None
+
+
+def _derive_keyword_facts(
+    facts: dict[str, Any],
+    tmdb_id: str | None = None,
+    imdb_id: str | None = None,
+) -> None:
     if "keywords" not in facts:
         return
     names = {str(value).strip().lower() for value in facts.get("keywords") or ()}
     facts.setdefault("is_cult", bool({"cult-classic", "cult-film"} & names))
     facts.setdefault("is_true_story", "based-on-true-story" in names)
     facts.setdefault("is_metacritic_must_see", "metacritic-must-see" in names)
-    festival = next(
-        (label for keyword, label in FESTIVAL_KEYWORDS.items() if keyword in names),
-        None,
-    )
+    festival = _festival_from_keywords(names, tmdb_id, imdb_id)
     if festival is not None:
         facts.setdefault("festival_label", festival)
 
@@ -942,7 +955,7 @@ async def enrich(
             for field_name in group.fields
         }
         before_derived = set(facts)
-        _derive_keyword_facts(facts)
+        _derive_keyword_facts(facts, tmdb_id, imdb_id)
         keyword_evidence = fact_evidence.get("keywords")
         if keyword_evidence is not None:
             for field_name in set(facts) - before_derived:
@@ -1104,14 +1117,11 @@ async def enrich(
                         )
                     )
                     facts.setdefault("keywords", keyword_names)
-                    _derive_keyword_facts(facts)
+                    _derive_keyword_facts(facts, tmdb_id, imdb_id)
                     wins, nominations = parse_mdblist_awards(keyword_rows, tmdb_id=tmdb_id)
                     facts.setdefault("award_wins", tuple(wins))
                     facts.setdefault("award_nominations", tuple(nominations))
-                    festival = next(
-                        (label for keyword, label in FESTIVAL_KEYWORDS.items() if keyword in keyword_names),
-                        None,
-                    )
+                    festival = _festival_from_keywords(set(keyword_names), tmdb_id, imdb_id)
                     if festival:
                         facts.setdefault("festival_label", festival)
                     if detail.age_rating is not None:

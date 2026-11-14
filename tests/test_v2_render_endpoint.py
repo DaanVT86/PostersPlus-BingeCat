@@ -356,6 +356,10 @@ def _legacy_config_from_canonical_query(spec, *, locale: str):
         elif field_name == "sash_priority":
             exclusions = tuple(f"-{slot}" for slot in spec.sash_exclusions)
             params[field_name] = ",".join((*value, *exclusions))
+        elif field_name == "minimalist_append_mode" and value == 3:
+            # The query string spells the contract's Dual rating as 4 (its 3
+            # is upstream's Split).
+            params[field_name] = "4"
         else:
             params[field_name] = str(value)
     # Request locale controls labels; logo policy remains the preset's asset
@@ -438,7 +442,7 @@ def test_render_is_pure_and_deterministic_for_identical_tuple(tmp_path, monkeypa
             "minimalist@1",
             {
                 "rating_display_mode": 3,
-                "minimalist_append_mode": 3,
+                "minimalist_append_mode": 4,  # engine spelling of the contract's Dual (3)
                 "sash_mode": "sash",
                 "sash_length_ratio": 1.2,
             },
@@ -571,7 +575,12 @@ def test_fixed_preset_pixels_match_shared_legacy_compositor(
     if spec.sash_mode == "hidden":
         assert adapted_config.sash_priority == []
     else:
-        assert adapted_config.sash_priority == legacy_config.sash_priority
+        # The query parser adds upstream's "renewed" behind "airing"; v2 facts
+        # have no Renewed status, so the adapter's list without it draws the same.
+        assert adapted_config.sash_priority == [
+            slot for slot in legacy_config.sash_priority
+            if slot != "renewed" or "renewed" in adapted_config.sash_priority
+        ]
     assert adapted_config.movie_weights == legacy_config.movie_weights
     assert adapted_config.tv_weights == legacy_config.tv_weights
     assert adapted_config.rating_text_color == legacy_config.rating_text_color
@@ -1627,7 +1636,8 @@ def test_renderer_revision_is_semantic_pixel_identity_not_service_identity():
     assert any(path.startswith("fonts/") for path in manifest)
     assert any(path.startswith("static/genre_bg/") for path in manifest)
     assert any(path.startswith("static/logos/") for path in manifest)
-    assert not any(path.endswith(".svg") for path in manifest)
+    # SVGs are hashed only as the packaged rating-badge marks.
+    assert all(path.startswith("static/rating_badges/") for path in manifest if path.endswith(".svg"))
     assert not any(path.endswith(".gitkeep") for path in manifest)
     assert {
         "languages/en.json",
@@ -1685,7 +1695,7 @@ def test_renderer_compatibility_binding_is_exact_and_fails_closed(monkeypatch):
     base = Path(render_module.__file__).parent
     for path, old, new in (
         ("awards.py", "maxsize=32", "maxsize=33"),
-        ("awards.py", "radius=radius, fill=255", "radius=radius, fill=254"),
+        ("awards.py", "max_badge_w = px(width * 0.70)", "max_badge_w = px(width * 0.71)"),
         ("main.py", "maxsize=256", "maxsize=255"),
         ("main.py", 'sash_badge_font_ratio:   float = 0.43', 'sash_badge_font_ratio:   float = 0.44'),
     ):

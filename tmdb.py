@@ -1,17 +1,26 @@
 #tmdb.py
 import asyncio
 import colorsys
+import hashlib
 import io
+from contextvars import ContextVar
 import logging
 import math
 import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import date as _date, datetime, timezone
+from datetime import date as _date, datetime, timezone, datetime as _datetime, time as _time
 from typing import Literal
+from urllib.parse import urlsplit
 import httpx
 import numpy as np
+
+import certifications
+import cinemeta
+import trending_lists
+import top10_charts
+import tvdb
 
 logger = logging.getLogger(__name__)
 from PIL import Image, ImageFilter
@@ -45,7 +54,11 @@ def _rasterize_svg(svg_bytes: bytes, target_w: int = 1000) -> "Image.Image | Non
 
 from cache import (
     get_cached_trending_snapshot,
+    get_cached_trending_snapshot_entry,
     set_cached_trending_snapshot,
+    expire_trending_snapshot,
+    trending_list_keys,
+    note_trending_list_requested,
     get_cached_tmdb_poster,
     set_cached_tmdb_poster,
     get_cached_tmdb_logo,
@@ -56,11 +69,19 @@ from cache import (
     set_cached_release_status,
     get_cached_movie_release_info,
     set_cached_movie_release_info,
+    release_status_expiry,
+    get_cached_tvdb_json,
+    set_cached_tvdb_json,
+    delete_cached_tvdb_json,
+    get_cached_badge_facts,
+    set_cached_badge_facts,
 )
 
 from config import (
     POSTER_WIDTH,
     POSTER_HEIGHT,
+    LANDSCAPE_WIDTH,
+    LANDSCAPE_HEIGHT,
     LOGO_MAX_W_RATIO,
     LOGO_MAX_H_RATIO,
     LOGO_BOTTOM_RATIO,
@@ -71,6 +92,15 @@ from config import (
     TMDB_POSTER_MIN_VOTES,
     TMDB_POSTER_MAX_SCORE_DROP,
     CINEMA_MAX_AGE_YEARS,
+    CINEMA_ASSUMED_DIGITAL_DAYS,
+    CINEMA_POPULAR_VOTES,
+    CINEMA_POPULAR_DIGITAL_DAYS,
+    TRENDING_SOURCE_MAX_ITEMS,
+    TRENDING_HIDE_GENRES,
+    TRENDING_HIDE_MIXED_GENRES,
+    TRENDING_FETCH_COUNT,
+    TRENDING_BROAD_FETCH_COUNT,
+    CINEMETA_ENABLED,
 )
 
 
@@ -78,8 +108,43 @@ from config import (
 # Image helpers
 # ---------------------------------------------------------------------------
 
-def normalise_poster(image: Image.Image) -> Image.Image:
-    target_w, target_h = POSTER_WIDTH, POSTER_HEIGHT
+# The portrait canvas this request renders at.  500x750 unless the request asks
+# for the larger size (RequestConfig.poster_width); get_poster sets it once and
+# every art fetcher below reads it, so the right TMDB size is fetched, cached
+# under its own key and fitted to the right canvas.  A ContextVar rather than a
+# parameter threaded through each fetcher: it follows the request's task and the
+# tasks it spawns.  It does NOT reach run_in_executor threads, so the code that
+# normalises in the thread pool takes the size as an argument.
+_POSTER_CANVAS: ContextVar[tuple[int, int]] = ContextVar(
+    "poster_canvas", default=(POSTER_WIDTH, POSTER_HEIGHT)
+)
+
+# Canvas widths a request may ask for, and the TMDB poster size fetched for
+# each — the smallest TMDB rendition at least as wide as the canvas.  Above
+# 780 that is the original (usually 2000x3000), shrunk to the canvas here.
+# Measured cost per render vs 500 (2026-09-26): 780 ~2x, 1000 ~3x, 1500 ~7x,
+# 2000 ~12x in CPU and file size; 2000 renders peaked near 1.75 GiB on one
+# worker.  The larger sizes are here to be tried, not yet to be offered.
+POSTER_WIDTHS = {500: "w500", 780: "w780", 1000: "original", 1500: "original", 2000: "original"}
+
+
+def poster_canvas() -> tuple[int, int]:
+    return _POSTER_CANVAS.get()
+
+
+def set_poster_canvas(width: int) -> None:
+    """Render this request's portrait art at *width* (a POSTER_WIDTHS key), 2:3."""
+    _POSTER_CANVAS.set((width, width * POSTER_HEIGHT // POSTER_WIDTH))
+
+
+def _canvas_suffix(size: tuple[int, int]) -> str:
+    """Cache-key suffix for art cached at *size*.  Empty at the standard size,
+    so every key cached before sizes existed stays valid."""
+    return "" if size == (POSTER_WIDTH, POSTER_HEIGHT) else f"_{size[0]}x{size[1]}"
+
+
+def normalise_poster(image: Image.Image, size: tuple[int, int] | None = None) -> Image.Image:
+    target_w, target_h = size or poster_canvas()
     src_w, src_h = image.size
     scale = max(target_w / src_w, target_h / src_h)
     new_w = round(src_w * scale)
@@ -90,107 +155,93 @@ def normalise_poster(image: Image.Image) -> Image.Image:
     return image.crop((left, top, left + target_w, top + target_h))
 
 
-def ensure_light_logo(logo: Image.Image,
-                      lum_threshold: float = 0.2,
-                      sat_threshold: float = 0.25,
-                      light_lum: float = 0.6,
-                      light_frac_min: float = 0.05,
-                      card_coverage_max: float = 0.6) -> Image.Image:
+# Black-ink lightening (ensure_light_logo).  A pixel is "black ink" below
+# _INK_V_BLACK on its brightest channel, and fades out of the recolour between
+# that and _INK_V_RAMP so a dark-to-colour gradient has no seam.  Brightest
+# channel rather than luminance: pure blue or red has a luminance as low as
+# black's but reads on a dark poster, while a near-black with a faint tint
+# stays dark on every channel.
+_INK_V_BLACK = 90.0
+_INK_V_RAMP  = 130.0
+# The ink has to be most of the logo's solid pixels...
+_INK_MIN_FRAC = 0.5
+# ...and has to sit on transparency, not against the logo's own content: grown
+# by _INK_GROW px, it may run into at most this share of opaque non-black
+# pixels.  Black outlines round a coloured fill, black cards behind white text
+# and black shadows under a light face all fail it.
+_INK_MAX_ENCLOSE = 0.25
+_INK_GROW = 2
+
+
+def ensure_light_logo(logo: Image.Image) -> Image.Image:
     """
-    Whiten a logo's pixels *only* when we are confident it is a dark, achromatic
-    wordmark that would otherwise be invisible on a dark poster — and leave every
-    other logo completely untouched. Doing nothing is always preferable to a
-    recolour that could make the logo worse.
+    Lighten a logo's black ink so it reads on a dark poster, and leave every
+    other logo untouched.  Only the near-black pixels change: their lightness
+    is flipped (black → white, dark grey → light grey, navy → pale blue) with
+    hue kept, while coloured accents and light parts keep their own colours —
+    BEASTARS keeps its red B, black·ish its green "ish".
 
-    The asset this primarily guards against is a logo that is a *filled dark card
-    with light text baked in* (e.g. white "JURY DUTY" letters on a solid black
-    rectangle). Averaging the luminance of every opaque pixel — the naive test —
-    is dominated by the dark card, mislabels the asset "dark", and blanket-whitens
-    it into a solid white block, erasing the text. Two complementary structural
-    guards catch that before any recolour:
-
-      • Light-content guard — if a non-trivial share of the solid pixels are
-        already light, the logo carries its own legible content (light text,
-        free-standing or on a dark card) and reads fine on a dark poster. This
-        is the signal that tells a "black card + white text" asset (has a light
-        population) apart from plain "black text" (has none).
-
-      • Card guard — if the solid pixels fill most of their own bounding box, the
-        logo is a filled card/emblem rather than glyphs on transparency.
-        Whitening it would produce a solid block, so never touch it. This backs
-        up the light-content guard for the dark-card / dark-or-no-text case,
-        where there is no light population to detect.
-
-    Only after both guards pass do the original tests apply — the ink must be
-    dark (low mean luminance) and achromatic (low saturation), so coloured or
-    branded logos keep their hues. Colour statistics are computed over *solid*
-    pixels (alpha >= 128) so a soft anti-aliased fringe can't skew them; the
-    recolour itself still covers the full visible mask (alpha > 30) to keep
-    edge anti-aliasing intact.
+    Two gates decide whether a logo is black ink at all (see _INK_MIN_FRAC and
+    _INK_MAX_ENCLOSE): the black has to be most of the logo, and it has to
+    border transparency rather than the logo's own coloured or light parts.
+    A black outline round a coloured fill, a black card behind white letters,
+    or a black extrusion under a grey face is structure the logo relies on,
+    so such logos are left as they are.  Statistics use solid pixels
+    (alpha >= 128); the recolour covers every visible pixel (alpha > 30) so
+    anti-aliased edges lighten with the ink.
     """
-    rgba = np.array(logo.convert("RGBA"), dtype=np.float32)
+    rgba = np.asarray(logo.convert("RGBA"), dtype=np.float32)
     alpha = rgba[:, :, 3]
-
-    # Analyse only solidly-opaque pixels so a semi-transparent AA halo can't
-    # skew the luminance/saturation/coverage statistics below.
     solid = alpha >= 128
-    if not solid.any():
-        return logo  # nothing solid to analyse — leave as-is
+    n_solid = int(solid.sum())
+    if n_solid < 20:
+        return logo
 
-    r = rgba[:, :, 0][solid]
-    g = rgba[:, :, 1][solid]
-    b = rgba[:, :, 2][solid]
-    lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0  # per-pixel 0–1
+    rgb = rgba[:, :, :3]
+    v = rgb.max(axis=2)
+    ink = solid & (v < _INK_V_BLACK)
+    ink_frac = float(ink.sum()) / n_solid
+    if ink_frac < _INK_MIN_FRAC:
+        return logo
 
-    # Guard 1 — the logo already carries light content (white text, on a card
-    # or free-standing), so it already reads on a dark poster. Leave it alone.
-    light_frac = float((lum >= light_lum).mean())
-    if light_frac >= light_frac_min:
+    grown = ink.copy()
+    for _ in range(_INK_GROW):
+        step = grown.copy()
+        step[1:] |= grown[:-1]
+        step[:-1] |= grown[1:]
+        step[:, 1:] |= grown[:, :-1]
+        step[:, :-1] |= grown[:, 1:]
+        grown = step
+    touch_other = int((grown & solid & (v >= _INK_V_RAMP)).sum())
+    touch_clear = int((grown & ~solid).sum())
+    enclose = touch_other / max(1, touch_other + touch_clear)
+    if enclose > _INK_MAX_ENCLOSE:
         logger.debug(
-            f"ensure_light_logo: skip (light content {light_frac:.0%} >= "
-            f"{light_frac_min:.0%}) — already legible on dark"
+            f"ensure_light_logo: skip (ink {ink_frac:.0%}, borders its own "
+            f"content {enclose:.0%}) — outline, card or shadow"
         )
         return logo
 
-    # Guard 2 — a filled card/emblem fills most of its bounding box. Whitening
-    # it would produce a solid block, so never touch it.
-    ys, xs = np.nonzero(solid)
-    bbox_area = (int(ys.max()) - int(ys.min()) + 1) * (int(xs.max()) - int(xs.min()) + 1)
-    coverage = float(solid.sum()) / bbox_area if bbox_area else 0.0
-    if coverage >= card_coverage_max:
-        logger.debug(
-            f"ensure_light_logo: skip (coverage {coverage:.0%} >= "
-            f"{card_coverage_max:.0%}) — filled card/shape, not a wordmark"
-        )
-        return logo
+    # HLS lightness flip, per pixel, keeping hue and HLS saturation.
+    c = rgb / 255.0
+    hi = c.max(axis=2)
+    lo = c.min(axis=2)
+    span = hi - lo
+    light = (hi + lo) / 2
+    sat = np.where(span > 0, span / np.maximum(1e-6, 1 - np.abs(2 * light - 1)), 0.0)
+    flipped = 1 - light
+    chroma = (1 - np.abs(2 * flipped - 1)) * sat
+    rel = np.where(span[..., None] > 0,
+                   (c - lo[..., None]) / np.maximum(1e-6, span)[..., None], 0.5)
+    lit = (flipped - chroma / 2)[..., None] + rel * chroma[..., None]
 
-    # Original gates — only whiten genuinely dark, achromatic ink.
-    avg_lum = float(lum.mean())
-    if avg_lum > lum_threshold:
-        return logo  # already light enough
-
-    # Saturation = (max - min) / max per pixel (HSV definition).
-    max_c = np.maximum(np.maximum(r, g), b)
-    min_c = np.minimum(np.minimum(r, g), b)
-    coloured = max_c > 0
-    if coloured.any():
-        avg_sat = float((((max_c - min_c) / np.where(coloured, max_c, 1.0)) * coloured).mean())
-    else:
-        avg_sat = 0.0
-    if avg_sat > sat_threshold:
-        return logo  # coloured/branded logo — preserve original hues
-
-    logger.debug(
-        f"ensure_light_logo: whitening dark wordmark "
-        f"(light={light_frac:.0%}, coverage={coverage:.0%}, "
-        f"avg_lum={avg_lum:.2f}, avg_sat={avg_sat:.2f})"
-    )
-    visible = alpha > 30
+    weight = np.clip((_INK_V_RAMP - v) / (_INK_V_RAMP - _INK_V_BLACK), 0.0, 1.0)
+    weight = (weight * (alpha > 30))[..., None]
     out = rgba.copy()
-    out[:, :, 0][visible] = 255
-    out[:, :, 1][visible] = 255
-    out[:, :, 2][visible] = 255
-    return Image.fromarray(out.astype(np.uint8), "RGBA")
+    out[:, :, :3] = (weight * lit + (1 - weight) * c) * 255.0
+    logger.debug(f"ensure_light_logo: lightening black ink (ink {ink_frac:.0%}, "
+                 f"borders its own content {enclose:.0%})")
+    return Image.fromarray(np.clip(np.rint(out), 0, 255).astype(np.uint8))
 
 
 # Experimental contrast-rescue tuning.  Lower = more conservative (only recolour
@@ -238,7 +289,7 @@ def logo_centre_y(height: int, bottom_ratio: float = LOGO_BOTTOM_RATIO) -> int:
     fallback title-text renderer can sit on the exact same line, keeping logo
     and text posters visually consistent.
     """
-    max_h = min(int(height * LOGO_MAX_H_RATIO), LOGO_ABS_MAX_H)
+    max_h = min(int(height * LOGO_MAX_H_RATIO), LOGO_ABS_MAX_H * height // POSTER_HEIGHT)
     return int(height - int(height * bottom_ratio) - max_h / 2)
 
 
@@ -294,7 +345,7 @@ def _recolor_logo_solid(logo: Image.Image, rgb: tuple[int, int, int]) -> Image.I
     rgba[:, :, 0][vis] = rgb[0]
     rgba[:, :, 1][vis] = rgb[1]
     rgba[:, :, 2][vis] = rgb[2]
-    return Image.fromarray(rgba, "RGBA")
+    return Image.fromarray(rgba)
 
 
 # ---------------------------------------------------------------------------
@@ -302,13 +353,44 @@ def _recolor_logo_solid(logo: Image.Image, rgb: tuple[int, int, int]) -> Image.I
 # ---------------------------------------------------------------------------
 
 def tmdb_metadata_cache_key(
-    endpoint: str, tmdb_id: str, logo_language: str
+    endpoint: str, tmdb_id: str, logo_language: str, secondary_language: str = ""
 ) -> str:
     selection_sig = (
         f"p{TMDB_POSTER_MIN_VOTES}"
         f"d{TMDB_POSTER_MAX_SCORE_DROP:g}"
     )
-    return f"{endpoint}_{tmdb_id}_{logo_language}_{selection_sig}"
+    base = f"{endpoint}_{tmdb_id}_{logo_language}_{selection_sig}"
+    # A secondary preferred language changes the image set fetched from TMDB, so
+    # it must key separately.  Suffixed (not inlined) so existing single-language
+    # cache entries keep their key and don't all miss on deploy.
+    return f"{base}_s{secondary_language}" if secondary_language else base
+
+
+# Minimum null-language posters before a runner-up is kept as an alternate.
+TEXTLESS_ALT_MIN_POSTERS = 6
+
+
+# Candidates kept per pool for the random top-5 pick (poster_pick=random).
+POSTER_POOL_SIZE = 5
+
+
+def _rank_textless_posters(posters: list[dict]) -> list[dict]:
+    """Textless posters in pick order: _select_textless_poster's choice first,
+    then well-voted competitive art, then competitive, then the rest."""
+    if not posters:
+        return []
+    best = _select_textless_poster(posters)
+    top_rating = max(float(p.get("vote_average") or 0) for p in posters)
+
+    def _key(poster: dict):
+        rating = float(poster.get("vote_average") or 0)
+        votes = int(poster.get("vote_count") or 0)
+        competitive = rating >= top_rating - TMDB_POSTER_MAX_SCORE_DROP
+        voted = votes >= TMDB_POSTER_MIN_VOTES
+        return (poster is not best, not (competitive and voted), not competitive,
+                -rating, -votes)
+
+    return sorted(posters, key=_key)
 
 
 def _select_textless_poster(posters: list[dict]) -> dict | None:
@@ -577,12 +659,170 @@ async def fetch_v2_metadata(
     return metadata
 
 
+# TMDB files TV under one "Sci-Fi & Fantasy" genre (10765) where films get two
+# (878, 14), so every fantasy series printed as "Sci-Fi".  The show's TMDB
+# keywords, fetched in the same details call, nearly always say which it is:
+# counted on a sample of the 140 most-voted shows in the genre, they settled
+# ~85% and read right on ~90% of those.  Terms match at word starts; a
+# trailing "*" also takes longer words (dystopia/dystopian).
+_SCIFI_TERMS = (
+    "science fiction", "sci-fi", "space", "alien", "extraterrestrial",
+    "spaceship", "spacecraft", "starship", "time travel", "time machine",
+    "robot", "android", "cyborg", "artificial intelligence", "cyberpunk",
+    "dystopi*", "futuristic", "future", "clone", "cloning", "virtual reality",
+    "mecha", "genetic*", "mutant", "mutation", "post-apocalyp*", "planet",
+    "galaxy", "interstellar", "virus", "scientist", "experiment",
+    "simulation", "nanotech*", "teleport*", "multiverse",
+)
+_FANTASY_TERMS = (
+    "fantasy", "magic", "dragon", "wizard", "witch*", "sorcer*", "mytholog*",
+    "myth", "fairy", "fairy tale", "elf", "elves", "supernatural", "vampire",
+    "werewolf", "ghost", "demon", "angel", "curse", "medieval", "sword*",
+    "legend", "folklore", "spirit", "afterlife", "hell", "heaven", "god",
+    "immortal*", "prophecy", "occult", "necromanc*", "shapeshift*",
+)
+
+
+def _term_pattern(terms: tuple[str, ...]) -> "re.Pattern[str]":
+    parts = [
+        re.escape(t[:-1]) + r"\w*" if t.endswith("*") else re.escape(t) + r"s?"
+        for t in terms
+    ]
+    return re.compile(r"\b(?:" + "|".join(parts) + r")\b")
+
+
+_SCIFI_RE = _term_pattern(_SCIFI_TERMS)
+_FANTASY_RE = _term_pattern(_FANTASY_TERMS)
+
+TV_SCIFI_FANTASY = 10765
+_SCIFI, _FANTASY = 878, 14
+
+
+def _scifi_or_fantasy(keywords: list[str], imdb_genres: list[str] | None = None) -> int | None:
+    """878 or 14 for a show TMDB files as 10765, or None when nothing
+    decides it.  Keywords first; IMDb's genres only break a tie, because
+    IMDb keeps three per title and most of these shows spend them on
+    Action/Adventure/Drama."""
+    sci = sum(1 for k in keywords if _SCIFI_RE.search(k.lower()))
+    fan = sum(1 for k in keywords if _FANTASY_RE.search(k.lower()))
+    if sci != fan:
+        return _SCIFI if sci > fan else _FANTASY
+    imdb = {g.strip().lower() for g in imdb_genres or ()}
+    has_sci = bool(imdb & {"sci-fi", "science fiction"})
+    has_fan = "fantasy" in imdb
+    if has_sci != has_fan:
+        return _SCIFI if has_sci else _FANTASY
+    return None
+
+
+async def _split_tv_scifi_fantasy(
+    client: httpx.AsyncClient,
+    genre_ids: list[int],
+    keywords: list[str],
+    imdb_id: str | None,
+) -> list[int]:
+    """Replace 10765 with 878 or 14 where the show says which.  Unresolved
+    shows keep 10765, which still reads "Sci-Fi" as before."""
+    if TV_SCIFI_FANTASY not in genre_ids:
+        return genre_ids
+    pick = _scifi_or_fantasy(keywords)
+    if pick is None and imdb_id and CINEMETA_ENABLED:
+        # Cached for a week and keyless; only reached on a keyword tie.
+        meta = await cinemeta.fetch_cinemeta_meta(client, imdb_id, "tv")
+        if meta:
+            pick = _scifi_or_fantasy([], meta.get("genres") or meta.get("genre") or [])
+    if pick is None:
+        return genre_ids
+    out: list[int] = []
+    for gid in genre_ids:
+        gid = pick if gid == TV_SCIFI_FANTASY else gid
+        if gid not in out:
+            out.append(gid)
+    return out
+
+
+# TMDB's TV genre list has no Horror at all, so American Horror Story read
+# "Fantasy".  main.py gives a show Horror from MDBList's genres (they ride on
+# the ratings call already made) whenever it has them; this is the answer for
+# the cache, used until MDBList has spoken and by servers without a key.
+# Checked on the 300 most-voted shows against MDBList, TVDB and Cinemeta
+# (Horror where two of three agree): a "horror" keyword caught 74% of the 19
+# horror shows at 67% precision, the extras debatable (Black Mirror, iZombie);
+# slasher/zombie/haunt added nothing.  TVDB tags Horror twice as freely as the
+# others (Death Note, Twin Peaks), Cinemeta read 89% / 94%, so a show with
+# no keywords asks Cinemeta first and TVDB only when Cinemeta can't answer.
+TV_HORROR = 27
+_HORROR_KEYWORD_RE = re.compile(r"\bhorror\b")
+
+
+async def _tv_is_horror(
+    client: httpx.AsyncClient,
+    keywords: list[str],
+    imdb_id: str | None,
+    tvdb_id: int | str | None,
+) -> bool | None:
+    """Whether a TMDB TV show is horror, short of MDBList: its keywords when it
+    has any, else Cinemeta's genres (IMDb's), else TVDB's (with a key).  None
+    when it can't be told because Cinemeta was unreachable and TVDB didn't
+    answer, so the caller doesn't cache "no" for the week."""
+    if keywords:
+        return any(_HORROR_KEYWORD_RE.search(k.lower()) for k in keywords)
+    names: list | None = None
+    cinemeta_down = False
+    if imdb_id and CINEMETA_ENABLED:
+        # Cached for a week and keyless; the same document the Sci-Fi/Fantasy
+        # tie-break reads.
+        meta = await cinemeta.fetch_cinemeta_meta(client, imdb_id, "tv")
+        if meta:
+            names = meta.get("genres") or meta.get("genre") or []
+        else:
+            # A real miss is negatively cached; an outage leaves nothing.
+            cinemeta_down = get_cached_tvdb_json(cinemeta._cache_key(imdb_id, "tv")) is None
+    if names is None and tvdb_id and tvdb.tvdb_enabled():
+        # Last, because TVDB tags Horror freely; it still knows shows that
+        # Cinemeta doesn't (no IMDb id, or no entry).
+        try:
+            record = await tvdb._fetch_record(client, int(tvdb_id), "series")
+        except Exception as exc:
+            logger.warning(f"TVDB genre lookup failed for tvdb_id={tvdb_id}: {exc}")
+            record = None
+        if record:
+            names = [g.get("name") for g in record.get("genres") or [] if isinstance(g, dict)]
+    if names is None and cinemeta_down:
+        return None
+    return any((n or "").strip().lower() == "horror" for n in names or ())
+
+
+# Whether TMDB tags a title "based on true story".  The keyword comes in the
+# details call fetch_poster_metadata already makes, is kept on the metadata row
+# (tmdb_data["true_story"]), and replaces MDBList's based-on-true-story keyword,
+# which the bulk ratings call does not carry.
+_TRUE_STORY_KEYWORD_IDS = frozenset({9672})       # "based on true story"
+_TRUE_STORY_KEYWORD_NAMES = frozenset({"based on true story", "based on a true story"})
+
+
+def tmdb_keywords_true_story(data: dict) -> bool | None:
+    """From a details answer with keywords appended: whether the title is based
+    on a true story, or None when the answer carried no keyword block."""
+    block = data.get("keywords")
+    if not isinstance(block, dict):
+        return None
+    # Films list them under "keywords", TV under "results".
+    items = block.get("keywords") if "keywords" in block else block.get("results")
+    return any(
+        k.get("id") in _TRUE_STORY_KEYWORD_IDS
+        or str(k.get("name") or "").strip().lower() in _TRUE_STORY_KEYWORD_NAMES
+        for k in items or [] if isinstance(k, dict)
+    )
+
+
 async def fetch_poster_metadata(
     client: httpx.AsyncClient,
     tmdb_id: str,
     tmdb_key: str,
     media_type: str = "movie",
     logo_language: str = "en",
+    secondary_language: str = "",
 ) -> tuple[list[int], bool, list[dict], str | None, str, str, str | None, dict]:
     """
     Fetch (or return cached) TMDB metadata, including credits,
@@ -596,7 +836,7 @@ async def fetch_poster_metadata(
     # so a title cached under one language must not be served to another without
     # that language's art.  Each language gets its own correctly-fetched entry.
     metadata_cache_key = tmdb_metadata_cache_key(
-        endpoint, tmdb_id, logo_language
+        endpoint, tmdb_id, logo_language, secondary_language
     )
 
     meta = get_cached_tmdb_metadata(metadata_cache_key)
@@ -613,15 +853,19 @@ async def fetch_poster_metadata(
             "number_of_episodes":    meta.get("number_of_episodes"),
             "tmdb_status":           meta.get("tmdb_status"),
             "vote_count":            meta.get("vote_count"),
+            "vote_average":          meta.get("vote_average"),
             "text_backdrop_path":    meta.get("text_backdrop_path"),
+            "alt_poster_path":       meta.get("alt_poster_path"),
             "original_poster_path":  meta.get("original_poster_path"),
             "poster_langs":          meta.get("poster_langs", {}),
+            "poster_pools":          meta.get("poster_pools", {}),
             "imdb_id":               meta.get("imdb_id"),
             "tmdb_release_date":     meta.get("tmdb_release_date"),
             "last_air_date":         meta.get("last_air_date"),
             "next_episode":          meta.get("next_episode"),
             "last_episode":          meta.get("last_episode"),
             "seasons":               meta.get("seasons", []),
+            "true_story":            meta.get("true_story"),
         }
         return (
             meta["genre_ids"],
@@ -644,14 +888,17 @@ async def fetch_poster_metadata(
     # a fr-fr request.
     # Note: null-language ≠ guaranteed text-free; TMDB uses it for both truly
     # textless art and posters where the language simply wasn't catalogued.
-    _img_langs = ",".join(_tmdb_include_image_languages(logo_language))
+    _img_langs = ",".join(_tmdb_include_image_languages(logo_language, secondary_language))
 
     logger.info(f"External API Call: Requested meta from TMDB for {tmdb_id}")
     resp = await client.get(
         f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}",
         params={
             "api_key": tmdb_key,
-            "append_to_response": "images,credits,external_ids",
+            # Keywords settle TV's merged Sci-Fi & Fantasy genre (see
+            # _split_tv_scifi_fantasy), and for both types say whether the
+            # title is based on a true story (tmdb_keywords_true_story).
+            "append_to_response": "images,credits,external_ids,keywords",
             "include_image_language": _img_langs,
         },
     )
@@ -693,6 +940,16 @@ async def fetch_poster_metadata(
         poster_path = data.get("poster_path")
         is_textless = False
 
+    # Runner-up textless poster, tried once when the pick turns out to have
+    # burned-in text.  Only for large pools, where one uploader can't own most
+    # of the textless set.  The scan runs on the request path (the backdrop
+    # fallback still follows if it fails), so it's never more than one.
+    alt_poster_path: str | None = None
+    if len(textless) >= TEXTLESS_ALT_MIN_POSTERS:
+        alt_poster_path = _select_textless_poster(
+            [p for p in textless if p is not best]
+        )["file_path"]
+
     if not poster_path:
         logger.warning(f"No poster image on TMDB for tmdb_id={tmdb_id} — fallback canvas will be served")
         is_textless = False  # no art, no point fetching logos
@@ -727,6 +984,18 @@ async def fetch_poster_metadata(
     )
 
     genre_ids            = [g["id"] for g in data.get("genres", [])]
+    _genres_unsettled    = False
+    true_story           = bool(tmdb_keywords_true_story(data))
+    if endpoint == "tv":
+        # TV keywords sit under "results" (films use "keywords").
+        _kw = [k.get("name") or "" for k in (data.get("keywords") or {}).get("results", [])]
+        genre_ids = await _split_tv_scifi_fantasy(client, genre_ids, _kw, imdb_id)
+        _horror = await _tv_is_horror(
+            client, _kw, imdb_id, (data.get("external_ids") or {}).get("tvdb_id"),
+        )
+        if _horror:
+            genre_ids.append(TV_HORROR)
+        _genres_unsettled = _horror is None
     credits              = data.get("credits", {})
     production_companies = data.get("production_companies", [])
     original_language    = data.get("original_language")
@@ -735,6 +1004,11 @@ async def fetch_poster_metadata(
     number_of_episodes   = data.get("number_of_episodes")
     tmdb_status          = data.get("status")   # e.g. "Released", "In Production", "Returning Series"
     vote_count           = data.get("vote_count")
+    # The title's own aggregate score, straight from the same details call
+    # already made for genre/year/credits — no extra API request. 0-10 scale,
+    # same as TMDB's UI. Lets the "tmdb" rating weight be sourced without
+    # MDBList when tmdb_rating_source=direct (see main._merge_direct_tmdb_rating).
+    vote_average         = data.get("vote_average")
     tmdb_release_date    = raw_date or None
     last_air_date        = data.get("last_air_date")
     next_episode         = data.get("next_episode_to_air") or None
@@ -750,6 +1024,8 @@ async def fetch_poster_metadata(
     # original-art mode needs the original-language poster (e.g. the Spanish
     # poster for a Spanish film) to honour poster-language priority.
     _covered = {logo_language, "en"}
+    if secondary_language:
+        _covered.add(secondary_language)
     _have_orig_logos   = any(lg.get("iso_639_1") == original_language for lg in logos)
     _have_orig_posters = any(p.get("iso_639_1")  == original_language for p in posters)
     if (
@@ -794,34 +1070,72 @@ async def fetch_poster_metadata(
                 poster_langs[_pl] = _p["file_path"]
                 _poster_best_vote[_pl] = _pv
 
-    set_cached_tmdb_metadata(
-        metadata_cache_key,
-        title,
-        release_year,
-        genre_ids,
-        is_textless,
-        poster_path,
-        logos,
-        credits=credits,
-        production_companies=production_companies,
-        original_language=original_language,
-        original_title=original_title,
-        runtime=runtime,
-        number_of_seasons=number_of_seasons,
-        number_of_episodes=number_of_episodes,
-        backdrop_path=backdrop_path,
-        tmdb_status=tmdb_status,
-        vote_count=vote_count,
-        text_backdrop_path=text_backdrop_path,
-        original_poster_path=original_poster_path,
-        poster_langs=poster_langs,
-        imdb_id=imdb_id,
-        tmdb_release_date=tmdb_release_date,
-        last_air_date=last_air_date,
-        next_episode=next_episode,
-        last_episode=last_episode,
-        seasons=seasons,
-    )
+    # Top candidates for the random pick (poster_pick=random): textless in pick
+    # order, and per language key by rating.  poster_langs above stays the
+    # single best, so a random pool never changes the default pick.
+    _lang_pools: dict[str, list[str]] = {}
+    for _p in sorted(posters, key=lambda p: -(p.get("vote_average") or 0)):
+        for _pl in _image_language_keys(_p):
+            _pool = _lang_pools.setdefault(_pl, [])
+            if len(_pool) < POSTER_POOL_SIZE:
+                _pool.append(_p["file_path"])
+    poster_pools = {
+        "textless": [
+            p["file_path"] for p in _rank_textless_posters(textless)[:POSTER_POOL_SIZE]
+        ],
+        "langs": _lang_pools,
+        # Languages with a text-bearing backdrop, so an operator's per-language
+        # landscape choice (art_overrides) knows where TMDB already has one.
+        # Rows cached before this was kept lack it; see main's landscape hook.
+        "backdrop_langs": sorted({
+            key for b in _text_backdrops for key in _image_language_keys(b)
+        }),
+        # Landscape's random pick (landscape_poster_pick=random): the top
+        # neutral backdrops, and the top text-bearing ones, by rating.
+        "backdrops": [b["file_path"] for b in sorted(
+            backdrop_candidates, key=lambda b: -(b.get("vote_average") or 0))[:POSTER_POOL_SIZE]],
+        "text_backdrops": [b["file_path"] for b in sorted(
+            _text_backdrops, key=lambda b: -(b.get("vote_average") or 0))[:POSTER_POOL_SIZE]],
+    }
+
+    # A show whose Horror couldn't be told (Cinemeta down) isn't cached: the
+    # render is provisional, and the next one asks again.
+    if not _genres_unsettled:
+        await asyncio.to_thread(
+            set_cached_tmdb_metadata,
+            metadata_cache_key,
+            title,
+            release_year,
+            genre_ids,
+            is_textless,
+            poster_path,
+            logos,
+            credits=credits,
+            production_companies=production_companies,
+            original_language=original_language,
+            original_title=original_title,
+            runtime=runtime,
+            number_of_seasons=number_of_seasons,
+            number_of_episodes=number_of_episodes,
+            backdrop_path=backdrop_path,
+            tmdb_status=tmdb_status,
+            vote_count=vote_count,
+            vote_average=vote_average,
+            text_backdrop_path=text_backdrop_path,
+            alt_poster_path=alt_poster_path,
+            original_poster_path=original_poster_path,
+            poster_langs=poster_langs,
+            poster_pools=poster_pools,
+            imdb_id=imdb_id,
+            tmdb_release_date=tmdb_release_date,
+            last_air_date=last_air_date,
+            next_episode=next_episode,
+            last_episode=last_episode,
+            seasons=seasons,
+            true_story=true_story,
+        )
+    else:
+        logger.info(f"TMDB metadata for tv {tmdb_id} not cached: Horror unsettled (Cinemeta unreachable)")
 
     tmdb_data = {
         "credits":              credits,
@@ -833,18 +1147,139 @@ async def fetch_poster_metadata(
         "number_of_episodes":   number_of_episodes,
         "tmdb_status":          tmdb_status,
         "vote_count":           vote_count,
+        "vote_average":         vote_average,
         "text_backdrop_path":   text_backdrop_path,
+        "alt_poster_path":      alt_poster_path,
         "original_poster_path": original_poster_path,
         "poster_langs":         poster_langs,
+        "poster_pools":         poster_pools,
         "imdb_id":              imdb_id,
         "tmdb_release_date":    tmdb_release_date,
         "last_air_date":        last_air_date,
         "next_episode":         next_episode,
         "last_episode":         last_episode,
         "seasons":              seasons,
+        "true_story":           true_story,
+        "genres_unsettled":     _genres_unsettled,
     }
 
     return genre_ids, is_textless, logos, release_year, title, poster_path, backdrop_path, tmdb_data
+
+
+# ---------------------------------------------------------------------------
+# Art cache keys
+#
+# Shared by the fetchers below and by main.py's deferred text-detection queue,
+# which has to name the cached image a fetcher wrote without re-deriving the
+# scheme. Absolute urls (anime providers, Cinemeta/Metahub) are hashed because
+# they contain characters that don't belong in a filename; TMDB paths are used
+# as-is so every existing cache entry keeps its key.
+# ---------------------------------------------------------------------------
+
+def is_absolute_art(path: str | None) -> bool:
+    return bool(path) and path.startswith(("http://", "https://"))
+
+
+def _art_token(path: str) -> str:
+    # An operator's stored image ("custom:<hash>.jpg") is hashed like a url.
+    if is_absolute_art(path) or path.startswith("custom:"):
+        return hashlib.sha256(path.encode()).hexdigest()[:16]
+    return path.strip("/")
+
+
+def _id_token(tmdb_id: str) -> str:
+    # A stand-in id ("kitsu:12345") carries a colon; replaced so the key is a
+    # portable filename on every filesystem. Numeric TMDB ids are unchanged.
+    return tmdb_id.replace(":", "_")
+
+
+def poster_image_cache_key(tmdb_id: str, media_type: str, poster_path: str) -> str:
+    # Stremio asks for "series", the warmer and TMDB say "tv": one file either way.
+    kind = "tv" if media_type == "series" else media_type
+    return f"{kind}_{_id_token(tmdb_id)}_{_art_token(poster_path)}{_canvas_suffix(poster_canvas())}"
+
+
+def backdrop_image_cache_key(tmdb_id: str, backdrop_path: str, avoid_text: bool) -> str:
+    # Carries the crop-logic version so changing the crop algorithm invalidates
+    # previously-cached crops instead of serving the old framing.
+    return (
+        f"backdrop_{_id_token(tmdb_id)}_{_art_token(backdrop_path)}_{_CROP_VERSION}"
+        + ("_ta" if avoid_text else "")
+        + _canvas_suffix(poster_canvas())
+    )
+
+
+def landscape_image_cache_key(tmdb_id: str, backdrop_path: str) -> str:
+    return (
+        f"landscape_{_id_token(tmdb_id)}_{_art_token(backdrop_path)}"
+        f"_{LANDSCAPE_WIDTH}x{LANDSCAPE_HEIGHT}"
+    )
+
+
+def _cached_art(cache_key: str, size: tuple[int, int], fit) -> "Image.Image | None":
+    """A cached art file as RGBA, fitted to *size* when it was stored at
+    another, or None on a miss.  Blocking (a file read and a decode); run
+    through asyncio.to_thread, which carries the request's canvas along."""
+    cached_bytes = get_cached_tmdb_poster(cache_key)
+    if not cached_bytes:
+        return None
+    image = Image.open(io.BytesIO(cached_bytes)).convert("RGBA")
+    if image.size != size:
+        image = fit(image)
+    return image
+
+
+def _store_art(cache_key: str, image: Image.Image) -> None:
+    """Cache *image* as JPEG q92 RGB (no alpha needed for base art; restoring
+    it on load is free).  Blocking: an encode and an fsync'd write."""
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, format="JPEG", quality=92)
+    set_cached_tmdb_poster(cache_key, buf.getvalue())
+
+
+class BlankArtError(Exception):
+    """The image CDN answered 200 with a flat single-colour image."""
+
+
+def _is_blank_art(content: bytes) -> bool:
+    """True for an image with no detail at all — a flat colour field.
+
+    TMDB's CDN now and then serves an all-black JPEG of the right size for a
+    rendition (seen for w780 posters: 5-7 KB, every pixel 0), while the other
+    sizes of the same image are fine.  Cached, the black one became the
+    title's art at that canvas size for the whole cache window.
+    Real posters are never this flat; a draft decode keeps the check cheap.
+    """
+    try:
+        image = Image.open(io.BytesIO(content))
+        image.draft("L", (64, 64))
+        image = image.convert("L")
+        image.thumbnail((64, 64))
+        low, high = image.getextrema()
+        return high - low < 4
+    except Exception:
+        return False   # an undecodable body fails later, in the caller
+
+
+async def _get_art(client: httpx.AsyncClient, url: str, **kwargs) -> bytes:
+    """Download image bytes, rejecting a blank body (see _is_blank_art).
+
+    A TMDB url whose rendition comes back blank is asked for again at another
+    size: the blank one tends to stick to a single rendition for a while, and
+    every caller resizes to its canvas anyway.  All of them blank raises
+    BlankArtError, so nothing blank is ever cached."""
+    urls = [url]
+    m = re.match(r"(https://image\.tmdb\.org/t/p/)([a-z0-9]+)(/.+)\Z", url)
+    if m:
+        urls += [f"{m.group(1)}{size}{m.group(3)}"
+                 for size in ("original", "w780", "w500") if size != m.group(2)][:2]
+    for candidate in urls:
+        resp = await client.get(candidate, **kwargs)
+        resp.raise_for_status()
+        if not _is_blank_art(resp.content):
+            return resp.content
+        logger.warning(f"Blank image from {candidate}")
+    raise BlankArtError(url)
 
 
 async def fetch_poster_image(
@@ -863,29 +1298,40 @@ async def fetch_poster_image(
     The image is returned as RGBA so the compositing pipeline can use
     alpha_composite throughout without mode-checking.
     """
-    poster_cache_key = f"{media_type}_{tmdb_id}_{poster_path.strip('/')}"
-    cached_bytes = get_cached_tmdb_poster(poster_cache_key)
-
-    if cached_bytes:
-        logger.info(f"TMDB poster cache hit for {tmdb_id}")
-        # Stored as JPEG RGB — convert to RGBA for the compositing pipeline
-        image = Image.open(io.BytesIO(cached_bytes)).convert("RGBA")
-        if image.size != (POSTER_WIDTH, POSTER_HEIGHT):
-            image = normalise_poster(image)
+    # Anime providers (AniList/Kitsu) and Cinemeta hand us an absolute CDN url
+    # rather than a TMDB path.  Detect that and fetch it directly; the
+    # cache/normalise/return path below is identical either way.
+    _is_absolute = is_absolute_art(poster_path)
+    poster_cache_key = poster_image_cache_key(tmdb_id, media_type, poster_path)
+    # Decoding, resizing and encoding are off the loop: at the larger canvases
+    # a LANCZOS resize alone is a few hundred ms, and every request in the
+    # worker would wait on it.
+    image = await asyncio.to_thread(_cached_art, poster_cache_key, poster_canvas(), normalise_poster)
+    if image is not None:
+        logger.info(f"Poster cache hit for {tmdb_id}")
         return image
 
-    logger.info(f"External API Call: Requested poster from TMDB for {tmdb_id}")
-    img_resp = await client.get(f"https://image.tmdb.org/t/p/w500{poster_path}")
-    img_resp.raise_for_status()
-    image = Image.open(io.BytesIO(img_resp.content)).convert("RGBA")
-    image = normalise_poster(image)
+    def _decode_and_store(content: bytes) -> Image.Image:
+        image = normalise_poster(Image.open(io.BytesIO(content)).convert("RGBA"))
+        _store_art(poster_cache_key, image)
+        return image
 
-    # Save as JPEG RGB (no alpha needed for base poster; restoring alpha on load is free)
-    buf = io.BytesIO()
-    image.convert("RGB").save(buf, format="JPEG", quality=92)
-    set_cached_tmdb_poster(poster_cache_key, buf.getvalue())
+    if poster_path.startswith("custom:"):
+        # An operator's pasted or uploaded image, already on disk.
+        from art_overrides import custom_art_bytes
+        content = await asyncio.to_thread(custom_art_bytes, poster_path)
+        if content is None:
+            raise FileNotFoundError(f"custom art {poster_path} is missing")
+        return await asyncio.to_thread(_decode_and_store, content)
+    if _is_absolute:
+        logger.info(f"External API Call: Requested poster art for {tmdb_id}")
+        content = await _get_art(client, poster_path, follow_redirects=True)
+    else:
+        logger.info(f"External API Call: Requested poster from TMDB for {tmdb_id}")
+        _tmdb_size = POSTER_WIDTHS.get(poster_canvas()[0], "w500")
+        content = await _get_art(client, f"https://image.tmdb.org/t/p/{_tmdb_size}{poster_path}")
 
-    return image
+    return await asyncio.to_thread(_decode_and_store, content)
 
 
 # Bumped whenever the backdrop crop logic changes, so cached crops from the old
@@ -897,7 +1343,9 @@ async def fetch_poster_image(
 #        low-confidence false-positive blob can no longer outrank a smaller,
 #        genuinely-confident face purely on bounding-box size (see
 #        face_detect.detect_faces docstring — observed on TMDB 450545)
-_CROP_VERSION = "v5"
+#   v6 = retry face detection at half size when none are found, for close-ups
+#        too large for YuNet at native size (TMDB 1751701)
+_CROP_VERSION = "v6"
 
 
 def _face_crop_left(image: Image.Image, crop_w: int) -> "int | None":
@@ -1084,43 +1532,215 @@ async def fetch_backdrop_image(
     produce a profile that biases the crop away from burned-in title text.  Cached under the
     same JPEG scheme as regular posters (text-aware crops keyed separately).
     """
-    # Cache key carries a crop-logic version so changing the crop algorithm
-    # (e.g. adding face-aware cropping) invalidates previously-cached crops
-    # instead of serving the old framing.  Bump _CROP_VERSION on any crop change.
-    cache_key = (
-        f"backdrop_{tmdb_id}_{backdrop_path.strip('/')}_{_CROP_VERSION}"
-        + ("_ta" if avoid_text else "")
-    )
-    cached_bytes = get_cached_tmdb_poster(cache_key)
-
-    if cached_bytes:
+    # Bump _CROP_VERSION on any crop change — it is part of the key.
+    cache_key = backdrop_image_cache_key(tmdb_id, backdrop_path, avoid_text)
+    image = await asyncio.to_thread(_cached_art, cache_key, poster_canvas(), normalise_poster)
+    if image is not None:
         logger.info(f"TMDB backdrop cache hit for {tmdb_id}")
-        image = Image.open(io.BytesIO(cached_bytes)).convert("RGBA")
-        if image.size != (POSTER_WIDTH, POSTER_HEIGHT):
-            image = normalise_poster(image)
         return image
 
-    # w1280 gives enough resolution to crop to a quality portrait
-    logger.info(f"External API Call: Requested backdrop from TMDB for {tmdb_id}")
-    img_resp = await client.get(f"https://image.tmdb.org/t/p/w1280{backdrop_path}")
-    img_resp.raise_for_status()
-    image = Image.open(io.BytesIO(img_resp.content)).convert("RGBA")
+    # w1280 (720 px tall) crops to a quality 500x750 portrait.  A larger canvas
+    # needs more height than that, so it takes the original and shrinks it to
+    # the canvas height first: the crop then works on no more pixels than the
+    # poster needs, whatever size the original is.
+    size = poster_canvas()
+    _large = size[1] > 720
+    if is_absolute_art(backdrop_path):
+        logger.info(f"External API Call: Requested backdrop art for {tmdb_id}")
+        content = await _get_art(client, backdrop_path, follow_redirects=True)
+    else:
+        logger.info(f"External API Call: Requested backdrop from TMDB for {tmdb_id}")
+        content = await _get_art(
+            client,
+            f"https://image.tmdb.org/t/p/{'original' if _large else 'w1280'}{backdrop_path}",
+        )
 
-    # The crop runs CPU-heavy face/text inference, so do it in the thread pool;
-    # running it inline would stall the event loop and delay unrelated requests.
-    image = await asyncio.get_running_loop().run_in_executor(
-        None, _crop_and_normalise_backdrop, image, tmdb_id, avoid_text
+    # The decode, the downscale of an original, the crop (CPU-heavy face/text
+    # inference) and the encode all run in the thread pool; inline they would
+    # stall the event loop and delay unrelated requests.
+    def _decode_crop_store(content: bytes) -> Image.Image:
+        image = Image.open(io.BytesIO(content)).convert("RGBA")
+        if _large and image.height > size[1]:
+            image = image.resize((round(image.width * size[1] / image.height), size[1]),
+                                 Image.Resampling.LANCZOS, reducing_gap=2.0)
+        image = _crop_and_normalise_backdrop(image, tmdb_id, avoid_text, size)
+        _store_art(cache_key, image)
+        return image
+
+    return await asyncio.to_thread(_decode_crop_store, content)
+
+
+async def fetch_cropped_art(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    path: str,
+    crop,
+) -> Image.Image:
+    """An operator's hand-placed 2:3 crop (art_overrides.Crop) of *path* — a
+    TMDB image path, an absolute url or a stored custom image — as a poster.
+    No face or saliency detection: the operator has already framed it.
+    Cached per image, crop and canvas."""
+    size = poster_canvas()
+    cache_key = (f"crop_{_id_token(tmdb_id)}_{_art_token(path)}_"
+                 f"{hashlib.sha256(crop.token().encode()).hexdigest()[:10]}{_canvas_suffix(size)}")
+    image = await asyncio.to_thread(_cached_art, cache_key, size, normalise_poster)
+    if image is not None:
+        logger.info(f"Cropped art cache hit for {tmdb_id}")
+        return image
+
+    if path.startswith("custom:"):
+        from art_overrides import custom_art_bytes
+        content = await asyncio.to_thread(custom_art_bytes, path)
+        if content is None:
+            raise FileNotFoundError(f"custom art {path} is missing")
+    else:
+        if is_absolute_art(path):
+            url = path
+        else:
+            # A zoomed or large-canvas crop needs the pixels; w1280 (720 px
+            # tall) is plenty for a full-height crop at the default canvas.
+            url = f"https://image.tmdb.org/t/p/{'original' if (crop.zoom > 1 or size[1] > 720) else 'w1280'}{path}"
+        logger.info(f"External API Call: Requested art to crop for {tmdb_id}")
+        content = await _get_art(client, url, follow_redirects=True)
+
+    def _decode_crop_store(data: bytes) -> Image.Image:
+        source = Image.open(io.BytesIO(data)).convert("RGBA")
+        image = normalise_poster(source.crop(crop.box(*source.size)), size)
+        _store_art(cache_key, image)
+        return image
+
+    return await asyncio.to_thread(_decode_crop_store, content)
+
+
+def normalise_landscape(image: Image.Image) -> Image.Image:
+    """Fit-cover an image to the landscape canvas.
+
+    Backdrops are already 16:9, so this is effectively a resize; the cover maths
+    is kept so the odd 1.85:1 or 2:1 source is centred rather than squashed.
+    """
+    target_w, target_h = LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT
+    src_w, src_h = image.size
+    scale = max(target_w / src_w, target_h / src_h)
+    new_w, new_h = round(src_w * scale), round(src_h * scale)
+    image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    left = round((new_w - target_w) / 2)
+    top  = round((new_h - target_h) / 2)
+    return image.crop((left, top, left + target_w, top + target_h))
+
+
+async def fetch_landscape_image(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    backdrop_path: str,
+) -> Image.Image:
+    """
+    Fetch a TMDB backdrop and fit it to the landscape canvas, uncropped.
+
+    The portrait pipeline's expensive part — saliency and face detection to pick
+    a 2:3 strip out of a 16:9 frame — has nothing to do here: the source and the
+    target are the same shape, so the whole crop stage is skipped.
+
+    Cached separately from the portrait backdrop crop of the same asset; the two
+    are different images and must not share a key.
+    """
+    cache_key = landscape_image_cache_key(tmdb_id, backdrop_path)
+    image = await asyncio.to_thread(
+        _cached_art, cache_key, (LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT), normalise_landscape
     )
+    if image is not None:
+        logger.info(f"TMDB landscape cache hit for {tmdb_id}")
+        return image
 
-    buf = io.BytesIO()
-    image.convert("RGB").save(buf, format="JPEG", quality=92)
-    set_cached_tmdb_poster(cache_key, buf.getvalue())
+    def _decode_and_store(content: bytes) -> Image.Image:
+        image = normalise_landscape(Image.open(io.BytesIO(content)).convert("RGBA"))
+        _store_art(cache_key, image)
+        return image
 
-    return image
+    if backdrop_path.startswith("custom:"):
+        # An operator's pasted or uploaded image, already on disk.
+        from art_overrides import custom_art_bytes
+        content = await asyncio.to_thread(custom_art_bytes, backdrop_path)
+        if content is None:
+            raise FileNotFoundError(f"custom art {backdrop_path} is missing")
+        return await asyncio.to_thread(_decode_and_store, content)
+    if is_absolute_art(backdrop_path):
+        logger.info(f"External API Call: Requested landscape backdrop art for {tmdb_id}")
+        content = await _get_art(client, backdrop_path, follow_redirects=True)
+    else:
+        logger.info(f"External API Call: Requested landscape backdrop from TMDB for {tmdb_id}")
+        content = await _get_art(client, f"https://image.tmdb.org/t/p/w1280{backdrop_path}")
+
+    return await asyncio.to_thread(_decode_and_store, content)
+
+
+# Where a poster's 16:9 cut sits with no face to centre on: a third of the
+# way down, above the title most posters carry low.
+_PORTRAIT_CUT_Y = 0.3
+
+
+def _landscape_from_portrait(image: Image.Image) -> Image.Image:
+    """A 16:9 cut of a portrait image at the landscape canvas: across its full
+    width, centred on its faces where it has any, else _PORTRAIT_CUT_Y down."""
+    target_w, target_h = LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT
+    if image.width / image.height >= target_w / target_h:
+        return normalise_landscape(image)
+    scale = target_w / image.width
+    image = image.resize((target_w, round(image.height * scale)), Image.Resampling.LANCZOS)
+    room = image.height - target_h
+    top = room * _PORTRAIT_CUT_Y
+    try:
+        import face_detect
+        faces = face_detect.detect_face_boxes(image.convert("RGB"))
+    except Exception:
+        faces = []
+    if faces:
+        weight = sum(max(score, 0.0) ** 3 * fw * fh for _x, _y, fw, fh, score in faces)
+        if weight > 0:
+            cy = sum((y + fh / 2) * max(score, 0.0) ** 3 * fw * fh
+                     for _x, y, fw, fh, score in faces) / weight
+            top = cy - target_h / 2
+    top = round(min(max(top, 0), room))
+    return image.crop((0, top, target_w, top + target_h))
+
+
+async def fetch_landscape_crop(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    poster_path: str,
+) -> Image.Image:
+    """A poster cut to the landscape canvas (landscape_poster_crop), for a
+    title with no backdrop anywhere.  A TMDB poster is fetched at w780, which
+    a 1000-wide cut barely enlarges."""
+    cache_key = landscape_image_cache_key(tmdb_id, poster_path) + "_pcut"
+    image = await asyncio.to_thread(
+        _cached_art, cache_key, (LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT), normalise_landscape
+    )
+    if image is not None:
+        logger.info(f"Landscape poster cut cache hit for {tmdb_id}")
+        return image
+    if poster_path.startswith("custom:"):
+        from art_overrides import custom_art_bytes
+        content = await asyncio.to_thread(custom_art_bytes, poster_path)
+        if content is None:
+            raise FileNotFoundError(f"custom art {poster_path} is missing")
+    elif is_absolute_art(poster_path):
+        logger.info(f"External API Call: Requested poster art for a landscape cut of {tmdb_id}")
+        content = await _get_art(client, poster_path, follow_redirects=True)
+    else:
+        logger.info(f"External API Call: Requested poster from TMDB for a landscape cut of {tmdb_id}")
+        content = await _get_art(client, f"https://image.tmdb.org/t/p/w780{poster_path}")
+
+    def _decode_and_store(content: bytes) -> Image.Image:
+        image = _landscape_from_portrait(Image.open(io.BytesIO(content)).convert("RGBA"))
+        _store_art(cache_key, image)
+        return image
+
+    return await asyncio.to_thread(_decode_and_store, content)
 
 
 def _crop_and_normalise_backdrop(image: Image.Image, tmdb_id: str,
-                                 avoid_text: bool) -> Image.Image:
+                                 avoid_text: bool,
+                                 size: tuple[int, int] | None = None) -> Image.Image:
     """Synchronous backdrop crop (face-aware → saliency fallback) + normalise.
     Runs in the thread pool; all OpenCV inference is confined here."""
     # Optional text-density profile to steer the crop away from title text.
@@ -1153,7 +1773,24 @@ def _crop_and_normalise_backdrop(image: Image.Image, tmdb_id: str,
             )
         image = image.crop((left, 0, left + crop_w, h))
 
-    return normalise_poster(image)
+    # Explicit size: this runs in the thread pool, where the request's
+    # poster_canvas() context does not follow.
+    return normalise_poster(image, size or (POSTER_WIDTH, POSTER_HEIGHT))
+
+
+def _cached_logo(cache_key: str) -> "Image.Image | None":
+    """A cached logo as RGBA, or None.  Blocking; run via asyncio.to_thread."""
+    cached_bytes = get_cached_tmdb_logo(cache_key)
+    if not cached_bytes:
+        return None
+    return Image.open(io.BytesIO(cached_bytes)).convert("RGBA")
+
+
+def _store_logo(cache_key: str, logo: Image.Image) -> None:
+    """Cache *logo* as PNG.  Blocking (an encode, ~15-55 ms, and a write)."""
+    buf = io.BytesIO()
+    logo.save(buf, format="PNG")
+    set_cached_tmdb_logo(cache_key, buf.getvalue())
 
 
 async def _fetch_metahub_logo(
@@ -1171,11 +1808,10 @@ async def _fetch_metahub_logo(
     URL pattern: https://images.metahub.space/logo/medium/{imdb_id}/img
     """
     cache_key = f"metahub_logo_{imdb_id}"
-    cached_bytes = get_cached_tmdb_logo(cache_key)
-
-    if cached_bytes:
+    cached = await asyncio.to_thread(_cached_logo, cache_key)
+    if cached is not None:
         logger.info(f"Metahub logo cache hit for {imdb_id}")
-        return Image.open(io.BytesIO(cached_bytes)).convert("RGBA")
+        return cached
 
     # Try medium first (smaller payload), fall back to large — some titles only
     # have a large-size entry on Metahub and the medium URL 404s.
@@ -1199,21 +1835,19 @@ async def _fetch_metahub_logo(
     if resp is None:
         return None
 
-    try:
-        logo = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-    except Exception as exc:
-        logger.warning(f"Metahub logo parse failed for {imdb_id}: {exc}")
-        return None
+    def _decode_and_store(content: bytes) -> Image.Image | None:
+        try:
+            logo = Image.open(io.BytesIO(content)).convert("RGBA")
+        except Exception as exc:
+            logger.warning(f"Metahub logo parse failed for {imdb_id}: {exc}")
+            return None
+        bbox = logo.getchannel("A").getbbox()
+        if bbox:
+            logo = logo.crop(bbox)
+        _store_logo(cache_key, logo)
+        return logo
 
-    bbox = logo.getchannel("A").getbbox()
-    if bbox:
-        logo = logo.crop(bbox)
-
-    buf = io.BytesIO()
-    logo.save(buf, format="PNG")
-    set_cached_tmdb_logo(cache_key, buf.getvalue())
-
-    return logo
+    return await asyncio.to_thread(_decode_and_store, resp.content)
 
 
 def _normalise_image_locale(value: str | None) -> str:
@@ -1240,38 +1874,210 @@ def _image_matches_language(image: dict, requested: str | None) -> bool:
     return requested in keys
 
 
-def _tmdb_include_image_languages(logo_language: str | None) -> list[str]:
-    requested = _normalise_image_locale(logo_language) or "en"
+def _tmdb_include_image_languages(
+    logo_language: str | None, secondary_language: str | None = None
+) -> list[str]:
     languages: list[str] = []
-    if requested != "en":
-        languages.append(requested)
-        base = requested.split("-", 1)[0]
-        if base and base != requested:
-            languages.append(base)
+    for candidate in (logo_language, secondary_language):
+        requested = _normalise_image_locale(candidate) or ""
+        if requested and requested != "en":
+            languages.append(requested)
+            base = requested.split("-", 1)[0]
+            if base and base != requested:
+                languages.append(base)
     languages.extend(["en", "null"])
     return list(dict.fromkeys(languages))
+
+
+# Logo language priority is an ordered list of sources, tried first to last:
+#   native             — the request's logo_language
+#   native_if_original — the same, but only when it is also the content's own
+#                        original language (so a foreign title skips it)
+#   custom             — the secondary preferred language
+#   original           — the content's own original language
+#   english            — a TMDB English logo, then the Metahub CDN (whose logos
+#                        are English in practice)
+#   neutral            — a TMDB logo tagged with no language, usually a symbol
+#                        or a wordmark nobody labelled
+#   art                — stop looking for a logo and serve the title's original
+#                        art (its poster with the title baked in), as original-
+#                        art mode would; passed over when the title has none
+#   text               — stop and draw the title as text
+# A source left out is never used; with no "text" a title that runs out of
+# logos gets no title at all.  "text" always ends the list: nothing after it
+# could be reached.  "art" can sit anywhere above it.
+LOGO_PRIORITY_SOURCES = (
+    "native", "native_if_original", "custom", "original", "english", "neutral", "art", "text",
+)
+
+# The named priorities the configurator offered before the list, kept as the
+# canonical spelling of their order so existing URLs and composite cache keys
+# are unchanged.  An order spelled out as a list that matches one of these is
+# stored under its name, for the same reason.
+LOGO_PRIORITY_PRESETS: dict[str, tuple[str, ...]] = {
+    "native_original":             ("native", "original", "neutral", "english", "text"),
+    "original_native":             ("original", "native", "neutral", "english", "text"),
+    "native_if_original_english":  ("native_if_original", "english", "original", "neutral", "text"),
+    "native_text":                 ("native", "english", "neutral", "text"),
+    "native_custom_text":          ("native", "custom", "english", "neutral", "text"),
+    "native_custom_original_text": ("native", "custom", "original", "english", "neutral", "text"),
+}
+DEFAULT_LOGO_PRIORITY = "native_original"
+
+
+def parse_logo_priority(value: str | None) -> str | None:
+    """Canonical form of a logo_priority parameter, or None when it is not one.
+
+    Accepts a preset name or a comma-separated list of LOGO_PRIORITY_SOURCES.
+    Unknown and repeated sources are dropped and the list ends at "text"; an
+    order equal to a preset comes back as that preset's name."""
+    value = (value or "").strip().lower()
+    if value in LOGO_PRIORITY_PRESETS:
+        return value
+    sources: list[str] = []
+    for token in value.split(","):
+        token = token.strip()
+        if token in LOGO_PRIORITY_SOURCES and token not in sources:
+            sources.append(token)
+            if token == "text":
+                break
+    if not sources:
+        return None
+    for name, preset in LOGO_PRIORITY_PRESETS.items():
+        if tuple(sources) == preset:
+            return name
+    return ",".join(sources)
+
+
+def logo_priority_sources(logo_priority: str) -> tuple[str, ...]:
+    """The ordered sources a canonical logo_priority stands for."""
+    preset = LOGO_PRIORITY_PRESETS.get(logo_priority)
+    if preset is not None:
+        return preset
+    return tuple(logo_priority.split(",")) if logo_priority else \
+        LOGO_PRIORITY_PRESETS[DEFAULT_LOGO_PRIORITY]
+
+
+def logo_priority_uses_custom(logo_priority: str) -> bool:
+    return "custom" in logo_priority_sources(logo_priority)
+
+
+def logo_priority_draws_text(logo_priority: str) -> bool:
+    """Whether a title with no logo falls back to its name drawn as text."""
+    return "text" in logo_priority_sources(logo_priority)
+
+
+def logo_priority_falls_back_to_art(logo_priority: str) -> bool:
+    """Whether a title with no logo (by the sources above "art") falls back to
+    its original art."""
+    return "art" in logo_priority_sources(logo_priority)
+
+
+def split_logo_priority_at_art(logo_priority: str) -> tuple[str | None, str | None]:
+    """The priority either side of its "art" source, each a canonical
+    logo_priority or None when that side has no sources.  The part before is
+    what is tried ahead of falling back to original art; the part after is
+    what is left when the title has no original art to fall back to."""
+    sources = logo_priority_sources(logo_priority)
+    if "art" not in sources:
+        return logo_priority, None
+    at = sources.index("art")
+    before, after = sources[:at], sources[at + 1:]
+    return (
+        parse_logo_priority(",".join(before)) if before else None,
+        parse_logo_priority(",".join(after)) if after else None,
+    )
+
+
+def logo_language_steps(
+    logo_language: str,
+    original_language: str | None,
+    logo_priority: str,
+    secondary_language: str | None = None,
+) -> list[str]:
+    """The priority resolved against one title, as the steps to try in order:
+    a language code for a language-tagged logo, "null" for a language-neutral
+    one, and "metahub" for the Metahub CDN (which rides with English).  Ends
+    before "text"; a source with no language to stand for (no secondary
+    language, no known original language) is skipped, and a language already
+    tried is not tried twice.  "art" contributes no step."""
+    steps: list[str] = []
+    for source in logo_priority_sources(logo_priority):
+        if source == "text":
+            break
+        if source == "art":
+            # Not a logo: the caller decides about original art (see
+            # split_logo_priority_at_art).
+            continue
+        if source == "native":
+            new = [logo_language]
+        elif source == "native_if_original":
+            new = [logo_language] if logo_language == original_language else []
+        elif source == "custom":
+            new = [secondary_language]
+        elif source == "original":
+            new = [original_language]
+        elif source == "english":
+            new = ["en", "metahub"]
+        else:
+            new = ["null"]
+        steps.extend(step for step in new if step and step not in steps)
+    return steps
 
 
 def image_language_order(
     logo_language: str,
     original_language: str | None,
     logo_priority: str,
+    secondary_language: str | None = None,
 ) -> list[str]:
-    """Return the distinct language buckets to try, in priority order."""
-    if logo_priority == "original_native":
-        languages = [original_language, logo_language]
-    elif logo_priority == "native_if_original_english":
-        languages = (
-            [logo_language, "en", original_language]
-            if original_language == logo_language
-            else ["en", original_language]
+    """The language codes of the priority, in order, for picking a language-
+    tagged image (original-art posters): the logo steps without the language-
+    neutral and Metahub ones."""
+    return [
+        step
+        for step in logo_language_steps(
+            logo_language, original_language, logo_priority, secondary_language
         )
-    elif logo_priority == "native_text":
-        languages = [logo_language]
-    else:
-        languages = [logo_language, original_language]
+        if step not in ("null", "metahub")
+    ]
 
-    return list(dict.fromkeys(language for language in languages if language))
+
+# Aspect ratio from which a logo counts as "wide" for the landscape layout.  Its
+# logo box is 0.42 w by ~0.255 h, an aspect near 2.9: a stacked or square logo
+# is capped by the height and lands small, a wordmark at 2.0 or above fills the
+# box.  Below this the layout has to shrink the logo; above it, votes decide.
+WIDE_LOGO_MIN_ASPECT = 2.0
+
+
+def _logo_aspect(logo: dict) -> float:
+    ratio = logo.get("aspect_ratio")
+    if ratio:
+        return float(ratio)
+    w, h = logo.get("width") or 0, logo.get("height") or 0
+    return (w / h) if (w and h) else 0.0
+
+
+def _logo_rank_key(prefer_wide: bool):
+    """Sort key for the winning language bucket, highest first: votes, or with
+    ``prefer_wide`` the wide logos before the rest and votes within each."""
+    def key(logo: dict) -> tuple[bool, float]:
+        wide = prefer_wide and _logo_aspect(logo) >= WIDE_LOGO_MIN_ASPECT
+        return (wide, logo.get("vote_average", 0) or 0)
+    return key
+
+
+def logo_step_available(logos: list[dict], step: str) -> bool:
+    """Whether fetch_logo would find a TMDB logo at *step* (a language code
+    or "null"), for deciding where an operator's logo override comes in."""
+    _exts = (".png", ".svg") if _HAS_CAIROSVG else (".png",)
+    for lg in logos:
+        if not lg.get("file_path", "").lower().endswith(_exts):
+            continue
+        if (lg.get("iso_639_1") in (None, "")) if step == "null" \
+                else _image_matches_language(lg, step):
+            return True
+    return False
 
 
 async def fetch_logo(
@@ -1282,29 +2088,24 @@ async def fetch_logo(
     original_language: str | None = None,
     logo_priority: str = "native_original",
     use_metahub: bool = True,
+    secondary_language: str | None = None,
+    prefer_wide: bool = False,
 ) -> Image.Image | None:
     """
     Fetch the best available logo for a title, with a Metahub CDN fallback.
 
-    Two language-specific buckets are weighed first, in an order set by
-    *logo_priority*:
-      • "native"   — a logo in the requested language (logo_language).
-      • "original" — a logo in the content's own original language
-                     (original_language); helps foreign titles that only ship
-                     a native-language logo on TMDB.
-      logo_priority:
-        "native_original" (default) → native, then original
-        "original_native"           → original, then native
-        "native_if_original_english" → native when the content is native,
-                                        otherwise English, then original
-        "native_text"               → native only, then English before neutral
-                                       fallback (skip original-language logos)
+    ``prefer_wide`` (the landscape layout) ranks a wide logo — aspect at or
+    above WIDE_LOGO_MIN_ASPECT — ahead of any narrower one within the bucket
+    that won, votes deciding among the wide ones.  Language still comes first:
+    a wide logo in the wrong language is not preferred over a stacked one in
+    the right language.
 
-    After the priority buckets, the common fallbacks apply:
-      → TMDB English logo, Metahub, then neutral logo for native_text
-      → TMDB language-neutral logo, then English logo for other priorities
-      → Metahub CDN logo for other priorities (images.metahub.space)
-      → None (caller may render the translated title as text instead).
+    The sources are tried in the order *logo_priority* gives them (see
+    LOGO_PRIORITY_SOURCES and logo_language_steps): a TMDB logo in each
+    language in turn, a language-neutral TMDB logo, and the Metahub CDN where
+    English sits.  Metahub is skipped when *use_metahub* is False, so a caller
+    can slot another provider in before it.  None when every source comes up
+    empty; the caller decides whether that means a text title.
 
     All results are cached locally so repeat requests never hit external APIs.
     """
@@ -1314,87 +2115,1082 @@ async def fetch_logo(
     _exts = (".png", ".svg") if _HAS_CAIROSVG else (".png",)
     _cand = [lg for lg in logos if lg["file_path"].lower().endswith(_exts)]
 
-    language_buckets = {
-        language: [lg for lg in _cand if _image_matches_language(lg, language)]
-        for language in image_language_order(
-            logo_language, original_language, logo_priority
-        )
-    }
-    neutral   = [lg for lg in _cand if lg.get("iso_639_1") in (None, "")]
-    english   = [lg for lg in _cand if _image_matches_language(lg, "en")]
-
-    candidates = []
-    for language in language_buckets:
-        if language_buckets[language]:
-            candidates = language_buckets[language]
+    candidates: list[dict] = []
+    for step in logo_language_steps(
+        logo_language, original_language, logo_priority, secondary_language
+    ):
+        if step == "metahub":
+            if use_metahub and imdb_id:
+                metahub_logo = await _fetch_metahub_logo(client, imdb_id)
+                if metahub_logo is not None:
+                    return metahub_logo
+            continue
+        if step == "null":
+            candidates = [lg for lg in _cand if lg.get("iso_639_1") in (None, "")]
+        else:
+            candidates = [lg for lg in _cand if _image_matches_language(lg, step)]
+        if candidates:
             break
 
-    if logo_priority == "native_text":
-        if not candidates and english:
-            candidates = english
-        if not candidates and use_metahub and imdb_id:
-            metahub_logo = await _fetch_metahub_logo(client, imdb_id)
-            if metahub_logo is not None:
-                return metahub_logo
-        if not candidates and neutral:
-            candidates = neutral
-    else:
-        for bucket in (neutral, english):
-            if not candidates and bucket:
-                candidates = bucket
-
-    candidates = sorted(
-        candidates,
-        key=lambda x: x.get("vote_average", 0),
-        reverse=True,
-    )
+    candidates = sorted(candidates, key=_logo_rank_key(prefer_wide), reverse=True)
 
     if not candidates:
-        # No TMDB logo at all — try Metahub before giving up (unless the caller
-        # has asked to skip it, e.g. to slot another source in between).
-        if use_metahub and imdb_id:
-            return await _fetch_metahub_logo(client, imdb_id)
         return None
 
-    logo_path = candidates[0]["file_path"]
-    is_svg    = logo_path.lower().endswith(".svg")
-
-    logo_cache_key = logo_path.strip('/').replace('/', '_')
-    cached_bytes = get_cached_tmdb_logo(logo_cache_key)
-
-    if cached_bytes:
-        logger.info("TMDB logo cache hit")
-        logo = Image.open(io.BytesIO(cached_bytes)).convert("RGBA")
-        return logo
-
-    # SVGs are served at "original" (the sized w500 path doesn't apply to vector);
-    # rasters use w500 which is plenty for our ≤~440px rendered width.
-    _size = "original" if is_svg else "w500"
-    resp = await client.get(f"https://image.tmdb.org/t/p/{_size}{logo_path}")
-    logger.info(f"External API Call: Requested logo from TMDB")
-    resp.raise_for_status()
-
-    if is_svg:
-        logo = _rasterize_svg(resp.content)
-        if logo is None:
-            # Rasterise failed — fall back to Metahub, then None.
-            logger.warning(f"SVG logo unusable for {imdb_id} — trying Metahub fallback")
-            return await _fetch_metahub_logo(client, imdb_id) if (use_metahub and imdb_id) else None
-    else:
-        logo = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-
-    bbox = logo.getchannel("A").getbbox()
-    if bbox:
-        logo = logo.crop(bbox)
-
-    buf = io.BytesIO()
-    logo.save(buf, format="PNG")
-    set_cached_tmdb_logo(logo_cache_key, buf.getvalue())
-
+    logo = await fetch_logo_image(client, candidates[0]["file_path"])
+    if logo is None:
+        # Rasterise failed — fall back to Metahub, then None.
+        logger.warning(f"SVG logo unusable for {imdb_id} — trying Metahub fallback")
+        return await _fetch_metahub_logo(client, imdb_id) if (use_metahub and imdb_id) else None
     return logo
 
 
+async def fetch_logo_image(client: httpx.AsyncClient, logo_path: str) -> Image.Image | None:
+    """One logo, alpha-trimmed and cached: a TMDB image path, or an absolute
+    url (an operator's fanart.tv / TVDB pick).  None when an SVG can't be
+    rasterised; an HTTP failure raises, as TMDB's always has."""
+    is_svg = urlsplit(logo_path).path.lower().endswith(".svg")
+    _absolute = is_absolute_art(logo_path)
+
+    # A larger canvas draws the logo up to 0.75 of a wider poster, past w500's
+    # 500 px, so it takes the original — shrunk to the canvas before it is
+    # cached, so no render ever decodes a multi-thousand-pixel logo.
+    _canvas = poster_canvas()
+    _large = _canvas[0] > POSTER_WIDTH
+    _custom = logo_path.startswith("custom:")
+    logo_cache_key = (
+        f"abs_{_art_token(logo_path)}" if (_absolute or _custom)
+        else logo_path.strip('/').replace('/', '_')
+    ) + _canvas_suffix(_canvas)
+    cached = await asyncio.to_thread(_cached_logo, logo_cache_key)
+    if cached is not None:
+        logger.info("TMDB logo cache hit")
+        return cached
+
+    if _custom:
+        from art_overrides import custom_art_bytes
+        content = await asyncio.to_thread(custom_art_bytes, logo_path)
+        if content is None:
+            raise FileNotFoundError(f"custom logo {logo_path} is missing")
+    elif _absolute:
+        resp = await client.get(logo_path, follow_redirects=True)
+        logger.info("External API Call: Requested chosen logo art")
+    else:
+        # SVGs are served at "original" (the sized w500 path doesn't apply to vector);
+        # rasters use w500 which is plenty for our ≤~440px rendered width.
+        _size = "original" if (is_svg or _large) else "w500"
+        resp = await client.get(f"https://image.tmdb.org/t/p/{_size}{logo_path}")
+        logger.info(f"External API Call: Requested logo from TMDB")
+    if not _custom:
+        resp.raise_for_status()
+        content = resp.content
+
+    # Rasterising, decoding, trimming and the PNG encode run off the loop.
+    def _decode_and_store(content: bytes) -> Image.Image | None:
+        if is_svg:
+            logo = _rasterize_svg(content)
+            if logo is None:
+                return None
+        else:
+            logo = Image.open(io.BytesIO(content)).convert("RGBA")
+        bbox = logo.getchannel("A").getbbox()
+        if bbox:
+            logo = logo.crop(bbox)
+        if _large and (logo.width > _canvas[0] or logo.height > _canvas[1] // 3):
+            logo.thumbnail((_canvas[0], _canvas[1] // 3), Image.Resampling.LANCZOS)
+        _store_logo(logo_cache_key, logo)
+        return logo
+
+    return await asyncio.to_thread(_decode_and_store, content)
+
+
 _trending_inflight: dict[str, asyncio.Event] = {}
+# When each visitor's list was last noted as asked for, per worker: the note
+# is a write, and the rank lookup asks once per poster.
+_TRENDING_REQUEST_NOTE_SECS = 3600
+_trending_request_noted_at: dict[str, float] = {}
+
+# ---------------------------------------------------------------------------
+# Operator-supplied trending sources
+# ---------------------------------------------------------------------------
+
+# An MDBList list page. The site serves the same list as JSON from a /json
+# suffix with no API key, so a pasted human URL can be used directly.  The list
+# path is captured whole rather than to a fixed depth: truncating it would point
+# a deeper URL at a DIFFERENT list instead of failing, which is the one outcome
+# worse than not accepting it.
+_MDBLIST_LIST_RE = re.compile(
+    r"^https?://(?:www\.)?mdblist\.com/lists/(?P<path>[^\s?#]+)", re.I
+)
+
+
+# On a movie or TV list's signature while anime is left to its own lists;
+# changed whenever what counts as anime does, so stored lists are rebuilt.
+_ANIME_SPLIT_MARK = "-anime-3"
+
+# The anime lists, series then films: AniList's unless a source replaces it.
+ANIME_ENDPOINTS = ("anime", "anime_movie")
+
+
+def trending_source_url(media_type: str) -> str:
+    """Configured trending source for *media_type*, or "" when unset."""
+    return trending_lists.operator_url(trending_lists.endpoint_of(media_type))
+
+
+def trending_kind(endpoint: str) -> str:
+    """"tv" or "movie": what a trending list's TMDB ids name."""
+    return "tv" if endpoint in ("tv", "series", "anime") else "movie"
+
+
+def anime_split() -> bool:
+    """Whether anime ranks on its own lists, and so leaves the movie and TV
+    ones: while the trending catalogs addon serves those lists."""
+    import config
+    return config.TRENDING_CATALOGS_ENABLED
+
+
+def sanitise_source_url(url: str) -> str:
+    """Scheme, host and path only — safe to log.
+
+    A trending source is an arbitrary operator-supplied URL, so it can carry an
+    api key, a bearer token, a signed query, or basic-auth credentials in the
+    userinfo.  Only the query and the userinfo are dropped, which leaves enough
+    to identify which configured source a message is about.
+    """
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError:
+        return "<unparseable url>"
+    host = parsed.hostname or ""
+    if not host:
+        return "<invalid url>"
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return f"{parsed.scheme}://{host}{parsed.path}"
+
+
+def trending_source_signature(media_type: str, lists: "trending_lists.TrendingLists | None" = None) -> str:
+    """Identity of the trending source, so a cached snapshot from a different
+    one is discarded rather than served until its TTL lapses.
+
+    Hashed rather than stored verbatim: this value is written to the cache DB,
+    and the URL it identifies may contain credentials.  All the signature has to
+    do is differ when the configured source differs.
+    """
+    # Hiding unreleased titles, or leaving anime to its own lists, makes a
+    # different list from the same source: one stored without it is rebuilt.
+    lists = lists or trending_lists.default()
+    out = "+released" if lists.home else ""
+    if out and media_type == "anime_movie":
+        out += "-home"            # AniList's films checked against TMDB's dates too
+    if TRENDING_HIDE_GENRES:
+        out += ("-genres:" if TRENDING_HIDE_MIXED_GENRES else "-onlygenres:") + ",".join(TRENDING_HIDE_GENRES)
+    if media_type not in ANIME_ENDPOINTS and anime_split():
+        out += _ANIME_SPLIT_MARK
+    url = _normalise_trending_url(lists.url(media_type))
+    if not url and media_type in ANIME_ENDPOINTS:
+        return ("anilist" if media_type == "anime" else "anilist-films") + out
+    if not url:
+        return ("tmdb-week" if lists.week(media_type) else "tmdb") + out
+    return "url:" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:16] + out
+
+
+def _normalise_trending_url(url: str) -> str:
+    """Rewrite an MDBList list page to its JSON export; leave anything else be.
+
+    The host is rebuilt canonically rather than echoed back: mdblist.com 301s
+    both ``http://`` and ``www.`` to ``https://mdblist.com``, and the fetch that
+    uses this needs the redirect not to matter.
+    """
+    url = url.strip()
+    match = _MDBLIST_LIST_RE.match(url)
+    if not match:
+        return url
+    path = match.group("path").strip("/")
+    if path.endswith("/json"):
+        path = path[: -len("/json")]
+    if not path:
+        return url
+    return f"https://mdblist.com/lists/{path}/json"
+
+
+# A source that just failed is not re-fetched on the next poster request: the
+# rank lookup runs per title, so without this one bad URL means one outbound
+# request (and one error line) per poster served.  Short enough that a blip
+# clears well inside the snapshot TTL.
+_TRENDING_SOURCE_RETRY_SECS = 300
+_trending_source_failed_at: dict[str, float] = {}
+# A source's payload, reused for a while: one URL backs several stored lists
+# (a visitor's pick with and without the home filter, or beside other anime
+# lists), and the trending loop refreshing them one after another should read
+# it once.  Kept briefly, as the lists themselves only change daily or hourly.
+_TRENDING_PAYLOAD_REUSE_SECS = 600
+_trending_payloads: dict[str, tuple[float, object]] = {}
+# A failed trending read is tried once more after this pause before the list
+# is given up on for the cooldown above.  Most failures are a blip (a timeout,
+# a 5xx, a throttle), and giving up costs every poster its rank until the next
+# attempt.
+_TRENDING_RETRY_DELAY_SECS = 2.0
+
+
+def _trending_item_details(item: dict) -> dict:
+    """Name, year, IMDb id and poster path from one trending-list row, for the
+    trending catalogs addon.  Covers TMDB's and MDBList's field names."""
+    date = str(item.get("release_date") or item.get("first_air_date") or "")
+    year = item.get("release_year") or item.get("year") or (date[:4] if date[:4].isascii() and date[:4].isdigit() else None)
+    out = {
+        "name": item.get("title") or item.get("name"),
+        "year": str(year) if year else None,
+        "imdb_id": item.get("imdb_id") if str(item.get("imdb_id") or "").startswith("tt") else None,
+        "poster": item.get("poster_path") or item.get("poster"),
+        "backdrop": item.get("backdrop_path"),
+    }
+    out = {k: v for k, v in out.items() if v}
+    # TMDB's rows: Animation from Japan, for telling anime apart when the id
+    # mapping doesn't know the title, and the language for when it does.
+    lang = item.get("original_language")
+    if isinstance(lang, str) and lang:
+        out["lang"] = lang
+    if 16 in (item.get("genre_ids") or []) and lang == "ja":
+        out["anime"] = True
+    # TMDB genre ids, for the catalogs' genre filter.
+    if isinstance(item.get("genre_ids"), list):
+        out["genres"] = [g for g in item["genre_ids"] if isinstance(g, int)]
+    # TMDB's vote count, for the cinema window TRENDING_HIDE_UNRELEASED
+    # judges a film's release status by (cinema_window_days).
+    if isinstance(item.get("vote_count"), int):
+        out["votes"] = item["vote_count"]
+    if "release_date" in item or "first_air_date" in item:
+        # Kept even when empty: a row with the field and no date is a title
+        # with no release date yet, which TRENDING_HIDE_UNRELEASED leaves out.
+        out["date"] = date
+    return out
+
+
+def _simkl_date(raw) -> str:
+    """SIMKL's "MM/DD/YYYY" as TMDB's "YYYY-MM-DD", "" when unreadable."""
+    m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", str(raw or "").strip())
+    return f"{m.group(3)}-{m.group(1)}-{m.group(2)}" if m else ""
+
+
+def _simkl_item_details(item: dict) -> dict:
+    """Name, year, IMDb id, poster and release date of one SIMKL row."""
+    ids = item.get("ids") or {}
+    date = _simkl_date(item.get("release_date"))
+    poster = str(item.get("poster") or "")
+    out = {
+        "name": item.get("title"),
+        "year": date[:4] or None,
+        "imdb_id": ids.get("imdb") if str(ids.get("imdb") or "").startswith("tt") else None,
+        "poster": f"https://simkl.in/posters/{poster}_m.jpg" if re.fullmatch(r"[0-9a-f/]+", poster) else None,
+        "lang": item.get("original_language"),
+    }
+    out = {k: v for k, v in out.items() if v}
+    if "release_date" in item:
+        # As on a TMDB row: a title with no date yet is not out.
+        out["date"] = date
+    return out
+
+
+def _parse_simkl_payload(items: list, media_type: str, details_out: dict | None = None) -> list[str]:
+    """Ids from one of SIMKL's trending files (data.simkl.in), in array order:
+    a row's "rank" is SIMKL's all-time rank, not its place on the list.
+
+    An anime list is keyed by AniList id where SIMKL knows it, as AniList's
+    own list is, so an anime poster finds its rank by whichever id it was
+    asked for; SIMKL's anime are split into series and films by anime_type."""
+    anime = media_type in ANIME_ENDPOINTS
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ids = item.get("ids") or {}
+        if anime and (str(item.get("anime_type") or "").lower() == "movie") != (media_type == "anime_movie"):
+            continue
+        tmdb_id = str(ids.get("tmdb") or "")
+        anilist = str(ids.get("anilist") or "")
+        if anime and anilist.isascii() and anilist.isdigit():
+            key = f"anilist:{anilist}"
+        elif tmdb_id.isascii() and tmdb_id.isdigit():
+            key = tmdb_id
+        else:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+        if details_out is not None and key not in details_out:
+            details_out[key] = _simkl_item_details(item)
+        if len(out) >= TRENDING_SOURCE_MAX_ITEMS:
+            break
+    return out
+
+
+def _parse_trending_payload(payload, media_type: str, details_out: dict | None = None) -> list[str]:
+    """Extract an ordered list of TMDB ids from a trending payload.
+
+    Handles the two shapes documented on TRENDING_SOURCE_MOVIE: TMDB's
+    ``{"results": [...]}`` (ranked by array order) and MDBList's bare array
+    (ranked by its own ``rank`` field, which is ascending but not contiguous —
+    real lists step 1000, 2000, 3000).
+
+    MDBList rows carry ``mediatype`` ("movie"/"show"), so a mixed list is
+    filtered down to the type being asked for.  TMDB's own multi-type payloads
+    use the same key with the same values, so one filter covers both.
+
+    SIMKL's trending files, a bare array whose rows carry an "ids" object,
+    are read by _parse_simkl_payload.
+    """
+    if isinstance(payload, list) and any(
+            isinstance(row, dict) and isinstance(row.get("ids"), dict) for row in payload[:5]):
+        return _parse_simkl_payload(payload, media_type, details_out)
+    if isinstance(payload, dict):
+        items = payload.get("results")
+        ranked = False
+    else:
+        items = payload
+        ranked = True
+    if not isinstance(items, list):
+        return []
+
+    wanted = "show" if trending_kind(media_type) == "tv" else "movie"
+    rows: list[tuple[float, str]] = []
+    for position, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("mediatype") or item.get("media_type") or "").lower()
+        # "tv" appears where TMDB is the source, "show" where MDBList is.
+        if kind:
+            if kind in ("tv", "series"):
+                kind = "show"
+            if kind != wanted:
+                continue
+        raw = item.get("id", item.get("tmdb_id", item.get("tmdbid")))
+        # Reject anything that is not a bare TMDB id — an IMDb id here means the
+        # payload is keyed on a different id space and silently importing it
+        # would produce a snapshot that never matches a request.
+        if raw is None or not (str(raw).isascii() and str(raw).isdigit()):
+            continue
+        order = item.get("rank") if ranked else None
+        rows.append((float(order) if isinstance(order, (int, float)) else position, str(raw)))
+        if details_out is not None and str(raw) not in details_out:
+            details_out[str(raw)] = _trending_item_details(item)
+
+    rows.sort(key=lambda row: row[0])
+    seen: set[str] = set()
+    out: list[str] = []
+    for _order, tmdb_id in rows:
+        if tmdb_id not in seen:
+            seen.add(tmdb_id)
+            out.append(tmdb_id)
+        if len(out) >= TRENDING_SOURCE_MAX_ITEMS:
+            break
+    return out
+
+
+async def fetch_trending_source_ids(
+    client: httpx.AsyncClient,
+    media_type: str,
+    details_out: dict | None = None,
+    url: str | None = None,
+    tmdb_key: str = "",
+) -> list[str] | None:
+    """Ordered TMDB ids from the operator's trending source.
+
+    Returns None when no source is configured (caller falls back to TMDB), and
+    an empty list when a source IS configured but could not be used — the caller
+    must treat that as "no trending this cycle" rather than reverting to TMDB,
+    so a broken config is visible instead of silently working.
+
+    *url* is a source a visitor chose (trending_lists) in place of the
+    operator's, "" for none.
+    """
+    operator_url = trending_source_url(media_type)
+    url = operator_url if url is None else url
+    if not url:
+        return None
+    if url.startswith(trending_lists.PROVIDER_SCHEME):
+        return await _fetch_tmdb_provider_ids(client, tmdb_key, media_type, url, details_out)
+    if url.startswith(top10_charts.SCHEME):
+        return await top10_charts.fetch_ids(client, media_type, url, details_out)
+    # The operator's source keeps the cooldown it always had; a chosen one
+    # has its own, so one broken list doesn't silence the others.
+    cooldown = media_type if url == operator_url else (
+        f"{media_type}:" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:12])
+    resolved = _normalise_trending_url(url)
+    # Only ever log the sanitised form: the configured URL can carry a token or
+    # basic-auth credentials, and this runs on the request path.
+    shown = sanitise_source_url(resolved)
+
+    failed_at = _trending_source_failed_at.get(cooldown)
+    if failed_at is not None and time.monotonic() - failed_at < _TRENDING_SOURCE_RETRY_SECS:
+        return []
+
+    ids: list[str] = []
+    error: Exception | None = None
+    for attempt in (1, 2):
+        error = None
+        try:
+            held = _trending_payloads.get(resolved)
+            fresh = held is None or time.monotonic() - held[0] >= _TRENDING_PAYLOAD_REUSE_SECS
+            if not fresh:
+                payload = held[1]
+            else:
+                logger.info(f"External API Call: trending source for {media_type} ({shown})")
+                # Redirects are followed here specifically: an operator pastes whatever
+                # their browser showed them, and a host that answers on a canonical
+                # form should not read as a broken config.
+                resp = await client.get(resolved, timeout=20.0, follow_redirects=True)
+                resp.raise_for_status()
+                payload = resp.json()
+            ids = _parse_trending_payload(payload, media_type, details_out)
+            if not ids:
+                _trending_payloads.pop(resolved, None)
+            elif fresh:
+                now = time.monotonic()
+                # Only reused briefly: drop what can't be any more.
+                for old in [u for u, (at, _p) in _trending_payloads.items()
+                            if now - at >= _TRENDING_PAYLOAD_REUSE_SECS]:
+                    del _trending_payloads[old]
+                _trending_payloads[resolved] = (now, payload)
+        except Exception as exc:
+            ids, error = [], exc
+        if ids:
+            break
+        if attempt == 1:
+            logger.warning(
+                f"Trending source for {media_type} ({shown}) "
+                f"{f'failed: {error}' if error else 'yielded no usable ids'} — retrying"
+            )
+            await asyncio.sleep(_TRENDING_RETRY_DELAY_SECS)
+    if error is not None:
+        _trending_source_failed_at[cooldown] = time.monotonic()
+        logger.error(
+            f"Trending source fetch failed ({shown}): {error} — "
+            f"no trending data will be served for {media_type} this cycle"
+        )
+        return []
+    if not ids:
+        _trending_source_failed_at[cooldown] = time.monotonic()
+        logger.error(
+            f"Trending source for {media_type} ({shown}) yielded no usable "
+            "TMDB ids — check the list is not empty and its entries carry "
+            "numeric TMDB ids. No trending data will be served this cycle."
+        )
+        return []
+    _trending_source_failed_at.pop(cooldown, None)
+    logger.info(f"Trending source for {media_type}: {len(ids)} titles from {shown}")
+    return ids
+
+
+async def _fetch_tmdb_trending_ids(
+    client: httpx.AsyncClient, tmdb_key: str, endpoint: str,
+    details_out: dict | None = None, *, window: str = "day", home: bool | None = None,
+    deep: bool = False,
+) -> list[str] | None:
+    """TMDB's trending ids for *endpoint* over *window* ("day" or "week"),
+    pages 1-5 (1-10 when unreleased titles (*home*) or anime are left out, to
+    have as many after), in rank order.
+
+    The pages are fetched concurrently, and TMDB's list can shift between those
+    requests, so a title can turn up on two pages. The first appearance wins
+    and the ranks are numbered without gaps. Keeping the last appearance, as
+    this used to, left rank numbers that no title held and put the titles
+    around them a place out.
+    """
+    # Anime is a fifth of TV's list, and unreleased films a good share of
+    # movies': twice the pages keeps the broad sash's ranks filled after.
+    if home is None:
+        home = trending_lists.default().home
+    pages_n = 10 if (home or TRENDING_HIDE_GENRES or anime_split()) else 5
+    # A list cut down to a few languages (*deep*) keeps a small share of it.
+    if deep:
+        pages_n = 20
+    logger.info(f"External API Call: Refreshing TMDB trending {endpoint}/{window} snapshot "
+                f"(pages 1-{pages_n} concurrent)")
+
+    async def _fetch_page(page: int) -> list[dict]:
+        resp = await client.get(
+            f"https://api.themoviedb.org/3/trending/{endpoint}/{window}",
+            params={"api_key": tmdb_key, "page": page},
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    try:
+        pages = await asyncio.gather(*(_fetch_page(page) for page in range(1, pages_n + 1)))
+    except Exception as exc:
+        logger.error(f"TMDB trending fetch error: {exc}")
+        return None
+
+    seen: set[str] = set()
+    ids: list[str] = []
+    for results in pages:
+        for item in results:
+            entry_id = str(item["id"])
+            if entry_id not in seen:
+                seen.add(entry_id)
+                ids.append(entry_id)
+                if details_out is not None:
+                    details_out[entry_id] = _trending_item_details(item)
+    return ids
+
+
+# "New on <service>": what came out (for TV, aired an episode) this long ago
+# at most.
+_PROVIDER_NEW_DAYS = 730
+# Pages of TMDB's discover read for a service's list, 20 titles each.
+_PROVIDER_PAGES = 10
+
+
+async def _fetch_tmdb_provider_ids(
+    client: httpx.AsyncClient, tmdb_key: str, media_type: str, url: str,
+    details_out: dict | None = None,
+) -> list[str]:
+    """What streams on a service ("tmdb-provider:<id>[:new]", see
+    trending_lists) in the US, by TMDB popularity, from TMDB's discover.
+    [] when it can't be read, as for any chosen source."""
+    provider, _, flavour = url[len(trending_lists.PROVIDER_SCHEME):].partition(":")
+    kind = trending_kind(media_type)
+    cooldown = f"{media_type}:{url}"
+    if not tmdb_key or _trending_cooling_down(cooldown):
+        return []
+    params = {
+        "api_key": tmdb_key, "watch_region": "US", "with_watch_providers": provider,
+        "with_watch_monetization_types": "flatrate", "sort_by": "popularity.desc",
+    }
+    if flavour == "new":
+        since = _date.fromordinal(_date.today().toordinal() - _PROVIDER_NEW_DAYS).isoformat()
+        # A series counts while it airs: a new season of an older show is new.
+        params["air_date.gte" if kind == "tv" else "primary_release_date.gte"] = since
+
+    async def _page(page: int) -> dict:
+        resp = await client.get(f"https://api.themoviedb.org/3/discover/{kind}",
+                                params={**params, "page": page})
+        resp.raise_for_status()
+        return resp.json()
+
+    logger.info(f"External API Call: TMDB discover for {media_type} ({url})")
+    try:
+        first = await _page(1)
+        last = min(int(first.get("total_pages") or 1), _PROVIDER_PAGES)
+        pages = [first, *await asyncio.gather(*(_page(n) for n in range(2, last + 1)))]
+    except Exception as exc:
+        _trending_source_failed_at[cooldown] = time.monotonic()
+        logger.error(f"TMDB discover for {media_type} ({url}) failed: {exc}")
+        return []
+    _trending_source_failed_at.pop(cooldown, None)
+    seen: set[str] = set()
+    ids: list[str] = []
+    for page in pages:
+        for item in page.get("results") or []:
+            entry_id = str(item.get("id") or "")
+            if entry_id.isdigit() and entry_id not in seen:
+                seen.add(entry_id)
+                ids.append(entry_id)
+                if details_out is not None:
+                    details_out[entry_id] = _trending_item_details(item)
+    logger.info(f"Trending source for {media_type}: {len(ids)} titles from {url}")
+    return ids
+
+
+def _trending_cooling_down(key: str) -> bool:
+    failed_at = _trending_source_failed_at.get(key)
+    return failed_at is not None and time.monotonic() - failed_at < _TRENDING_SOURCE_RETRY_SECS
+
+
+async def _read_twice(read, label: str):
+    """*read()* once more after a short pause if the first gave nothing."""
+    result = await read()
+    if not result:
+        logger.warning(f"Trending {label} list unreadable — retrying")
+        await asyncio.sleep(_TRENDING_RETRY_DELAY_SECS)
+        result = await read()
+        if not result:
+            logger.error(
+                f"Trending {label} list unreadable twice — no ranks for "
+                f"{_TRENDING_SOURCE_RETRY_SECS // 60} minutes"
+            )
+    return result
+
+
+def _anime_list_tmdb_ids(kind: str, lists: "trending_lists.TrendingLists | None" = None) -> set[str]:
+    """The TMDB ids (of *kind*, "tv" or "movie") of every title on the stored
+    anime lists (*lists*' own, the operator's by default): AniList entries
+    through the id mapping, and a custom source's TMDB ids as they are."""
+    import anime_ids
+    lists = lists or trending_lists.default()
+    out: set[str] = set()
+    anilist: set[int] = set()
+    for endpoint in ANIME_ENDPOINTS:
+        entry = get_cached_trending_snapshot_entry(lists.key(endpoint), include_stale=True)
+        for key in (entry[0] if entry else {}):
+            if key.startswith("anilist:"):
+                if key[8:].isdigit():
+                    anilist.add(int(key[8:]))
+            elif trending_kind(endpoint) == kind:
+                out.add(key)
+    _kitsu, tv, movie = anime_ids.ids_for_anilist(anilist)
+    return out | {str(i) for i in (tv if kind == "tv" else movie)}
+
+
+def _expire_overlapping_lists() -> None:
+    """After an anime list is rebuilt: a movie or TV list still holding one of
+    its titles is rebuilt too, on its next read, so no title is on two lists
+    with two ranks.  The TMDB lists build the anime ones first, so this only
+    happens when an anime list is refreshed on its own.  Every stored movie
+    and TV list is checked, a visitor's choice against its own anime lists."""
+    keys = {"movie", "tv"} | {k for k in trending_list_keys() if k.partition("@")[0] in ("movie", "tv")}
+    on_anime: dict[tuple, set[str]] = {}
+    for key in sorted(keys):
+        endpoint, lists = trending_lists.from_key(key)
+        entry = get_cached_trending_snapshot_entry(key)
+        # None while a scheduled refresh rebuilds it anyway: nothing to check.
+        if not entry:
+            continue
+        memo = (endpoint, lists.anime, lists.anime_movie, lists.home)
+        if memo not in on_anime:
+            on_anime[memo] = _anime_list_tmdb_ids(endpoint, lists)
+        if set(entry[0]) & on_anime[memo]:
+            logger.info(f"Trending {key}: holds titles now on an anime list — rebuilding it")
+            expire_trending_snapshot(key)
+
+
+def _without_anime(endpoint: str, ids: list[str], details: dict[str, dict],
+                   on_anime_lists: "set[str] | None" = None) -> list[str]:
+    """*ids* without the anime, which rank on the anime lists instead: every
+    title on those lists (*on_anime_lists*, their TMDB ids), whatever its
+    language, so no title is on two lists; and Japanese anime that isn't
+    trending there, a TMDB row's Animation from Japan or what the id mapping
+    knows as anime when the row is Japanese or says nothing of its language.
+    Chinese and Korean animation off the anime lists stays where it is ranked.
+    Numbered after this, so the ranks have no gaps."""
+    import anime_ids
+    kind = trending_kind(endpoint)
+    on_anime_lists = on_anime_lists or set()
+
+    def is_anime(i: str) -> bool:
+        detail = details.get(i) or {}
+        if i in on_anime_lists or detail.get("anime"):
+            return True
+        if detail.get("lang", "ja") != "ja":
+            return False
+        return bool(anime_ids.reverse_lookup(kind, i, detail.get("imdb_id")))
+
+    kept = [i for i in ids if not is_anime(i)]
+    if len(kept) < len(ids):
+        logger.info(f"Trending {endpoint}: {len(ids) - len(kept)} anime title(s) left to the anime lists")
+    return kept
+
+
+def _note_tmdb_date(detail: dict, meta) -> None:
+    """A row's release (or first air) date from its title's TMDB metadata,
+    where the row had none: what _released_only judges a series by."""
+    if "date" not in detail:
+        detail["date"] = str((meta[7] or {}).get("tmdb_release_date") or "")
+
+
+# Titles whose genres are looked up at once.
+_GENRE_BATCH = 50
+
+
+async def _in_languages(
+    client: httpx.AsyncClient, tmdb_key: str, endpoint: str, ids: list[str],
+    details: dict[str, dict], langs: "tuple[str, ...]", limit: int | None = None,
+) -> list[str]:
+    """*ids* cut down to titles of the original languages *langs* picks (see
+    trending_lists.language_matches).  The language comes off the list's own
+    row (TMDB's carry it); a row without it is looked up in the title
+    metadata the posters cache, and left off when that fails, as its
+    language can't be told.  Read in batches, stopping once *limit* are kept,
+    as _without_hidden_genres is."""
+    kind = trending_kind(endpoint)
+    sem = asyncio.Semaphore(8)
+
+    async def lang_of(entry_id: str) -> "str | None":
+        detail = details.get(entry_id) or {}
+        if detail.get("lang"):
+            return detail["lang"]
+        if not tmdb_key:
+            return None
+        async with sem:
+            try:
+                meta = await fetch_poster_metadata(client, entry_id, tmdb_key, kind)
+            except Exception as exc:
+                logger.warning(f"Trending: no language for {kind} {entry_id}: {exc}")
+                return None
+        lang = (meta[7] or {}).get("original_language")
+        if lang:
+            detail["lang"] = lang
+        # The genre filter after this needs no second lookup.
+        detail.setdefault("genres", list(meta[0]))
+        _note_tmdb_date(detail, meta)
+        details[entry_id] = detail
+        return lang
+
+    kept: list[str] = []
+    checked = 0
+    for start in range(0, len(ids), _GENRE_BATCH):
+        batch = ids[start:start + _GENRE_BATCH]
+        checked += len(batch)
+        found = await asyncio.gather(*(lang_of(i) for i in batch))
+        kept += [i for i, lang in zip(batch, found) if trending_lists.language_matches(lang, langs)]
+        if limit is not None and len(kept) >= limit:
+            break
+    logger.info(f"Trending {endpoint}: kept {len(kept)} of {checked} title(s) in {'/'.join(langs)}")
+    return kept
+
+
+async def _without_hidden_genres(
+    client: httpx.AsyncClient, tmdb_key: str, endpoint: str,
+    ids: list[str], details: dict[str, dict], limit: int | None = None,
+) -> list[str]:
+    """*ids* without the titles TRENDING_HIDE_GENRES hides.  Genres come off
+    the list's own rows (TMDB's and AniList's carry them); a row without them
+    (a custom source's) is looked up in the title metadata the posters cache,
+    and kept when that fails, so a hiccup doesn't empty the row.  Numbered
+    after this, so the ranks have no gaps.
+
+    Read in batches, stopping once *limit* are kept: a long source (SIMKL's
+    500 rows, none with genres) costs lookups only for as much of it as the
+    list will hold."""
+    hidden = set(TRENDING_HIDE_GENRES)
+    if not hidden:
+        return ids
+    kind = trending_kind(endpoint)
+    sem = asyncio.Semaphore(8)
+
+    async def genres_of(entry_id: str) -> "list[int] | None":
+        detail = details.get(entry_id) or {}
+        if isinstance(detail.get("genres"), list):
+            return detail["genres"]
+        if entry_id.startswith("anilist:") or not tmdb_key:
+            return None
+        async with sem:
+            try:
+                meta = await fetch_poster_metadata(client, entry_id, tmdb_key, kind)
+            except Exception as exc:
+                logger.warning(f"Trending: no genres for {kind} {entry_id}: {exc}")
+                return None
+        genre_ids = list(meta[0])
+        detail["genres"] = genre_ids
+        _note_tmdb_date(detail, meta)
+        details[entry_id] = detail
+        return genre_ids
+
+    from config import genre_hidden
+    kept: list[str] = []
+    checked = 0
+    for start in range(0, len(ids), _GENRE_BATCH):
+        batch = ids[start:start + _GENRE_BATCH]
+        checked += len(batch)
+        genres = await asyncio.gather(*(genres_of(i) for i in batch))
+        kept += [i for i, g in zip(batch, genres)
+                 if g is None or not genre_hidden(g, hidden, TRENDING_HIDE_MIXED_GENRES)]
+        if limit is not None and len(kept) >= limit:
+            break
+    if len(kept) < checked:
+        logger.info(f"Trending {endpoint}: left out {checked - len(kept)} title(s) of hidden genres")
+    return kept
+
+
+# Titles checked at once while dropping unreleased ones from a trending list.
+_RELEASED_BATCH = 20
+
+
+async def _released_only(
+    client: httpx.AsyncClient, tmdb_key: str, endpoint: str,
+    ids: list[str], details: dict[str, dict],
+) -> list[str]:
+    """*ids* in order without the titles not out at home yet
+    (TRENDING_HIDE_UNRELEASED), up to as many as the trending sashes rank.
+
+    A film is out at home once it streams or is on disc somewhere: TMDB's
+    release dates, the same ones its release-status sash reads, so "Cinema"
+    and "Production" films are dropped.  An AniList film ("anilist:<id>") is
+    judged by its TMDB film through the id mapping.  A series is out once its first
+    episode has aired, by the date on its trending row, else (an MDBList row
+    has none) its TMDB first air date; an AniList series by its row's date.
+    A title that can't be checked (a failed fetch, a row with no date and no
+    TMDB key) is kept: a hiccup shouldn't empty the row."""
+    limit = max(TRENDING_FETCH_COUNT, TRENDING_BROAD_FETCH_COUNT)
+    today = _date.today()
+    # AniList films are judged by the TMDB film the id mapping gives each, the
+    # dates its poster's release badge reads; unmapped, one is kept on
+    # AniList's word that it is out.
+    import anime_ids
+    tmdb_film = anime_ids.tmdb_films_for_anilist(
+        {int(i[8:]) for i in ids if i.startswith("anilist:") and i[8:].isdigit()})
+
+    def aired_by(date: str) -> bool:
+        aired = _parse_tmdb_date(date)
+        return aired is not None and aired <= today
+
+    async def out_at_home(entry_id: str) -> bool:
+        detail = details.get(entry_id) or {}
+        if entry_id.startswith("anilist:"):
+            film = tmdb_film.get(int(entry_id[8:])) if entry_id[8:].isdigit() else None
+            if film is None:
+                # A series (SIMKL's anime rows are keyed so), or a film the
+                # mapping doesn't know: by its own row's date where it has
+                # one, else on the list's word that it is out.
+                return aired_by(detail["date"]) if "date" in detail else True
+            entry_id, detail = str(film), {}
+        if trending_kind(endpoint) == "tv":
+            if "date" not in detail:
+                if not tmdb_key:
+                    return True
+                try:
+                    _note_tmdb_date(detail, await fetch_poster_metadata(client, entry_id, tmdb_key, "tv"))
+                except Exception as exc:
+                    logger.warning(f"Trending: air date check failed for series {entry_id}: {exc}")
+                    return True
+                details[entry_id] = detail
+            return aired_by(detail["date"])
+        if not tmdb_key:
+            return True
+        try:
+            # A row without a vote count (AniList's, a custom source's) is
+            # still trending, which is popularity enough for the long window.
+            info = await fetch_movie_release_info(
+                client, entry_id, tmdb_key, None,
+                primary_release_date=detail.get("date"),
+                vote_count=detail.get("votes", CINEMA_POPULAR_VOTES))
+        except Exception as exc:
+            logger.warning(f"Trending: release check failed for movie {entry_id}: {exc}")
+            return True
+        return info is None or info.get("status") not in ("Cinema", "Production")
+
+    kept: list[str] = []
+    checked = 0
+    for start in range(0, len(ids), _RELEASED_BATCH):
+        batch = ids[start:start + _RELEASED_BATCH]
+        checked += len(batch)
+        for entry_id, ok in zip(batch, await asyncio.gather(*(out_at_home(i) for i in batch))):
+            if ok:
+                kept.append(entry_id)
+        if len(kept) >= limit:
+            break
+    dropped = checked - len(kept)
+    if dropped:
+        logger.info(f"Trending {endpoint}: left out {dropped} title(s) not out at home yet")
+    return kept[:limit]
+
+
+async def ensure_trending_snapshot(
+    client: httpx.AsyncClient,
+    tmdb_key: str,
+    endpoint: str,
+    lists: "trending_lists.TrendingLists | None" = None,
+    *,
+    note_request: bool = True,
+) -> "tuple[dict[str, int], float] | None":
+    """See _ensure_trending_snapshot.  A visitor's list read for a request
+    (*note_request*, not the trending loop's refresh) is noted as asked for,
+    so the loop keeps it warm while it is in use."""
+    entry = await _ensure_trending_snapshot(client, tmdb_key, endpoint, lists,
+                                            note_request=note_request)
+    key = (lists or trending_lists.default()).key(endpoint)
+    if note_request and entry is not None and "@" in key:
+        now = time.monotonic()
+        noted = _trending_request_noted_at.get(key)
+        if noted is None or now - noted >= _TRENDING_REQUEST_NOTE_SECS:
+            _trending_request_noted_at[key] = now
+            await asyncio.to_thread(note_trending_list_requested, key)
+    return entry
+
+
+async def _ensure_trending_snapshot(
+    client: httpx.AsyncClient,
+    tmdb_key: str,
+    endpoint: str,
+    lists: "trending_lists.TrendingLists | None",
+    *,
+    note_request: bool,
+) -> "tuple[dict[str, int], float] | None":
+    """The current (rankings, expires_at) for *endpoint*, fetched only if the
+    stored snapshot has expired or came from another source.
+
+    *lists* is the visitor's choice of lists (trending_list=), the operator's
+    by default.  Each choice is stored under its own key (see
+    trending_lists.TrendingLists.key), shared by everyone who chose it.
+
+    Concurrent callers share one fetch.  None when there is nothing to rank
+    against: the source failed, or TMDB is the source and there is no key.
+    """
+    lists = lists or trending_lists.default()
+    key = lists.key(endpoint)
+    source_sig = trending_source_signature(endpoint, lists)
+
+    entry = get_cached_trending_snapshot_entry(key, source_sig)
+    if entry is not None:
+        return entry
+
+    inflight_event = _trending_inflight.get(key)
+    if inflight_event is not None:
+        await inflight_event.wait()
+        entry = get_cached_trending_snapshot_entry(key, source_sig)
+        if entry is not None:
+            return entry
+
+    event_to_set = asyncio.Event()
+    _trending_inflight[key] = event_to_set
+    details: dict[str, dict] = {}
+    source_url = lists.url(endpoint)
+    try:
+        if endpoint in ANIME_ENDPOINTS and not source_url:
+            # AniList's list, for the trending catalogs addon.  A failed read
+            # is not retried for a while: every anime poster would otherwise
+            # try again, against a rate limit the anime art fetches share.
+            # One cooldown for every choice: they all read the same AniList.
+            cooldown_key = endpoint if key == endpoint else f"{endpoint}:h{int(lists.home)}"
+            if _trending_cooling_down(cooldown_key):
+                return None
+            from anime import fetch_anilist_trending
+            films = endpoint == "anime_movie"
+            # AniList calls a film released once it is in cinemas, so leaving
+            # out what isn't home yet checks each one's TMDB dates (below) and
+            # needs more of the list to have as many after.
+            check_home = films and lists.home
+            want = max(TRENDING_FETCH_COUNT, TRENDING_BROAD_FETCH_COUNT) * (
+                2 if (check_home or TRENDING_HIDE_GENRES) else 1)
+            ids = await _read_twice(lambda: fetch_anilist_trending(client, details, films=films, limit=want,
+                                                                   hide_unreleased=lists.home),
+                                    f"AniList {endpoint}")
+            if not ids:
+                _trending_source_failed_at[cooldown_key] = time.monotonic()
+                return None
+            _trending_source_failed_at.pop(cooldown_key, None)
+            ids = await _without_hidden_genres(client, tmdb_key, endpoint, ids, details,
+                                               limit=want)
+            if check_home:
+                ids = await _released_only(client, tmdb_key, endpoint, ids, details)
+            ids = ids[:max(TRENDING_FETCH_COUNT, TRENDING_BROAD_FETCH_COUNT)]
+            rankings = {entry_id: position for position, entry_id in enumerate(ids, start=1)}
+            await asyncio.to_thread(set_cached_trending_snapshot, key, rankings, source_sig, details)
+            await asyncio.to_thread(_expire_overlapping_lists)
+            return get_cached_trending_snapshot_entry(key, source_sig) or (
+                rankings, time.time() + 86400
+            )
+
+        # An operator-configured source replaces TMDB's list entirely.
+        # A configured-but-broken source serves no ranks, so the sash
+        # goes quiet instead of falling back to TMDB and looking like
+        # the config worked.
+        source_ids = await fetch_trending_source_ids(client, endpoint, details, url=source_url,
+                                                     tmdb_key=tmdb_key)
+        if source_ids is not None:
+            if not source_ids:
+                # Deliberately NOT cached.  Writing an empty snapshot
+                # would pin "no trending" for the full TTL on what is
+                # usually a transient fetch failure; the source's own
+                # retry cooldown already stops this from re-fetching per
+                # request.  Nothing to rank against this time round.
+                if source_url.startswith(top10_charts.SCHEME):
+                    # A Streaming Top 10 chart serves its last list rather
+                    # than none: one copy of the charts backs them all, so
+                    # its going away would otherwise empty every row at once.
+                    stale = await asyncio.to_thread(
+                        get_cached_trending_snapshot_entry, key, include_stale=True)
+                    if stale is not None and stale[0]:
+                        logger.warning(f"Trending {key}: chart unreadable, serving its last list")
+                        return stale[0], time.time() + _TRENDING_SOURCE_RETRY_SECS
+                return None
+            ids = source_ids
+        else:
+            if not tmdb_key:
+                return None
+            window = "week" if lists.week(endpoint) else "day"
+            # Its own cooldown key: a custom source for this type is not in
+            # play here, so the two never share one.
+            cooldown_key = f"tmdb:{endpoint}" + (":week" if window == "week" else "")
+            if _trending_cooling_down(cooldown_key):
+                return None
+            ids = await _read_twice(
+                lambda: _fetch_tmdb_trending_ids(client, tmdb_key, endpoint, details,
+                                                 window=window, home=lists.home,
+                                                 deep=bool(lists.langs)),
+                f"TMDB {endpoint}",
+            )
+            if not ids:
+                _trending_source_failed_at[cooldown_key] = time.monotonic()
+                return None
+            _trending_source_failed_at.pop(cooldown_key, None)
+
+        if endpoint not in ANIME_ENDPOINTS and anime_split():
+            # The anime lists first, so their titles can be left off this one.
+            for anime_endpoint in ANIME_ENDPOINTS:
+                await ensure_trending_snapshot(client, tmdb_key, anime_endpoint, lists,
+                                               note_request=note_request)
+            ids = _without_anime(endpoint, ids, details,
+                                 _anime_list_tmdb_ids(trending_kind(endpoint), lists))
+        # Twice the list's length while unreleased titles are left out after.
+        limit = max(TRENDING_FETCH_COUNT, TRENDING_BROAD_FETCH_COUNT)
+        if lists.langs and endpoint not in ANIME_ENDPOINTS:
+            ids = await _in_languages(client, tmdb_key, endpoint, ids, details, lists.langs,
+                                      limit=limit * (2 if lists.home else 1))
+        ids = await _without_hidden_genres(client, tmdb_key, endpoint, ids, details,
+                                           limit=limit * (2 if lists.home else 1))
+        if lists.home:
+            ids = await _released_only(client, tmdb_key, endpoint, ids, details)
+        rankings = {entry_id: position for position, entry_id in enumerate(ids, start=1)}
+        await asyncio.to_thread(set_cached_trending_snapshot, key, rankings, source_sig, details)
+        if endpoint in ANIME_ENDPOINTS:
+            await asyncio.to_thread(_expire_overlapping_lists)
+        return get_cached_trending_snapshot_entry(key, source_sig) or (
+            rankings, time.time() + 86400
+        )
+    finally:
+        event_to_set.set()
+        _trending_inflight.pop(key, None)
+
+
+async def fetch_trending_rank_entry(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    tmdb_key: str,
+    media_type: str = "movie",
+    lists: "trending_lists.TrendingLists | None" = None,
+) -> "tuple[int | None, float | None]":
+    """(rank, expires_at): the title's rank and when the snapshot it came from
+    is replaced.  A poster that prints the rank is cached until then."""
+    endpoint = trending_lists.endpoint_of(media_type)
+    entry = await ensure_trending_snapshot(client, tmdb_key, endpoint, lists)
+    if entry is None:
+        return None, None
+    snapshot, expires_at = entry
+
+    rank = snapshot.get(str(tmdb_id))
+
+    if rank:
+        logger.info(f"Trending rank for {tmdb_id}: #{rank}")
+
+    return rank, expires_at
+
+
+async def fetch_anime_trending_rank_entry(
+    client: httpx.AsyncClient,
+    keys: list[str],
+    tmdb_key: str,
+    film: bool = False,
+    lists: "trending_lists.TrendingLists | None" = None,
+) -> "tuple[int | None, float | None]":
+    """(rank, expires_at) on the anime series (or *film*) list: the best rank
+    any of *keys* holds there.  The keys are every id the poster's title goes
+    by — "anilist:<id>" for each AniList entry it maps to, and its TMDB id for
+    a source that ranks by TMDB id."""
+    entry = await ensure_trending_snapshot(client, tmdb_key, "anime_movie" if film else "anime", lists)
+    if entry is None:
+        return None, None
+    snapshot, expires_at = entry
+    ranks = [snapshot[k] for k in keys if k in snapshot]
+    rank = min(ranks) if ranks else None
+    if rank:
+        logger.info(f"Anime trending rank for {keys[0]}: #{rank}")
+    return rank, expires_at
+
+
 _v2_trending_cache: dict[str, tuple[float, dict[str, int]]] = {}
 
 
@@ -1431,62 +3227,14 @@ async def fetch_v2_trending_rank(
         _v2_trending_cache[endpoint] = (time.monotonic() + 6 * 3600, rankings)
     return rankings.get(str(tmdb_id))
 
+
 async def fetch_trending_rank(
     client: httpx.AsyncClient,
     tmdb_id: str,
     tmdb_key: str,
     media_type: str = "movie",
 ) -> int | None:
-
-    endpoint = "tv" if media_type in ("tv", "series") else "movie"
-
-    snapshot = get_cached_trending_snapshot(endpoint)
-
-    if snapshot is None:
-        inflight_event = _trending_inflight.get(endpoint)
-        if inflight_event is not None:
-            await inflight_event.wait()
-            snapshot = get_cached_trending_snapshot(endpoint)
-        
-        if snapshot is None:
-            event_to_set = asyncio.Event()
-            _trending_inflight[endpoint] = event_to_set
-            
-            try:
-                logger.info("External API Call: Refreshing TMDB trending snapshot (pages 1-5 concurrent)")
-
-                async def _fetch_page(page: int) -> list[dict]:
-                    resp = await client.get(
-                        f"https://api.themoviedb.org/3/trending/{endpoint}/day",
-                        params={"api_key": tmdb_key, "page": page},
-                    )
-                    resp.raise_for_status()
-                    return resp.json().get("results", [])
-
-                try:
-                    pages = await asyncio.gather(*(_fetch_page(page) for page in range(1, 6)))
-                except Exception as exc:
-                    logger.error(f"TMDB trending fetch error: {exc}")
-                    return None
-
-                rankings: dict[str, int] = {}
-                rank = 1
-                for results in pages:
-                    for item in results:
-                        rankings[str(item["id"])] = rank
-                        rank += 1
-
-                set_cached_trending_snapshot(endpoint, rankings)
-                snapshot = rankings
-            finally:
-                event_to_set.set()
-                _trending_inflight.pop(endpoint, None)
-
-    rank = snapshot.get(str(tmdb_id))
-
-    if rank:
-        logger.info(f"Trending rank for {tmdb_id}: #{rank}")
-
+    rank, _expires_at = await fetch_trending_rank_entry(client, tmdb_id, tmdb_key, media_type)
     return rank
 
 
@@ -1526,11 +3274,53 @@ async def fetch_trending_candidates(
                 results.append({"tmdb_id": str(item["id"]), "media_type": media_type})
         return results
 
+    # Resolve each media type's custom source once. The day/week split is a TMDB
+    # concept; a custom source is a single list, so it stands in for the "day"
+    # pass and the "week" pass contributes nothing rather than duplicating it.
+    source_details: dict[str, dict] = {"movie": {}, "tv": {}}
+    sources = dict(zip(
+        ("movie", "tv"),
+        await asyncio.gather(
+            fetch_trending_source_ids(client, "movie", source_details["movie"]),
+            fetch_trending_source_ids(client, "tv", source_details["tv"]),
+        ),
+    ))
+
+    # The ranking snapshot and the warm list are the same fetch.  Writing it here
+    # is what makes the scheduled refresh actually refresh the ranks: without it
+    # the warm cycle pulled the operator's list, threw the order away, and the
+    # next /poster request fetched the identical list again to rebuild it — and
+    # a title warmed this cycle could be rendered against yesterday's ranks.
+    # An empty list means the fetch failed; leave the existing snapshot alone.
+    #
+    # Only an expired snapshot is replaced. Posters showing a rank are cached
+    # until their snapshot expires, so replacing a current one would put new
+    # ranks beside cached copies of the old ones. The warm loop keeps its own
+    # schedule, so it would otherwise add a second daily turnover.
+    for _media_type, _ids in sources.items():
+        _sig = trending_source_signature(_media_type)
+        if _ids and get_cached_trending_snapshot(_media_type, _sig) is None:
+            await asyncio.to_thread(
+                set_cached_trending_snapshot,
+                _media_type,
+                {entry_id: position for position, entry_id in enumerate(_ids, start=1)},
+                _sig,
+                source_details[_media_type],
+            )
+
+    async def _source_or_tmdb(media_type: str, window: str) -> list[dict]:
+        ids = sources.get(media_type)
+        if ids is None:
+            return await _fetch_list(media_type, window)
+        if window != "day":
+            return []
+        return [{"tmdb_id": tmdb_id, "media_type": media_type} for tmdb_id in ids]
+
     lists = await asyncio.gather(
-        _fetch_list("movie", "day"),
-        _fetch_list("tv", "day"),
-        _fetch_list("movie", "week"),
-        _fetch_list("tv", "week"),
+        _source_or_tmdb("movie", "day"),
+        _source_or_tmdb("tv", "day"),
+        _source_or_tmdb("movie", "week"),
+        _source_or_tmdb("tv", "week"),
     )
 
     # Round-robin merge so the result mixes movie/tv and prioritises the
@@ -1676,33 +3466,95 @@ async def fetch_supplemental_candidates(
     return candidates
 
 
-async def resolve_tmdb_id_from_imdb(
+async def tmdb_bearer_auth(request: httpx.Request) -> None:
+    """httpx request hook: send a v4 Read Access Token as a Bearer header.
+
+    Every call here passes the key as ``api_key=``, which TMDB only accepts
+    from a v3 key; the v4 token (a JWT, so ``eyJ…``) it answers with a 401
+    there but takes as ``Authorization: Bearer`` on the same v3 endpoints.
+    People paste either, since TMDB's settings page lists both (issue #47).
+    """
+    if request.url.host != "api.themoviedb.org":
+        return
+    key = request.url.params.get("api_key", "")
+    if key.startswith("eyJ"):
+        request.url = request.url.copy_remove_param("api_key")
+        request.headers["Authorization"] = f"Bearer {key}"
+
+
+def tmdb_key_rejected(exc: BaseException | None) -> bool:
+    """True when *exc* (or what it wraps) is TMDB answering 401 to our key."""
+    while exc is not None:
+        if isinstance(exc, httpx.HTTPStatusError):
+            try:
+                return (exc.response.status_code == 401
+                        and exc.request.url.host == "api.themoviedb.org")
+            except (AttributeError, RuntimeError):   # built without a request/response
+                return False
+        exc = exc.__cause__
+    return False
+
+
+def _failure(exc: BaseException) -> str:
+    """What went wrong with a TMDB call, for an IdResolveError's message.
+
+    Not ``str(exc)``: an httpx status error's text carries the request URL,
+    key included, and the message can reach a client in a 502 detail.  The
+    repr names the error type, where a timeout's own text is empty."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {getattr(exc.response, 'status_code', '?')}"
+    return repr(exc)
+
+
+class IdResolveError(Exception):
+    """The id lookup could not be completed (network, 5xx, bad key) — as
+    opposed to a definite "no such title", which is a None result."""
+
+
+class TmdbIdGone(IdResolveError):
+    """TMDB answers 404 for this TMDB id: the entry was deleted, usually a
+    duplicate merged into an older one. See mark_tmdb_id_gone."""
+
+
+async def tmdb_find_by_imdb(
     client: httpx.AsyncClient,
     imdb_id: str,
     tmdb_key: str,
     media_type_hint: str | None = None,
+    external_source: str = "imdb_id",
 ) -> dict | None:
     """
     Resolve an IMDB id (``tt...``) to a TMDB id via TMDB's /find endpoint.
+    ``external_source="tvdb_id"`` looks up a TVDB id the same way.
 
     Returns ``{"tmdb_id": str, "media_type": "movie"|"tv"}``, preferring a
     result matching *media_type_hint* when both movie and tv results are
-    present, or ``None`` if TMDB has no match for either.
+    present, or ``None`` if TMDB has no match for either. Raises
+    ``IdResolveError`` when the lookup itself failed, so a caller can tell an
+    outage from an unknown title and not cache the former.
     """
     try:
         resp = await client.get(
             f"https://api.themoviedb.org/3/find/{imdb_id}",
-            params={"api_key": tmdb_key, "external_source": "imdb_id"},
+            params={"api_key": tmdb_key, "external_source": external_source},
         )
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        logger.warning(f"Cache warm: TMDB find failed for {imdb_id}: {exc}")
-        return None
+        raise IdResolveError(f"TMDB find failed for {imdb_id}: {_failure(exc)}") from exc
 
-    movie_results = data.get("movie_results") or []
-    tv_results    = data.get("tv_results") or []
+    # A deleted entry can linger in /find for a while after its own page
+    # 404s, and one that links a series' IMDb id would win the lookup again.
+    movie_results = [r for r in data.get("movie_results") or []
+                     if not tmdb_id_gone(str(r["id"]), "movie")]
+    tv_results    = [r for r in data.get("tv_results") or []
+                     if not tmdb_id_gone(str(r["id"]), "tv")]
 
+    # Requests say "series"; TMDB says "tv". Unnormalised, a series whose
+    # IMDb id some movie entry also claims (a duplicate someone added) was
+    # resolved to that movie, and the answer kept for the id map's 90 days.
+    if media_type_hint == "series":
+        media_type_hint = "tv"
     if media_type_hint == "tv" and tv_results:
         return {"tmdb_id": str(tv_results[0]["id"]), "media_type": "tv"}
     if media_type_hint == "movie" and movie_results:
@@ -1713,6 +3565,320 @@ async def resolve_tmdb_id_from_imdb(
         return {"tmdb_id": str(tv_results[0]["id"]), "media_type": "tv"}
     return None
 
+
+# Persisted IMDb -> TMDB id map. A /find call per request would double TMDB
+# traffic and add a round-trip even to composite-cache hits, so the answer is
+# kept for a long time — the mapping essentially never changes. A definite
+# "TMDB has no record" is kept for a day so a run of requests for the same
+# unlinked title doesn't re-ask; a failed lookup is never cached.
+_IDMAP_VERSION = "v1"
+_IDMAP_TTL_SECONDS = 90 * 86400
+_IDMAP_MISS_TTL_SECONDS = 86400
+_IDMAP_MISS = {"__miss__": True}
+
+
+def _idmap_key(imdb_id: str, media_type: str) -> str:
+    return f"idmap:{_IDMAP_VERSION}:imdb:{imdb_id}:{media_type}"
+
+
+def _gone_key(tmdb_id: str, media_type: str) -> str:
+    kind = "tv" if media_type in ("tv", "series") else "movie"
+    return f"idmap:{_IDMAP_VERSION}:gone:{kind}:{tmdb_id}"
+
+
+def tmdb_id_gone(tmdb_id: str, media_type: str) -> bool:
+    """Whether TMDB answered 404 for this id lately (mark_tmdb_id_gone)."""
+    return get_cached_tvdb_json(_gone_key(tmdb_id, media_type)) is not None
+
+
+def forget_imdb_mapping_to(imdb_id: str, tmdb_id: str) -> None:
+    """Drop the id-map rows that resolve *imdb_id* to *tmdb_id*."""
+    for requested in ("movie", "tv", "series"):
+        key = _idmap_key(imdb_id, requested)
+        cached = get_cached_tvdb_json(key)
+        if cached and cached.get("tmdb_id") == tmdb_id:
+            delete_cached_tvdb_json(key)
+
+
+def mark_tmdb_id_gone(tmdb_id: str, media_type: str, imdb_id: str | None = None) -> None:
+    """Remember that TMDB 404s *tmdb_id*, and forget the id-map rows that led to it.
+
+    TMDB deletes entries (a duplicate merged into the older one, a junk
+    upload), but catalogs and our own id map keep pointing at them. Marked
+    gone, a request carrying the id alongside an IMDb id renders from the
+    IMDb id instead, and an IMDb id mapped to it is looked up afresh. Kept a
+    day, like a /find miss, so an entry TMDB restores comes back.
+    """
+    kind = "tv" if media_type in ("tv", "series") else "movie"
+    set_cached_tvdb_json(_gone_key(tmdb_id, kind), {"gone": True}, _IDMAP_MISS_TTL_SECONDS)
+    delete_cached_tvdb_json(_reverse_idmap_key(tmdb_id, kind))
+    if imdb_id:
+        forget_imdb_mapping_to(imdb_id, tmdb_id)
+    logger.warning(f"TMDB {kind}/{tmdb_id} is gone (404) — marked for a day"
+                   + (f", id map for {imdb_id} cleared" if imdb_id else ""))
+
+
+# Anthologies IMDb files as one series with a season per story, where TMDB
+# lists each story as a show of its own — so /find has nothing to say for the
+# IMDb id, or only sometimes. Installments are listed oldest first, and the
+# IMDb id renders as the newest one that has premiered, the way IMDb's own page
+# fronts the current season. Which one that is changes when a new story airs,
+# so the answer is kept for a day rather than the id map's ninety.
+ANTHOLOGY_INSTALLMENTS: dict[str, tuple[str, ...]] = {
+    # Monster: Dahmer, Ed Gein, Lizzie Borden
+    "tt13207736": ("113988", "286801", "299939"),
+}
+_ANTHOLOGY_TTL_SECONDS = 86400
+
+
+def _anthology_key(imdb_id: str) -> str:
+    return f"idmap:{_IDMAP_VERSION}:anthology:{imdb_id}"
+
+
+async def _resolve_anthology(
+    client: httpx.AsyncClient,
+    imdb_id: str,
+    installments: tuple[str, ...],
+    tmdb_key: str,
+    key: str,
+) -> dict:
+    """The newest installment of *imdb_id*'s anthology that has premiered.
+
+    Asks TMDB for each installment's first air date, newest first, and stops at
+    the first one already out. The oldest is taken on trust — it is only listed
+    because it aired. A failed lookup skips that installment and leaves the
+    answer uncached, so an outage never pins the anthology to an older story.
+    """
+    today = _date.today().isoformat()
+    chosen = installments[0]
+    complete = True
+    for tmdb_id in reversed(installments[1:]):
+        try:
+            resp = await client.get(
+                f"https://api.themoviedb.org/3/tv/{tmdb_id}",
+                params={"api_key": tmdb_key},
+            )
+            resp.raise_for_status()
+            first_air = resp.json().get("first_air_date") or ""
+        except Exception as exc:
+            logger.warning(f"Anthology {imdb_id}: TMDB tv/{tmdb_id} lookup failed: {exc}")
+            complete = False
+            continue
+        if first_air and first_air <= today:
+            chosen = tmdb_id
+            break
+
+    result = {"tmdb_id": chosen, "media_type": "tv"}
+    logger.info(f"Resolved anthology {imdb_id} -> TMDB tv/{chosen} (newest aired installment)")
+    if complete:
+        set_cached_tvdb_json(key, result, _ANTHOLOGY_TTL_SECONDS)
+    return result
+
+
+async def resolve_imdb_to_tmdb(
+    client: httpx.AsyncClient,
+    imdb_id: str,
+    media_type: str,
+    tmdb_key: str | None,
+) -> dict | None:
+    """
+    The TMDB identity of an IMDb id, cached: ``{"tmdb_id", "media_type"}``.
+
+    With a key, TMDB's /find is authoritative and may correct *media_type* —
+    an IMDb id names one title, and TMDB knows which list it lives in. Without
+    a key, Cinemeta's ``moviedb_id`` stands in (no key needed; the type is
+    taken on trust). None means neither source has a TMDB id for it — the
+    caller decides whether the Cinemeta spine can carry the title instead.
+    Raises ``IdResolveError`` only when a keyed TMDB lookup failed outright.
+
+    An IMDb id in ``ANTHOLOGY_INSTALLMENTS`` resolves, with a key, to its
+    newest aired installment instead of going through /find.
+    """
+    anthology = ANTHOLOGY_INSTALLMENTS.get(imdb_id) if tmdb_key else None
+    key = _anthology_key(imdb_id) if anthology else _idmap_key(imdb_id, media_type)
+    cached = get_cached_tvdb_json(key)
+    if cached is not None:
+        if cached.get("__miss__"):
+            return None
+        return {"tmdb_id": cached["tmdb_id"], "media_type": cached["media_type"]}
+
+    # A library grid loading fires the same uncached id from many tiles at
+    # once; the first lookup answers for all of them.
+    inflight = _idmap_inflight.get(key)
+    if inflight is not None:
+        return await inflight
+    fut: "asyncio.Future[dict | None]" = asyncio.get_running_loop().create_future()
+    # The owner re-raises the failure itself; without riders nobody else reads
+    # it, and asyncio would log "Future exception was never retrieved".
+    fut.add_done_callback(_retrieve_exception)
+    _idmap_inflight[key] = fut
+    try:
+        if anthology:
+            result = await _resolve_anthology(client, imdb_id, anthology, tmdb_key, key)
+        else:
+            result = await _resolve_imdb_to_tmdb_uncached(client, imdb_id, media_type, tmdb_key, key)
+    except BaseException as exc:
+        fut.set_exception(exc)
+        raise
+    else:
+        fut.set_result(result)
+        return result
+    finally:
+        _idmap_inflight.pop(key, None)
+
+
+_idmap_inflight: "dict[str, asyncio.Future]" = {}
+
+
+def _retrieve_exception(fut: asyncio.Future) -> None:
+    if not fut.cancelled():
+        fut.exception()
+
+
+def _reverse_idmap_key(tmdb_id: str, media_type: str) -> str:
+    kind = "tv" if media_type in ("tv", "series") else "movie"
+    return f"idmap:{_IDMAP_VERSION}:tmdb:{kind}:{tmdb_id}"
+
+
+_REVERSE_IDMAP_RETRY_SECS = 60.0
+_reverse_idmap_failed_at: dict[str, float] = {}
+
+
+async def resolve_tmdb_to_imdb(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    media_type: str,
+    tmdb_key: str,
+) -> str | None:
+    """The IMDb id TMDB links *tmdb_id* to, cached; None when it links none.
+
+    What a request keeps as its IMDb id once a TMDB id is in charge: an
+    anthology's installments are shows of their own on TMDB with no IMDb link
+    (IMDb has one id for the whole anthology), so an IMDb id sent alongside one
+    of them describes a different title and must not feed ratings, sashes or
+    quality. Raises ``IdResolveError`` when the lookup itself failed.
+    """
+    key = _reverse_idmap_key(tmdb_id, media_type)
+    cached = get_cached_tvdb_json(key)
+    if cached is not None:
+        return cached.get("imdb_id") or None
+    # Checked only past the cache: marking an id gone deletes its row.
+    if tmdb_id_gone(tmdb_id, media_type):
+        raise TmdbIdGone(f"TMDB {media_type}/{tmdb_id} is gone (404)")
+    # A lookup that just failed isn't sent again for a while: during a TMDB
+    # blip (a 429 above all) every request for the title would otherwise add
+    # another call.
+    failed_at = _reverse_idmap_failed_at.get(key)
+    if failed_at is not None and time.monotonic() - failed_at < _REVERSE_IDMAP_RETRY_SECS:
+        raise IdResolveError(f"TMDB external_ids for {tmdb_id} failed moments ago")
+
+    inflight = _idmap_inflight.get(key)
+    if inflight is not None:
+        return await inflight
+    fut: "asyncio.Future[str | None]" = asyncio.get_running_loop().create_future()
+    fut.add_done_callback(_retrieve_exception)
+    _idmap_inflight[key] = fut
+    try:
+        kind = "tv" if media_type in ("tv", "series") else "movie"
+        try:
+            resp = await client.get(
+                f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/external_ids",
+                params={"api_key": tmdb_key},
+            )
+            if resp.status_code == 404:
+                mark_tmdb_id_gone(tmdb_id, kind)
+                raise TmdbIdGone(f"TMDB {kind}/{tmdb_id} is gone (404)")
+            resp.raise_for_status()
+            imdb_id = (resp.json().get("imdb_id") or "").strip() or None
+        except TmdbIdGone:
+            raise
+        except Exception as exc:
+            if len(_reverse_idmap_failed_at) >= 10000:
+                _reverse_idmap_failed_at.clear()
+            _reverse_idmap_failed_at[key] = time.monotonic()
+            raise IdResolveError(f"TMDB external_ids failed for {kind}/{tmdb_id}: {_failure(exc)}") from exc
+        _reverse_idmap_failed_at.pop(key, None)
+        # A link TMDB adds later should be picked up, so "none" is kept only a day.
+        set_cached_tvdb_json(
+            key, {"imdb_id": imdb_id or ""},
+            _IDMAP_TTL_SECONDS if imdb_id else _IDMAP_MISS_TTL_SECONDS,
+        )
+    except BaseException as exc:
+        fut.set_exception(exc)
+        raise
+    else:
+        fut.set_result(imdb_id)
+        return imdb_id
+    finally:
+        _idmap_inflight.pop(key, None)
+
+
+async def _resolve_imdb_to_tmdb_uncached(
+    client: httpx.AsyncClient,
+    imdb_id: str,
+    media_type: str,
+    tmdb_key: str | None,
+    key: str,
+) -> dict | None:
+    result: dict | None = None
+    if tmdb_key:
+        # TMDB is authoritative for its own linkage: a title /find doesn't
+        # return is unlinked, whatever an older Cinemeta document says.
+        result = await tmdb_find_by_imdb(client, imdb_id, tmdb_key, media_type)
+        if result is None:
+            set_cached_tvdb_json(key, _IDMAP_MISS, _IDMAP_MISS_TTL_SECONDS)
+            return None
+        logger.info(
+            f"Resolved {imdb_id} -> TMDB {result['media_type']}/{result['tmdb_id']} via /find"
+        )
+        set_cached_tvdb_json(
+            _reverse_idmap_key(result["tmdb_id"], result["media_type"]),
+            {"imdb_id": imdb_id}, _IDMAP_TTL_SECONDS,
+        )
+    else:
+        cm_tmdb_id = await cinemeta.resolve_tmdb_id(client, imdb_id, media_type)
+        if cm_tmdb_id is None:
+            # Cinemeta may simply have been unreachable — never cache that as
+            # a miss.
+            return None
+        result = {"tmdb_id": cm_tmdb_id, "media_type": media_type}
+        logger.info(f"Resolved {imdb_id} -> TMDB {media_type}/{cm_tmdb_id} via Cinemeta")
+
+    set_cached_tvdb_json(key, result, _IDMAP_TTL_SECONDS)
+    return result
+
+
+async def resolve_tvdb_to_tmdb(
+    client: httpx.AsyncClient,
+    tvdb_id: int,
+    media_type: str,
+    tmdb_key: str,
+) -> dict | None:
+    """The TMDB identity of a TVDB id, cached like the IMDb map: a request
+    that carries only ``tvdb:<id>`` renders from TMDB whenever TMDB links
+    the title.  None when it doesn't; raises ``IdResolveError`` on a failed
+    lookup, which is never cached.
+
+    Series only: TMDB keeps no TVDB ids for movies, so /find answers a TVDB
+    id with TV results alone, and TVDB numbers its movies and series apart —
+    a movie's id asked there would name whatever series shares the number.
+    A movie goes to TVDB directly (None)."""
+    if media_type not in ("tv", "series"):
+        return None
+    key = f"idmap:{_IDMAP_VERSION}:tvdb:series:{tvdb_id}"
+    cached = get_cached_tvdb_json(key)
+    if cached is not None:
+        return None if cached.get("__miss__") else cached
+    result = await tmdb_find_by_imdb(client, str(tvdb_id), tmdb_key, "tv",
+                                     external_source="tvdb_id")
+    if result is not None and result["media_type"] != "tv":
+        result = None
+    if result is None:
+        set_cached_tvdb_json(key, _IDMAP_MISS, _IDMAP_MISS_TTL_SECONDS)
+        return None
+    logger.info(f"Resolved tvdb:{tvdb_id} -> TMDB {result['media_type']}/{result['tmdb_id']} via /find")
+    set_cached_tvdb_json(key, result, _IDMAP_TTL_SECONDS)
+    return result
 
 
 def _normalize_manifest_url(url: str) -> str:
@@ -1752,8 +3918,15 @@ async def fetch_catalog_candidates(
         if meta_id.startswith("tmdb:"):
             return {"tmdb_id": meta_id.split(":", 1)[1], "media_type": media_type}
         if meta_id.startswith("tt"):
+            # Through the persisted id map, so a catalog re-warmed every cycle
+            # costs one /find per title ever, and live imdb_id-only requests
+            # for the same titles find the answer already there.
             async with resolve_sem:
-                return await resolve_tmdb_id_from_imdb(client, meta_id, tmdb_key, media_type)
+                try:
+                    return await resolve_imdb_to_tmdb(client, meta_id, media_type, tmdb_key)
+                except IdResolveError as exc:
+                    logger.warning(f"Cache warm: {exc}")
+                    return None
         return None
 
     for raw_url in catalog_urls:
@@ -1834,11 +4007,32 @@ def _parse_tmdb_date(value: str | None) -> _date | None:
         return None
 
 
+def cinema_window_days(vote_count: int | None) -> int:
+    """Days a theatrical-only movie may stay "Cinema" with no digital date
+    published before it is assumed to be streaming; 0 means no limit short of
+    CINEMA_MAX_AGE_YEARS.
+
+    TMDB is often slow to add a digital date and sometimes never does, so most
+    films get the usual studio window.  A film with enough votes is one TMDB
+    will keep current, and one that can play for months (Oppenheimer ran ~120
+    days), so it gets the longer window.  An unknown vote count is not
+    evidence of popularity."""
+    try:
+        votes = int(vote_count) if vote_count is not None else None
+    except (TypeError, ValueError):
+        votes = None
+    popular = (CINEMA_POPULAR_VOTES > 0 and votes is not None
+               and votes >= CINEMA_POPULAR_VOTES)
+    return CINEMA_POPULAR_DIGITAL_DAYS if popular else CINEMA_ASSUMED_DIGITAL_DAYS
+
+
 def _compute_movie_status_from_dates(
     theatrical_date: _date | None,
     digital_date: _date | None,
     physical_date: _date | None,
     tmdb_status: str | None,
+    premiere_date: _date | None = None,
+    vote_count: int | None = None,
     *,
     today: _date | None = None,
 ) -> str:
@@ -1852,15 +4046,25 @@ def _compute_movie_status_from_dates(
     elif has_digital:
         return "Streaming"
     elif has_theatrical:
-        if (
-            CINEMA_MAX_AGE_YEARS > 0
-            and theatrical_date is not None
-            and (today - theatrical_date).days > CINEMA_MAX_AGE_YEARS * 365
-        ):
+        days_out = (today - theatrical_date).days
+        if CINEMA_MAX_AGE_YEARS > 0 and days_out > CINEMA_MAX_AGE_YEARS * 365:
             return "Streaming"
-        else:
-            return "Cinema"
-    elif tmdb_status == "Released":
+        # A published digital date, even a future one, is the answer, so the
+        # window is only a stand-in for a date nobody has given.
+        window = cinema_window_days(vote_count)
+        if digital_date is None and window > 0 and days_out > window:
+            return "Streaming"
+        return "Cinema"
+    elif tmdb_status == "Released" and not any(
+        d is not None and d > today
+        for d in (theatrical_date, digital_date, physical_date, premiere_date)
+    ):
+        # "Released" with no dates at all is a film TMDB knows nothing else
+        # about — assume it is out somewhere.  "Released" with only *future*
+        # dates is TMDB flipping the flag early (it does, weeks ahead of a
+        # limited theatrical run); the dates are the better witness.  A
+        # festival premiere is not a release, so it never makes a title
+        # "Cinema" above — but a future one is still proof it is not out.
         return "Streaming"
     else:
         return "Production"
@@ -1945,6 +4149,64 @@ async def fetch_v2_release_status(
         tmdb_status,
         today=evaluated_at.astimezone(timezone.utc).date(),
     )
+def _release_info_expiry(info: dict) -> int:
+    """Expiry for a release row, clamped to the title's next published date.
+
+    TMDB usually knows a film's digital date before the film gets there, so a
+    title "releasing soon" does not need predicting — it needs its cache row to
+    expire on the day it moves.  Anything already in the past is ignored: it is
+    baked into the status.
+    """
+    upcoming: list[int] = []
+    today = _date.today()
+    for key in ("theatrical_date", "digital_date", "physical_date", "premiere_date"):
+        parsed = _parse_tmdb_date(info.get(key))
+        if parsed is not None and parsed > today:
+            upcoming.append(int(_datetime.combine(parsed, _time.min).timestamp()))
+    status = info.get("status")
+    # "Streaming" assumed from the cinema window (cinema_window_days) is a
+    # guess standing in for a digital date TMDB hasn't published, so the row
+    # keeps the Cinema tier's daily re-check until it does.  Past
+    # CINEMA_MAX_AGE_YEARS nothing is expected any more.
+    if status == "Streaming" and _theatrical_only_within_max_age(info, today):
+        status = "Cinema"
+    return release_status_expiry(status, upcoming_dates=upcoming)
+
+
+def _theatrical_only_within_max_age(info: dict, today: _date) -> bool:
+    """A row whose only past release is theatrical, younger than
+    CINEMA_MAX_AGE_YEARS (or with that gate off)."""
+    theatrical = _parse_tmdb_date(info.get("theatrical_date"))
+    if theatrical is None or theatrical > today:
+        return False
+    for key in ("digital_date", "physical_date"):
+        parsed = _parse_tmdb_date(info.get(key))
+        if parsed is not None and parsed <= today:
+            return False
+    return CINEMA_MAX_AGE_YEARS <= 0 or (today - theatrical).days <= CINEMA_MAX_AGE_YEARS * 365
+
+
+def _release_info_is_current(info: dict) -> bool:
+    """Whether a cached release row was written by code that read every date
+    type.  Rows predate the ``premiere_date`` field only if they were written
+    when limited-theatrical (type 2) and premiere (type 1) dates were skipped;
+    one that recorded no dates at all may simply have missed them, and sat at
+    "Streaming" for a month on the strength of TMDB's early "Released" flag.
+    A dated legacy row is trusted — it had a full release to key off."""
+    if "premiere_date" in info:
+        return True
+    return any(info.get(k) for k in ("theatrical_date", "digital_date", "physical_date"))
+
+
+def _never_looked(info: dict) -> bool:
+    """A row written by the pre-release shortcut, without asking TMDB for
+    dates: marked since this change, and before it, a row with no dates
+    that isn't marked as having looked."""
+    if info.get("pre_release_shortcut"):
+        return True
+    return (not info.get("dates_checked")
+            and not any(info.get(k) for k in ("theatrical_date", "digital_date",
+                                               "physical_date", "premiere_date")))
 
 
 async def fetch_movie_release_info(
@@ -1952,16 +4214,33 @@ async def fetch_movie_release_info(
     tmdb_id: str,
     tmdb_key: str,
     tmdb_status: str | None,
+    primary_release_date: str | None = None,
+    vote_count: int | None = None,
 ) -> dict | None:
-    """Cached TMDB movie release-date facts used by release-status and freshness sashes."""
+    """Cached TMDB movie release-date facts used by release-status and freshness sashes.
+
+    *vote_count* (TMDB's) picks the film's cinema window — see
+    cinema_window_days — for the ``status`` returned; the dates don't depend
+    on it.
+
+    A film TMDB still calls unreleased (Planned, In Production, ...) normally
+    skips /release_dates: there is nothing out to date.  Given its primary
+    release date, though, and that date still ahead, the dates are fetched
+    after all — that date alone doesn't say whether the film opens in
+    cinemas or streams (Animals: US theatrical and Netflix both Oct 9)."""
     cache_key = f"movie_{tmdb_id}"
+    _primary = _parse_tmdb_date(primary_release_date)
+    _look_anyway = _primary is not None and _primary > _date.today()
     cached = get_cached_movie_release_info(cache_key)
-    if cached:
+    if (cached and _release_info_is_current(cached)
+            and not (_look_anyway and _never_looked(cached))):
         cached["status"] = _compute_movie_status_from_dates(
             _parse_tmdb_date(cached.get("theatrical_date")),
             _parse_tmdb_date(cached.get("digital_date")),
             _parse_tmdb_date(cached.get("physical_date")),
             tmdb_status,
+            _parse_tmdb_date(cached.get("premiere_date")),
+            vote_count,
         )
         return cached
 
@@ -1971,11 +4250,14 @@ async def fetch_movie_release_info(
         "theatrical_date": None,
         "digital_date": None,
         "physical_date": None,
+        "premiere_date": None,
     }
 
     _pre_release = {"In Production", "Post Production", "Planned", "Rumored"}
-    if tmdb_status in _pre_release:
+    if tmdb_status in _pre_release and not _look_anyway:
         info["status"] = "Production"
+        # Marked, so a caller with a dated primary release can still look.
+        info["pre_release_shortcut"] = True
         set_cached_movie_release_info(cache_key, info)
         return info
     if tmdb_status == "Cancelled":
@@ -2004,6 +4286,7 @@ async def fetch_movie_release_info(
     earliest_digital: _date | None = None
     latest_digital: _date | None = None
     earliest_physical: _date | None = None
+    earliest_premiere: _date | None = None
 
     for entry in resp.json().get("results", []):
         for rd in entry.get("release_dates", []):
@@ -2017,17 +4300,25 @@ async def fetch_movie_release_info(
             elif rtype in (4, 6):   # digital or TV broadcast
                 if earliest_digital is None or rdate < earliest_digital:
                     earliest_digital = rdate
-                if latest_digital is None or rdate > latest_digital:
+                # A TV broadcast says a film is out of cinemas, which is all the
+                # status needs, but not that it was just added anywhere: Canal+
+                # airing Point Break (1991) in September 2026 made it "New".
+                if rtype == 4 and (latest_digital is None or rdate > latest_digital):
                     latest_digital = rdate
-            elif rtype == 3:
+            elif rtype in (2, 3):   # theatrical, limited or wide — both are cinemas
                 if earliest_theatrical is None or rdate < earliest_theatrical:
                     earliest_theatrical = rdate
+            elif rtype == 1:        # festival / premiere — dated, but not a release
+                if earliest_premiere is None or rdate < earliest_premiere:
+                    earliest_premiere = rdate
 
     result = _compute_movie_status_from_dates(
         earliest_theatrical,
         earliest_digital,
         earliest_physical,
         tmdb_status,
+        earliest_premiere,
+        vote_count,
     )
 
     info = {
@@ -2036,9 +4327,16 @@ async def fetch_movie_release_info(
         "digital_date": earliest_digital.isoformat() if earliest_digital else None,
         "physical_date": earliest_physical.isoformat() if earliest_physical else None,
         "digital_latest_date": latest_digital.isoformat() if latest_digital else None,
+        "premiere_date": earliest_premiere.isoformat() if earliest_premiere else None,
+        "dates_checked": True,
     }
-    set_cached_movie_release_info(cache_key, info)
+    set_cached_movie_release_info(cache_key, info, _release_info_expiry(info))
     return info
+
+
+# How long after a film's first release a digital date still counts as the
+# film arriving at home ("Just Added" / "New") rather than a re-release.
+JUST_ADDED_MAX_FILM_AGE_DAYS = 365
 
 
 async def fetch_recent_movie_digital_release_date(
@@ -2059,7 +4357,125 @@ async def fetch_recent_movie_digital_release_date(
     if digital is None:
         return None
     age = (_date.today() - digital).days
-    return digital.isoformat() if 0 <= age <= max_age_days else None
+    if not 0 <= age <= max_age_days:
+        return None
+    # A fresh digital date on a film first released years ago is a regional
+    # re-release or a remaster, not a new film arriving at home — and rows
+    # cached before TV broadcasts were left out still count those.
+    first = min(filter(None, (_parse_tmdb_date(info.get(k)) for k in
+                              ("theatrical_date", "digital_date", "physical_date"))))
+    if (digital - first).days > JUST_ADDED_MAX_FILM_AGE_DAYS:
+        return None
+    return digital.isoformat()
+
+
+# A season's episode dates are asked for only while the series details still
+# list an aired episode as next; that lasts hours, so they are kept as long.
+_SEASON_DATES_TTL = 6 * 3600
+
+
+async def fetch_following_episode_date(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    tmdb_key: str,
+    next_episode: dict,
+) -> str | None:
+    """The air date of the first episode still to come after *next_episode*,
+    from its season's episode list, or None.
+
+    TMDB's series details call an episode "next" until a while after it has
+    aired (Marshals' Oct 11 episode, the morning after), so the date a
+    viewer wants, the one after it, isn't in them yet.  The season list has
+    it.  One call per series and season while that lasts.
+    """
+    try:
+        season = int(next_episode.get("season_number"))
+    except (TypeError, ValueError):
+        return None
+    after = _parse_tmdb_date(next_episode.get("air_date"))
+    if after is None:
+        return None
+    key = f"tmdb_season_dates:{tmdb_id}:{season}"
+    dates = get_cached_tvdb_json(key)
+    if dates is None:
+        try:
+            logger.info(f"External API Call: TMDB season {season} for series {tmdb_id}")
+            resp = await client.get(
+                f"https://api.themoviedb.org/3/tv/{tmdb_id}/season/{season}",
+                params={"api_key": tmdb_key}, timeout=15.0,
+            )
+            resp.raise_for_status()
+            dates = {"dates": [e.get("air_date") for e in resp.json().get("episodes") or []
+                               if e.get("air_date")]}
+        except Exception as exc:
+            logger.warning(f"fetch_following_episode_date failed for {tmdb_id} S{season}: {exc}")
+            return None
+        set_cached_tvdb_json(key, dates, _SEASON_DATES_TTL)
+    today = _date.today()
+    following = sorted(d for d in (_parse_tmdb_date(v) for v in dates.get("dates") or [])
+                       if d is not None and d > after and d >= today)
+    return following[0].isoformat() if following else None
+
+
+# The status a movie moves to when each dated window opens — the second half
+# of a dated sash ("Oct 16 Cinema"), so a viewer can tell a theatrical date
+# from one they can actually watch at home.
+_RELEASE_WINDOW_STATUS = {
+    "theatrical_date": "Cinema",
+    "digital_date":    "Streaming",
+    "physical_date":   "Physical",
+}
+
+
+_SAME_DAY_RANK = {"Streaming": 0, "Physical": 1, "Cinema": 2}
+
+
+async def fetch_upcoming_movie_release(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    tmdb_key: str,
+    tmdb_status: str | None,
+    *,
+    status: str | None,
+    primary_release_date: str | None = None,
+) -> tuple[str, str] | None:
+    """The next published date a "Cinema" / "Production" movie moves on, as
+    ``(YYYY-MM-DD, window)`` where *window* is the status it moves to —
+    "Cinema", "Streaming" or "Physical".
+
+    "Production" waits on its first release anywhere — theatrical, digital or
+    disc, whichever TMDB has dated soonest.  The details endpoint's primary
+    release date stands in when the release-dates row has none: the pre-release
+    shortcut in fetch_movie_release_info never asks TMDB for them, and that
+    date is all but always the theatrical one.  "Cinema" is already in
+    theatres, so only the home dates count — its theatrical date would just
+    restate the status.  Anything else has nothing to wait for.
+    """
+    if status not in ("Cinema", "Production"):
+        return None
+    info = await fetch_movie_release_info(client, tmdb_id, tmdb_key, tmdb_status,
+                                          primary_release_date=primary_release_date) or {}
+    keys = (
+        ("theatrical_date", "digital_date", "physical_date")
+        if status == "Production" else ("digital_date", "physical_date")
+    )
+    today = _date.today()
+    upcoming: list[tuple[_date, str]] = []
+    for key in keys:
+        parsed = _parse_tmdb_date(info.get(key))
+        if parsed is not None and parsed > today:
+            upcoming.append((parsed, _RELEASE_WINDOW_STATUS[key]))
+    if not upcoming and status == "Production":
+        primary = _parse_tmdb_date(primary_release_date)
+        if primary is not None and primary > today:
+            upcoming.append((primary, "Cinema"))
+    if not upcoming:
+        return None
+    # Two windows on the same day (a streamer's film opening in a few cinemas
+    # the day it streams): the film reaches home that day, so the home window
+    # names it, streaming first — not whichever sorts first alphabetically.
+    soonest, window = min(upcoming, key=lambda u: (u[0], _SAME_DAY_RANK[u[1]]))
+    return soonest.isoformat(), window
 
 
 async def fetch_release_status(
@@ -2068,27 +4484,30 @@ async def fetch_release_status(
     tmdb_key: str,
     media_type: str,
     tmdb_status: str | None,
+    vote_count: int | None = None,
 ) -> str | None:
     """
     Determine the current release status for the info sash.
 
     TV shows: mapped from the TMDB ``status`` field (already fetched as part
-    of poster metadata, so no extra API call is needed).
+    of poster metadata, so no extra API call is needed).  That mapping wins over
+    the cached row, which exists only for requests that arrive without a status.
 
     Movies: consults ``/movie/{id}/release_dates`` to determine whether the
     film is on physical media (Physical), digital/streaming (Streaming), still
-    theatrical-only (Cinema), or not yet released (Production).  Result is
-    cached for 7 days via the ``release_status_cache`` table.
+    theatrical-only (Cinema), or not yet released (Production).  A film
+    theatrical-only for longer than its cinema window (cinema_window_days,
+    picked by *vote_count*) with no digital date published reads Streaming.  The dates are
+    cached in ``movie_release_info_cache`` with a per-row deadline — the status
+    tier, or the film's next published release date when TMDB has told us one —
+    and ``release_status_cache`` mirrors the status derived from them.
 
     Returns one of: "Physical" | "Streaming" | "Cinema" | "Production" |
                     "Returning" | "Ended" | "Cancelled" | None.
     """
     cache_key = f"{media_type}_{tmdb_id}"
-    cached = get_cached_release_status(cache_key)
-    if cached:
-        return cached
-
     result: str | None = None
+    info: dict | None = None
 
     if media_type in ("tv", "series"):
         # No extra API call — map the TMDB status field we already have.
@@ -2105,13 +4524,40 @@ async def fetch_release_status(
             "Cancelled":        "Cancelled",
             "Canceled":         "Cancelled",
         }
+        # Deliberately ahead of the cache read.  *tmdb_status* arrived with the
+        # poster metadata this request already fetched, so it is both free and
+        # newer than anything stored — and the cached value it replaces has a
+        # 60-90 day tier behind it, which is long enough for a revived show to
+        # sit at "Ended" for two months after TMDB says "Returning Series".
+        # The cache still covers the case where no status came with the request.
         result = _tv_map.get(tmdb_status or "")
-    else:
-        info = await fetch_movie_release_info(client, tmdb_id, tmdb_key, tmdb_status)
-        result = (info or {}).get("status")
+        cached = get_cached_release_status(cache_key)
+        if not result:
+            return cached
+        # Only written when it actually moved (or its row lapsed), so this stays
+        # a rare write rather than one per request.
+        if cached != result:
+            set_cached_release_status(cache_key, result)
+        return result
 
-    if result:
-        set_cached_release_status(cache_key, result)
+    # The release-info row is the source of truth for movies: it is cached on
+    # the same deadline, and a hit recomputes the status from the stored dates
+    # rather than replaying a snapshot.  The status row used to short-circuit
+    # this, which meant a row written from incomplete dates could sit for its
+    # whole tier — "Streaming" is thirty days — shadowing the corrected answer.
+    cached = get_cached_release_status(cache_key)
+    info = await fetch_movie_release_info(client, tmdb_id, tmdb_key, tmdb_status,
+                                          vote_count=vote_count)
+    result = (info or {}).get("status")
+    if not result:
+        return cached
+
+    # Mirrored for the cache stats and for requests that arrive while the
+    # info fetch is failing; only written when it actually moved.
+    if cached != result:
+        # Movies carry published dates, so the status row can be told exactly
+        # when it is next allowed to be wrong.
+        set_cached_release_status(cache_key, result, _release_info_expiry(info))
     return result
 
 
@@ -2134,8 +4580,10 @@ def composite_logo(
 
     max_w = int(width  * max_w_ratio)
     # Height is bounded by BOTH the ratio and an absolute pixel ceiling, so a
-    # raised Height slider can't let tall logos take over the poster.
-    max_h = min(int(height * max_h_ratio), LOGO_ABS_MAX_H)
+    # raised Height slider can't let tall logos take over the poster.  The
+    # ceiling is set for the 750-tall canvas and scales with a larger one.
+    abs_max_h = LOGO_ABS_MAX_H * height // POSTER_HEIGHT
+    max_h = min(int(height * max_h_ratio), abs_max_h)
 
     # ── Tight crop: ignore faint glow / halo / anti-alias pixels ──────────────
     # A plain getbbox() keys off ANY non-zero alpha, so baked-in soft shadows,
@@ -2164,7 +4612,7 @@ def composite_logo(
     # Orientation, kept for the sizing telemetry below: -1 (tall) .. +1 (wide).
     orient    = float(np.tanh(np.log(aspect / LOGO_ASPECT_PIVOT)))
     eff_max_w = max_w                       # hard width ceiling
-    eff_max_h = max_h                       # hard height ceiling (already ≤ LOGO_ABS_MAX_H)
+    eff_max_h = max_h                       # hard height ceiling (already ≤ abs_max_h)
 
     # Overall size target comes from the BASE caps so the average logo size stays
     # consistent; the flex only relaxes the clamp for the dominant axis.
@@ -2193,7 +4641,7 @@ def composite_logo(
         if new_h < trigger_h:
             t      = (trigger_h - new_h) / trigger_h          # 0 at trigger → 1 near zero
             factor = 1.0 + t * (LOGO_FILL_STRETCH - 1.0)
-            new_h  = min(eff_max_h, float(LOGO_ABS_MAX_H), new_h * factor)
+            new_h  = min(eff_max_h, float(abs_max_h), new_h * factor)
         elif new_w < eff_max_w:
             new_w = min(eff_max_w, new_w * LOGO_FILL_STRETCH)
 
@@ -2280,3 +4728,97 @@ def composite_logo(
             logo = ensure_light_logo(logo)
 
     image.paste(logo, (logo_x, logo_y), logo)
+
+
+# ---------------------------------------------------------------------------
+# US certificate (graphic badge row)
+# ---------------------------------------------------------------------------
+
+# Theatrical releases carry the certificate a title is known by; premieres and
+# TV airings can carry a different one, or an empty string.
+_CERT_RELEASE_ORDER = (3, 2, 4, 5, 6, 1)
+
+
+def us_certification_from_release_dates(payload: dict) -> str:
+    """The US certificate from a /movie/{id}/release_dates body, or ""."""
+    for entry in payload.get("results") or []:
+        if entry.get("iso_3166_1") != "US":
+            continue
+        dates = [d for d in entry.get("release_dates") or [] if (d.get("certification") or "").strip()]
+        dates.sort(key=lambda d: _CERT_RELEASE_ORDER.index(d.get("type"))
+                   if d.get("type") in _CERT_RELEASE_ORDER else len(_CERT_RELEASE_ORDER))
+        return dates[0]["certification"].strip() if dates else ""
+    return ""
+
+
+def us_certification_from_content_ratings(payload: dict) -> str:
+    """The US rating from a /tv/{id}/content_ratings body, or ""."""
+    for entry in payload.get("results") or []:
+        if entry.get("iso_3166_1") == "US":
+            return (entry.get("rating") or "").strip()
+    return ""
+
+
+def _logo_entries(items: list[dict] | None) -> list[dict]:
+    """Networks / production companies reduced to what a badge needs."""
+    return [{"id": e.get("id"), "logo_path": e.get("logo_path")}
+            for e in items or [] if e.get("id") is not None]
+
+
+async def fetch_badge_facts(client: httpx.AsyncClient, tmdb_id: str, media_type: str,
+                            tmdb_key: str | None, cert_country: str = "US") -> dict | None:
+    """The graphic badges' facts about a title: its US certificate ("cert"),
+    every country's drawable certificate ("certs", see certifications), and
+    its networks (TV) and production companies with their logo paths.
+    One TMDB call per title per month — the details, with the release dates
+    or content ratings appended.  None when it can't be fetched."""
+    endpoint = "tv" if media_type in ("tv", "series") else "movie"
+    cache_key = f"{endpoint}_{tmdb_id}"
+    cached = get_cached_badge_facts(cache_key)
+    # Facts cached before every country was kept have the US certificate
+    # alone: fetched again (the same one call) only for another country.
+    if cached is not None and ("certs" in cached or cert_country == "US"):
+        return cached
+    if not tmdb_key or not (str(tmdb_id).isascii() and str(tmdb_id).isdigit()):
+        return cached
+    append = "content_ratings" if endpoint == "tv" else "release_dates"
+    try:
+        logger.info(f"External API Call: TMDB badge facts for {endpoint} {tmdb_id}")
+        resp = await client.get(f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}",
+                                params={"api_key": tmdb_key, "append_to_response": append})
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning(f"Badge facts fetch failed for {endpoint} {tmdb_id}: {exc}")
+        return cached
+    facts = {
+        "cert": (us_certification_from_content_ratings(data.get("content_ratings") or {}) if endpoint == "tv"
+                 else us_certification_from_release_dates(data.get("release_dates") or {})),
+        "certs": (certifications.certs_from_content_ratings(data.get("content_ratings") or {}) if endpoint == "tv"
+                  else certifications.certs_from_release_dates(data.get("release_dates") or {})),
+        "networks": _logo_entries(data.get("networks")),
+        "companies": _logo_entries(data.get("production_companies")),
+    }
+    set_cached_badge_facts(cache_key, facts)
+    return facts
+
+
+async def fetch_network_logo_path(client: httpx.AsyncClient, network_id: int,
+                                  tmdb_key: str | None) -> str | None:
+    """A TV network's logo path, for a film from that network's studio arm."""
+    cache_key = f"network_{network_id}"
+    cached = get_cached_badge_facts(cache_key)
+    if cached is not None:
+        return cached.get("logo_path")
+    if not tmdb_key:
+        return None
+    try:
+        resp = await client.get(f"https://api.themoviedb.org/3/network/{network_id}",
+                                params={"api_key": tmdb_key})
+        resp.raise_for_status()
+        path = resp.json().get("logo_path")
+    except Exception as exc:
+        logger.warning(f"Network logo fetch failed for {network_id}: {exc}")
+        return None
+    set_cached_badge_facts(cache_key, {"logo_path": path})
+    return path

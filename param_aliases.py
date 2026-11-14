@@ -1,0 +1,375 @@
+"""Short names for the poster URL's settings ("vpcb" for
+vignette_poster_color_bottom), so a much-customised URL stays inside the
+~2000 characters some metadata clients cut URLs at.
+
+The configurator writes the short names; the server reads either, turning
+short into long before anything else sees the request (see expand), so a
+URL in either spelling is the same render and the same cached poster, and
+every URL generated before the short names keeps working.
+
+A short name is permanent: once published it is in installed URLs, so it is
+never changed, removed or given to another setting.  A new setting adds a
+new one; tests/test_param_aliases.py checks every setting has one and none
+clash.  A "landscape_" setting's name is "_" and its portrait twin's.
+
+Identity and client placeholders (tmdb_id, imdb_id, type, stremio_id, the
+keys, shape...) keep their names: clients substitute them by name.  A short
+name is at least two characters, an underscore only leading, so it can't be
+a generic name a client or proxy appends (t=, r=) or one of our own extras
+(the configurator preview's pp_ts).
+"""
+from __future__ import annotations
+
+from typing import Iterable
+
+# Long name -> short name.  Append only.
+ALIASES: dict[str, str] = {
+    "accent_bar_append_mode": "abam",
+    "accent_bar_bottom_ratio": "abbr",
+    "accent_bar_font_size_ratio": "abfsr",
+    "accent_bar_y_offset": "abyo",
+    "airing_dates": "ard",
+    "anime_movie_weights": "amw",
+    "anime_provider_art": "apa",
+    "anime_tv_weights": "atw",
+    "badge_anchor_x": "bax",
+    "badge_anchor_y": "bay",
+    "badge_cert_country": "bcc",
+    "badge_cert_style": "bcts",
+    "badge_cinema_style": "bcs",
+    "badge_display_mode": "bdm",
+    "badge_gap": "bg",
+    "badge_group1": "bg1",
+    "badge_group2": "bg2",
+    "badge_group3": "bg3",
+    "badge_group4": "bg4",
+    "badge_height": "bh",
+    "badge_legacy_style": "blst",
+    "badge_logo_scale": "bls",
+    "badge_overflow": "bof",
+    "badge_logo_style": "blgs",
+    "badge_min_score": "bms",
+    "badge_pos": "bp",
+    "badge_quality_style": "bqs",
+    "bar_accent": "ba",
+    "bar_append": "bap",
+    "bar_bottom_inset": "bbi",
+    "bar_font_size_ratio": "bfsr",
+    "bar_frost_opacity": "bfo",
+    "bar_frost_saturation": "bfs",
+    "bar_height_ratio": "bhr",
+    "bar_score_out_of_10": "bsoo10",
+    "bar_style": "bs",
+    "bottom_gradient": "bgr",
+    "bottom_gradient_height": "bgh",
+    "bottom_gradient_opacity": "bgo",
+    "cinema_greyscale": "cg",
+    "cinema_greyscale_skip_if_available": "cgsia",
+    "cinema_greyscale_without_sash": "cgws",
+    "combined_badge_stacked": "cbs",
+    "fallback_bg_style": "fbs",
+    "fallback_to_imdb": "fti",
+    "frost_reference": "fr",
+    "greyscale_logo": "gl",
+    "greyscale_no_quality": "gnq",
+    "hide_genre": "hg",
+    "hide_rating": "hr",
+    "hide_unreleased_rating": "hur",
+    "hide_year": "hy",
+    "imdb_rating_source": "irs",
+    "label_font": "lf",
+    "label_language": "lla",
+    "landscape_art": "_art",
+    "landscape_art_source_anime": "_asa",
+    "landscape_art_source_movie": "_asm",
+    "landscape_art_source_tv": "_ast",
+    "landscape_badge_case": "_bc",
+    "landscape_badge_cert_style": "_bcts",
+    "landscape_badge_cinema_style": "_bcs",
+    "landscape_badge_display_mode": "_bdm",
+    "landscape_badge_font": "_bf",
+    "landscape_badge_glass_opacity": "_bgop",
+    "landscape_badge_group1": "_bg1",
+    "landscape_badge_group2": "_bg2",
+    "landscape_badge_group3": "_bg3",
+    "landscape_badge_group4": "_bg4",
+    "landscape_badge_height": "_bh",
+    "landscape_badge_logo_scale": "_bls",
+    "landscape_badge_overflow": "_bof",
+    "landscape_badge_logo_style": "_blgs",
+    "landscape_badge_opacity": "_bo",
+    "landscape_badge_pos": "_bp",
+    "landscape_badge_quality_style": "_bqs",
+    "landscape_badge_saturation": "_bsa",
+    "landscape_badge_scale": "_bs",
+    "landscape_badge_shape": "_bsh",
+    "landscape_badge_style": "_bst",
+    "landscape_badge_text_color": "_btc",
+    "landscape_badge_width": "_bw",
+    "landscape_badge_x": "_bx",
+    "landscape_badge_y": "_by",
+    "landscape_bar_accent": "_ba",
+    "landscape_bar_append": "_bap",
+    "landscape_bar_font_size_ratio": "_bfsr",
+    "landscape_bar_frost_opacity": "_bfo",
+    "landscape_bar_frost_saturation": "_bfs",
+    "landscape_bar_height_ratio": "_bhr",
+    "landscape_bar_score_out_of_10": "_bsoo10",
+    "landscape_bar_style": "_bars",
+    "landscape_bottom_gradient": "_bgr",
+    "landscape_bottom_gradient_height": "_bgh",
+    "landscape_bottom_gradient_opacity": "_bgo",
+    "landscape_color_link": "_cl",
+    "landscape_frost_reference": "_fr",
+    "landscape_graphic_badges": "_gb",
+    "landscape_greyscale": "_gs",
+    "landscape_greyscale_logo": "_gl",
+    "landscape_hide_genre": "_hg",
+    "landscape_hide_rating": "_hr",
+    "landscape_hide_year": "_hy",
+    "landscape_info_center": "_ic",
+    "landscape_info_pos": "_ip",
+    "landscape_info_scale": "_is",
+    "landscape_logo_pos": "_lp",
+    "landscape_logo_scale": "_ls",
+    "landscape_meta_order": "_mo",
+    "landscape_poster_crop": "_pc",
+    "landscape_rating_badge_max": "_rbm",
+    "landscape_rating_badge_scale": "_rbs",
+    "landscape_rating_badge_style": "_rbst",
+    "landscape_rating_badges": "_rb",
+    "landscape_rating_badge_list": "_rbl",
+    "landscape_rating_mode": "_rmo",
+    "landscape_rating_separator": "_rs",
+    "landscape_sash_mode": "_sm",
+    "landscape_sash_priority": "_sp",
+    "landscape_sash_text_color": "_stc",
+    "landscape_score_color_mode": "_scm",
+    "landscape_score_custom_palette": "_scp",
+    "landscape_score_glow_alpha": "_sga",
+    "landscape_score_glow_blur": "_sgb",
+    "landscape_score_glow_color": "_sgc",
+    "landscape_score_glow_threshold": "_sgt",
+    "landscape_score_out_of_10": "_soo10",
+    "landscape_separator": "_sep",
+    "landscape_textless": "_tx",
+    "landscape_top_gradient": "_tg",
+    "landscape_top_gradient_height": "_tgh",
+    "landscape_top_gradient_opacity": "_tgo",
+    "landscape_top_vignette_sash_only": "_tvso",
+    "landscape_trending_corner": "_tc",
+    "landscape_trending_frost_opacity": "_tfo",
+    "landscape_trending_frost_saturation": "_tfs",
+    "landscape_trending_label": "_tla",
+    "landscape_trending_ribbon_style": "_trst",
+    "landscape_trending_sash": "_ts",
+    "landscape_trending_scale": "_tsc",
+    "landscape_trending_side": "_tsi",
+    "landscape_trending_style": "_tst",
+    "landscape_vignette_color_blur": "_vcb",
+    "landscape_vignette_color_lightness": "_vcli",
+    "landscape_vignette_color_local": "_vcl",
+    "landscape_vignette_color_ramp": "_vcr",
+    "landscape_vignette_color_saturation": "_vcsa",
+    "landscape_vignette_color_style": "_vcs",
+    "landscape_vignette_poster_color_bottom": "_vpcb",
+    "landscape_vignette_poster_color_top": "_vpct",
+    "landscape_winner_star": "_ws",
+    "logo_bottom_anchor": "lba",
+    "logo_bottom_ratio": "lbr",
+    "logo_language": "ll",
+    "logo_language_secondary": "lls",
+    "logo_max_h_ratio": "lmhr",
+    "logo_max_w_ratio": "lmwr",
+    "logo_priority": "lp",
+    "meta_order": "mo",
+    "minimalist_append_mode": "mam",
+    "minimalist_center": "mc",
+    "minimalist_mode_font_size_ratio": "mmfsr",
+    "minimalist_mode_font_x_offset": "mmfxo",
+    "minimalist_mode_font_y_offset": "mmfyo",
+    "minimalist_rating_separator": "mrs",
+    "minimalist_score_out_of_10": "msoo10",
+    "minimalist_separator": "ms",
+    "movie_weights": "mw",
+    "muted": "mu",
+    "notch_vignette_color": "nvc",
+    "numeric_score_font_size_ratio": "nsfsr",
+    "numeric_score_y_offset": "nsyo",
+    "original_art_source": "oas",
+    "original_labels": "ol",
+    "poster_pick": "pp",
+    "poster_source_anime": "psa",
+    "poster_source_movie": "psm",
+    "poster_source_tv": "pst",
+    "poster_width": "pw",
+    "primary_client": "pc",
+    "quality_after_digital": "qad",
+    "rating_badge_kinds": "rbk",
+    "rating_badge_max": "rbm",
+    "rating_badge_scale": "rbs",
+    "rating_badge_style": "rbst",
+    "rating_badges": "rb",
+    "rating_display_mode": "rdm",
+    "rating_text_color": "rtc",
+    "release_status_cinema_only": "rsco",
+    "release_status_dates": "rsd",
+    "resolution": "res",
+    "sash_badge": "sb",
+    "sash_badge_font_ratio": "sbfr",
+    "sash_badge_frost_opacity": "sbfo",
+    "sash_badge_frost_saturation": "sbfs",
+    "sash_badge_inset": "sbi",
+    "sash_badge_opacity": "sbo",
+    "sash_badge_pad": "sbp",
+    "sash_badge_pos": "sbpo",
+    "sash_badge_size_h": "sbsh",
+    "sash_badge_size_w": "sbsw",
+    "sash_badge_style": "sbs",
+    "sash_chip_x": "scx",
+    "sash_chip_y": "scy",
+    "sash_edge_y": "sey",
+    "sash_height_ratio": "shr",
+    "sash_length_ratio": "slr",
+    "sash_mode": "sm",
+    "sash_poster_color": "spc",
+    "sash_priority": "sp",
+    "sash_side": "ss",
+    "sash_text_color": "stc",
+    "sash_winner_star": "sws",
+    "score_color_mode": "scm",
+    "score_custom_palette": "scp",
+    "score_glow_alpha": "sga",
+    "score_glow_blur": "sgb",
+    "score_glow_color": "sgc",
+    "score_glow_threshold": "sgt",
+    "score_out_of_10": "soo10",
+    "show_award_sash": "sas",
+    "show_quality_badges": "sqb",
+    "textless": "tx",
+    "tmdb_rating_source": "trs",
+    "top_gradient": "tg",
+    "top_gradient_height": "tgh",
+    "top_gradient_opacity": "tgo",
+    "top_vignette_sash_only": "tvso",
+    "trending_align": "ta",
+    "trending_corner": "tc",
+    "trending_frost_opacity": "tfo",
+    "trending_frost_saturation": "tfs",
+    "trending_label": "tla",
+    "trending_list": "tl",
+    "trending_ribbon_style": "trst",
+    "trending_sash": "ts",
+    "trending_scale": "tsc",
+    "trending_side": "tsi",
+    "trending_style": "tst",
+    "tv_weights": "tw",
+    "use_original_art": "uoa",
+    "vignette_color_blur": "vcb",
+    "vignette_color_lightness": "vcli",
+    "vignette_color_local": "vcl",
+    "vignette_color_ramp": "vcr",
+    "vignette_color_saturation": "vcsa",
+    "vignette_color_style": "vcs",
+    "vignette_poster_color_bottom": "vpcb",
+    "vignette_poster_color_top": "vpct",
+    "wait_for_quality": "wfq",
+    # 2026-10-11: landscape's Anime Provider Source and pick.
+    "landscape_anime_provider_art": "_apa",
+    "landscape_poster_pick": "_pp",
+}
+
+LONG: dict[str, str] = {short: long for long, short in ALIASES.items()}
+
+# The four rating-weight lists name each source in their value
+# ("letterboxd:0.80,tomatoes:0.20"), and a much-customised URL carries all
+# four: ~680 characters, a third of the budget.  Inside those values a source
+# goes by a short code too, and a weight drops its leading zero (".8").
+# Permanent and append-only like ALIASES; a code is never a source's name.
+WEIGHT_PARAMS = ("movie_weights", "tv_weights", "anime_movie_weights", "anime_tv_weights")
+WEIGHT_SOURCES: dict[str, str] = {
+    "letterboxd": "lb",
+    "trakt": "tk",
+    "tomatoes": "rt",
+    "popcorn": "pc",
+    "imdb": "im",
+    "metacritic": "mc",
+    "metacriticuser": "mu",
+    "tmdb": "tm",
+    "rogerebert": "re",
+    "myanimelist": "mal",
+    "anilist": "al",
+    "kitsu": "ki",
+}
+WEIGHT_SOURCES_LONG: dict[str, str] = {short: long for long, short in WEIGHT_SOURCES.items()}
+
+
+def _map_weights(value: str, table: dict[str, str], compact: bool = False) -> str:
+    parts = []
+    for part in value.split(","):
+        key, sep, weight = part.partition(":")
+        name = key.strip()
+        mapped = table.get(name.lower())
+        if mapped is not None and sep:
+            weight = _compact_number(weight) if compact else _full_number(weight)
+        parts.append((mapped or name) + sep + weight)
+    return ",".join(parts)
+
+
+def _full_number(text: str) -> str:
+    """".8" -> "0.80", as the configurator writes a weight spelled out, so a
+    short URL and its long twin share a composite cache key."""
+    try:
+        x = float(text)
+    except ValueError:
+        return text
+    # More precision than the configurator writes is kept as given.
+    return f"{x:.2f}" if round(x, 2) == x else text.strip()
+
+
+def _compact_number(text: str) -> str:
+    """"0.80" -> ".8", "1.00" -> "1"; anything else as it was."""
+    t = text.strip()
+    if "." in t and t.replace(".", "", 1).isdigit():
+        t = t.rstrip("0").rstrip(".") or "0"
+        if t.startswith("0.") and len(t) > 2:
+            t = t[1:]
+    return t
+
+
+def needs_expand(pairs: Iterable[tuple[str, str]]) -> bool:
+    """Whether expand would change *pairs*: a short name, or a source code
+    in a weights list.  A URL spelled out in full is left as it came."""
+    for k, v in pairs:
+        if k in LONG:
+            return True
+        if k in WEIGHT_PARAMS and any(
+                part.partition(":")[0].strip().lower() in WEIGHT_SOURCES_LONG for part in v.split(",")):
+            return True
+    return False
+
+
+def expand(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """*pairs* with every short name spelled out, the weight lists' source
+    codes included.  Where a URL carries both spellings of one setting, the
+    long one wins."""
+    pairs = list(pairs)
+    present = {k for k, _v in pairs}
+    out = []
+    for key, value in pairs:
+        long = LONG.get(key)
+        name = key if long is None else long
+        if long is not None and long in present:
+            continue
+        if name in WEIGHT_PARAMS:
+            value = _map_weights(value, WEIGHT_SOURCES_LONG)
+        out.append((name, value))
+    return out
+
+
+def shorten(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """*pairs* with every setting by its short name, for a URL the server
+    writes itself (the trending addon's poster URLs)."""
+    return [(ALIASES.get(k, k),
+             _map_weights(v, WEIGHT_SOURCES, compact=True) if k in WEIGHT_PARAMS else v)
+            for k, v in pairs]

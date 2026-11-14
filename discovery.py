@@ -8,7 +8,7 @@ Priority slots
 --------------
 wins         Oscar Best Picture win / Major Emmy (Outstanding) Series win
 gg_wins      Golden Globe win (all top film + TV categories)
-festival     Major international festival winner (Cannes, Berlin, Venice, Sundance, …)
+festival     Festival prize (Cannes, Venice, Berlin, Locarno, Sundance) — see festivals.py
 pic_noms     Best Picture nomination (film) / Major Emmy nomination (TV)
 gg_noms      Golden Globe nomination (all top film + TV categories)
 studio       Produced by a notable studio (A24, Pixar, …)
@@ -20,6 +20,7 @@ returning    TV show with a fresh/upcoming non-premiere episode
 premiere     Show initial release within the last 14 days
 just_added   Movie with a fresh TMDB digital/TV release date
 season_finale Recently-ended TV final season
+blockbuster  Top-grossing film of its release year (box_office.py)
 cult         Cult Classic / Cult Film (MDblist keyword)
 foreign      Non-English original language film
 new_release  Legacy combined newly released signal
@@ -38,7 +39,9 @@ and can be re-prioritised at render time without re-fetching.
 Operator customisation
 ----------------------
 Self-hosters can supply their own director / studio / cast lists without
-editing this file.  Place a JSON file at:
+editing this file.  The admin dashboard's Sash lists view edits them (it
+writes the file below, and every worker reloads it within seconds), or place
+a JSON file by hand at:
 
     /app/cache/discovery_overrides.json
 
@@ -59,7 +62,7 @@ File format:
 "merge": provided entries are added to (and override) the built-in lists.
   Useful for adding names without losing the defaults.
 
-See the project README for a full sample file.
+See discovery_overrides.example.json for a full sample file.
 """
 
 from __future__ import annotations
@@ -67,10 +70,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
 import config as _cfg
+from festivals import festival_label as resolve_festival_label, match_festival_keyword
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +99,10 @@ NOTABLE_STUDIOS: dict[str, str] = {
     "Blumhouse Productions":  "Blumhouse",
     "Neon":                   "NEON Rated",
     "Searchlight Pictures":   "SL Pictures",
-    "BBC Films":              "BBC Films",
+    "BBC Film":               "BBC Films",
     "Bad Robot":              "Bad Robot",
     "HBO":                    "HBO Original",
-    "Laika Entertainment":    "Laika",
+    "LAIKA":                  "Laika",
 }
 
 # Keys are the exact TMDB credit name to match against.
@@ -109,7 +115,7 @@ NOTABLE_DIRECTORS: dict[str, str] = {
     "Martin Scorsese":     "M. Scorsese",
     "Wes Anderson":        "Wes Anderson",
     "Sofia Coppola":       "S. Coppola",
-    "Bong Joon-ho":        "B. Joon-ho",
+    "Bong Joon Ho":        "B. Joon-ho",
     "Hayao Miyazaki":      "H. Miyazaki",
     "David Fincher":       "D. Fincher",
     "Paul Thomas Anderson":"P.T. Anderson",
@@ -129,7 +135,7 @@ NOTABLE_DIRECTORS: dict[str, str] = {
     "Robert Eggers":       "R. Eggers",
     "Céline Sciamma":      "C. Sciamma",
     "Park Chan-wook":      "P. Chan-wook",
-    "Wong Kar-wai":        "Wong Kar-wai",
+    "Wong Kar-Wai":        "Wong Kar-wai",
     "Hirokazu Kore-eda":   "H. Kore-eda",
     "Luca Guadagnino":     "L. Guadagnino",
     "Sean Baker":          "Sean Baker",
@@ -218,22 +224,9 @@ _STRUCTURAL_LABELS: dict[str, str] = {
     "binge_ready": "Binge Ready",
 }
 
-# MDblist keyword name → sash display label.
-# Checked in order; first match wins within the festival slot.
-# Add new festivals here — keyword pattern is typically festival-<name>-winner.
-# Ordered roughly by prestige (up for debate)
-FESTIVAL_KEYWORDS: dict[str, str] = { 
-    "festival-cannes-winner":      "Palme d'Or",
-    "festival-venice-winner":      "Golden Lion",
-    "festival-berlin-winner":      "Golden Bear",
-    "festival-toronto-winner":     "People's Choice",
-    "festival-sundance-winner":    "Sundance GJ",
-    "festival-busan-winner":       "New Currents",
-    "festival-locarno-winner":     "Golden Leopard",
-    "festival-rotterdam-winner":   "Tiger Award",
-    "festival-sxsw-winner":        "SXSW Jury",
-    "festival-tribeca-winner":     "Tribeca AA",
-}
+# Festival sashes live in festivals.py — the keyword table, the top-prize TMDB
+# id sets, and the two-tier label rule.  See that module for why an MDblist
+# festival keyword cannot be read as "won the top prize" on its own.
 
 # ISO 639-1 language code → display label shown on the sash.
 # English is intentionally absent — foreign slot only fires for non-English.
@@ -264,10 +257,38 @@ LANGUAGE_LABELS: dict[str, str] = {
     "cs": "Czech",
     "he": "Hebrew",
     "el": "Greek",
+    "te": "Telugu",
+    "ta": "Tamil",
+    "ml": "Malayalam",
+    "kn": "Kannada",
+    "bn": "Bengali",
+    "mr": "Marathi",
+    "pa": "Punjabi",
+    "gu": "Gujarati",
+    "ur": "Urdu",
+    "th": "Thai",
+    "vi": "Vietnamese",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "tl": "Filipino",
+    "uk": "Ukrainian",
+    "is": "Icelandic",
+    "ca": "Catalan",
+    "sr": "Serbian",
+    "hr": "Croatian",
+    "bg": "Bulgarian",
+    "sk": "Slovak",
+    "et": "Estonian",
+    "lv": "Latvian",
+    "lt": "Lithuanian",
+    "ka": "Georgian",
+    "af": "Afrikaans",
+    "sw": "Swahili",
 }
 
 # Sash type (controls colour) for each priority slot
 _SASH_TYPES: dict[str, str] = {
+    "watchlist":       "watchlist", # amber — the user's own queue (instance-wide, see watchlist.py)
     "wins":            "win",       # gold — Oscar Winner + Emmy Winner
     "gg_wins":         "win",       # gold — Globe Winner (separate slot)
     "pic_noms":        "nom",       # silver — Oscar Nominee + Emmy Nominee (film vs TV, never coexist)
@@ -286,6 +307,7 @@ _SASH_TYPES: dict[str, str] = {
     "premiere":         "alert",     # red — show initial release date recency
     "just_added":       "alert",     # red — fresh movie digital/TV release
     "season_finale":    "alert",     # red — final-season/finale signal
+    "blockbuster":     "trending",  # blue — popularity signal, like cult
     "cult":            "trending",  # blue — popularity signal, closest to trending without a new colour
     "foreign":         "info",      # teal — informational / discovery
     "new_release":     "alert",     # red — legacy combined newly released signal
@@ -303,7 +325,15 @@ _SASH_TYPES: dict[str, str] = {
     "production":      "alert",
     "ended":           "alert",
     "cancelled":       "alert",
+    "airing":          "alert",
+    "renewed":         "alert",
 }
+
+# One slot per release status, named after it.  "release_status" in a sash
+# priority expands to all of them.
+RELEASE_STATUS_SLOTS: tuple[str, ...] = (
+    "cinema", "streaming", "physical", "production", "ended", "cancelled", "airing", "renewed",
+)
 
 NEW_RELEASE_DAYS = 14
 TV_RETURNING_LOOKAHEAD_DAYS = 14
@@ -334,6 +364,246 @@ def _is_recent_or_upcoming(value: str | None) -> bool:
         return False
     delta = (rd - date.today()).days
     return -TV_RECENT_EPISODE_DAYS <= delta <= TV_RETURNING_LOOKAHEAD_DAYS
+
+
+_MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def release_date_label(
+    release_date: str | None,
+    window: str | None,
+    *,
+    today: date | None = None,
+) -> str | None:
+    """"Oct 16 Cinema" for a future *release_date*, "Dec 2027 Cinema" once it is
+    a year or more away, None for anything absent or already passed.
+
+    *window* is the status the date opens — Cinema / Streaming / Physical — and
+    it is part of the label because the date alone would overpromise: a
+    theatrical date is not one the viewer can watch at home.
+
+    The day form is unambiguous for the next twelve months — "Feb 10" read in
+    September can only mean the coming February — and beyond that the day is
+    noise TMDB is likely to revise anyway, so the month and year carry it.
+    """
+    rd = _parse_date(release_date)
+    if rd is None or not window:
+        return None
+    today = today or date.today()
+    # An episode is still to come on its own day ("Airing Oct 12" until it
+    # has gone out); a release is not, it has arrived.
+    if rd < today or (rd == today and window != "Airing"):
+        return None
+    month = _MONTHS_SHORT[rd.month - 1]
+    if (rd - today).days >= 365:
+        return f"{month} {rd.year} {window}"
+    return f"{month} {rd.day} {window}"
+
+
+def premiered_label(premiere_date: str | None, *, today: date | None = None) -> str | None:
+    """"Oct 2 Premiered" for a series' first air date that has arrived, the
+    past-tense twin of release_date_label's "Dec 25 Premiere"; None for one
+    still to come or absent.  (Translated word-first: "Premiered Oct 2".)"""
+    rd = _parse_date(premiere_date)
+    if rd is None or rd > (today or date.today()):
+        return None
+    return f"{_MONTHS_SHORT[rd.month - 1]} {rd.day} Premiered"
+
+
+def season_window(season: int) -> str:
+    """The *window* half of a series release label for a season premiere."""
+    return "Premiere" if season <= 1 else f"Season {season}"
+
+
+def tv_release_facts(
+    tmdb_status: str | None,
+    tmdb_data: dict,
+    *,
+    today: date | None = None,
+) -> "tuple[str | None, str | None, str | None]":
+    """``(status, upcoming_date, window)`` for a series, from facts already in hand.
+
+    TMDB's "Returning Series" means "not declared finished", not "on air": it
+    covers a show airing this week and one whose last episode was two years ago
+    with nothing announced.  Mapped straight to "Airing", most of TMDB's
+    catalogue claimed to be on air.  The episode data TMDB ships with the
+    series details (``next_episode_to_air``, ``last_episode_to_air`` and the
+    season list) says which it is, at no extra API call:
+
+    * **Airing** — an episode aired within TV_RECENT_EPISODE_DAYS (unless TMDB
+      marks it a finale), or the next one is due within
+      TV_RETURNING_LOOKAHEAD_DAYS and continues the season.
+      A mid-season break further out than that is still Airing, dated with the
+      episode it resumes on ("Jan 8 Returns").
+    * **Renewed** — the next season is known: either its first episode is
+      scheduled ("Mar 4 Season 3") or TMDB lists the season undated.
+    * nothing — returning in name only: no recent episode and nothing
+      announced.  The slot is skipped and a lower sash gets the space, which
+      is more honest than any status this could print.
+
+    Unaired shows ("In Production" / "Planned" / "Pilot") are Production,
+    dated with their premiere when TMDB has one ("Dec 25 Premiere").  Ended
+    and Cancelled pass through.  A series with no episode data at all — the
+    anime providers ship none — keeps the plain mapping, since there is
+    nothing to refine it with.
+
+    *window* is None whenever *upcoming_date* is; the pair feeds
+    release_date_label, which also drops a date that has already passed.
+    """
+    today = today or date.today()
+    status = (tmdb_status or "").strip()
+    if status in ("Ended",):
+        return "Ended", None, None
+    if status in ("Cancelled", "Canceled"):
+        return "Cancelled", None, None
+
+    next_ep = tmdb_data.get("next_episode") or None
+    last_ep = tmdb_data.get("last_episode") or None
+    seasons = tmdb_data.get("seasons") or []
+
+    # Data cached before the "next" episode aired: it is the latest one now.
+    # Left as next, a season that premiered since read as an undated
+    # "Renewed" (its own date passed, its last episode the old finale).
+    _next_aired = _parse_date(_episode_date(next_ep))
+    if _next_aired is not None and _next_aired <= today:
+        if (_parse_date(_episode_date(last_ep)) or date.min) <= _next_aired:
+            last_ep = next_ep
+        next_ep = None
+
+    def _future(value: str | None) -> date | None:
+        d = _parse_date(value)
+        return d if d is not None and d > today else None
+
+    # TMDB editors sometimes flip a show to "Returning Series" before its first
+    # episode airs (East of Eden, a week before its premiere).  Nothing has
+    # aired, so it is still a show waiting to premiere, not a renewal.
+    _aired = _parse_date(_episode_date(last_ep))
+    unaired_returning = (
+        status == "Returning Series"
+        and (_aired is None or _aired > today)
+        and (next_ep is not None or bool(seasons))
+    )
+
+    if status in ("In Production", "Planned", "Pilot") or unaired_returning:
+        candidates = [d for d in (
+            _future(_episode_date(next_ep)),
+            _future(tmdb_data.get("tmdb_release_date")),
+            *(_future(s.get("air_date")) for s in seasons if _season_number(s) == 1),
+        ) if d is not None]
+        if candidates:
+            return "Production", min(candidates).isoformat(), "Premiere"
+        return "Production", None, None
+
+    if status != "Returning Series":
+        return None, None, None
+    if next_ep is None and last_ep is None and not seasons:
+        return "Airing", None, None
+
+    last_date = _parse_date(_episode_date(last_ep))
+    next_date = _parse_date(_episode_date(next_ep))
+    last_season = _episode_season(last_ep) or 0
+    # A finale TMDB has marked as one ends the run there: without it a show
+    # read Airing for a fortnight after its season was over (Ted Lasso).
+    # So does a season released all at once (Gnomes: six episodes in a day),
+    # which TMDB doesn't mark: its last episode, out on the season's own date.
+    _season_count = _season_episode_count(seasons, _episode_season(last_ep))
+    _season_date = next((s.get("air_date") for s in seasons
+                         if _season_number(s) == _episode_season(last_ep)), None)
+    binge_dropped = (
+        _season_count is not None and _season_count >= 2
+        and (_episode_number(last_ep) or 0) >= _season_count
+        and _season_date is not None and _season_date == _episode_date(last_ep)
+    )
+    recent = (last_date is not None and 0 <= (today - last_date).days <= TV_RECENT_EPISODE_DAYS
+              and (last_ep or {}).get("episode_type") not in ("finale", "mid_season")
+              and not binge_dropped)
+
+    if next_date is not None and next_date >= today:
+        next_season = _episode_season(next_ep) or last_season
+        opens_season = next_season > last_season or _episode_number(next_ep) == 1
+        if opens_season:
+            if recent:
+                # A season ends and the next starts inside the same fortnight —
+                # it has not stopped airing.
+                return "Airing", None, None
+            return "Renewed", next_date.isoformat(), season_window(next_season)
+        if recent or (next_date - today).days <= TV_RETURNING_LOOKAHEAD_DAYS:
+            return "Airing", None, None
+        return "Airing", next_date.isoformat(), "Returns"
+
+    if recent:
+        return "Airing", None, None
+
+    # Nothing scheduled.  A season TMDB lists beyond the last one aired is an
+    # announced renewal — dated if TMDB has the date, "Renewed" if not.
+    later = sorted(
+        (n, s.get("air_date")) for s in seasons
+        if (n := _season_number(s)) is not None and n > last_season
+    )
+    if later:
+        n, air = later[0]
+        air_date = _future(air)
+        if air_date is not None:
+            return "Renewed", air_date.isoformat(), season_window(n)
+        premiered = _parse_date(air)
+        if premiered is not None and (today - premiered).days <= TV_RECENT_EPISODE_DAYS:
+            # Its premiere has been and gone, the episode data hasn't caught up.
+            return "Airing", None, None
+        return "Renewed", None, None
+    return None, None, None
+
+
+def tvdb_revival(
+    status: str | None,
+    tmdb_data: dict,
+    tvdb_series: dict | None,
+    *,
+    today: date | None = None,
+) -> "tuple[str, str | None, str | None] | None":
+    """``(status, upcoming_date, window)`` for a series TMDB has closed but
+    TVDB has carried on, else None.
+
+    TMDB can sit at "Ended" well after a show is renewed — Cyberpunk:
+    Edgerunners stayed a one-season miniseries there with its second season
+    already in TVDB.  A revival needs both halves of the evidence from TVDB
+    (tvdb.fetch_series_status): a season numbered past the last one TMDB
+    knows, and a dated sign of life — a future episode, or one aired in the
+    last TV_RECENT_EPISODE_DAYS.  Neither alone is enough: TVDB splits some
+    anime into more seasons than TMDB does, and its "continuing" is left on
+    some finished shows, so the status word isn't evidence on its own.
+    Needs TMDB's episode data to count seasons by, so a series from an anime
+    provider (one entry per season, no episode list) is never revived.
+
+    Read the way tv_release_facts reads TMDB's: a future episode dates the
+    renewal ("Oct 20 Season 2"), a recent one makes it on air.
+    """
+    if status not in ("Ended", "Cancelled") or not tvdb_series:
+        return None
+    today = today or date.today()
+    last_ep = tmdb_data.get("last_episode") or None
+    tmdb_last = max([_episode_season(last_ep) or 0,
+                     *(n for s in tmdb_data.get("seasons") or []
+                       if (n := _season_number(s)) is not None)])
+    if tmdb_last <= 0:
+        return None
+    newer = [n for n in tvdb_series.get("seasons") or [] if n > tmdb_last]
+    next_date = _parse_date(tvdb_series.get("next_aired"))
+    last_date = _parse_date(tvdb_series.get("last_aired"))
+    recent = last_date is not None and 0 <= (today - last_date).days <= TV_RECENT_EPISODE_DAYS
+    upcoming = next_date is not None and next_date >= today
+    if not (newer and (upcoming or recent)):
+        return None
+    if upcoming and next_date > today and not recent:
+        return "Renewed", next_date.isoformat(), season_window(newer[0])
+    return "Airing", None, None
+
+
+def _season_number(season: dict) -> int | None:
+    try:
+        return int(season.get("season_number"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _episode_date(ep: dict | None) -> str | None:
@@ -384,8 +654,10 @@ class DiscoveryMeta:
     matched_directors: list[str] = field(default_factory=list)
     matched_cast:      list[str] = field(default_factory=list)
 
-    # Festival winner (from MDblist keywords)
-    festival_label: str | None = None   # e.g. "Palme d'Or Winner"
+    # Festival prize, already resolved to a display label by festivals.py:
+    # the top prize ("Palme d'Or") when the TMDB id is a known winner of it,
+    # otherwise the honest weaker claim ("Cannes Winner").
+    festival_label: str | None = None
 
     # Structural facts (computed from TMDB metadata)
     is_short_film:  bool = False   # movie, runtime < 40 min
@@ -403,6 +675,11 @@ class DiscoveryMeta:
     trending_fetch_count: int | None = None
     trending_broad_fetch_count: int | None = None
 
+    # The instance's configured watchlist (watchlist.py) lists this title.
+    # Never cached with the rest of the meta — membership is looked up live
+    # from the in-memory snapshot on every render.
+    is_watchlisted: bool = False
+
     # Timely release / TV lifecycle signals
     is_new_release: bool = False      # legacy combined signal
     is_premiere: bool = False         # show initial release date within the last 2 weeks
@@ -410,6 +687,9 @@ class DiscoveryMeta:
     is_new_season: bool = False       # S2+E1 fresh/upcoming
     is_returning: bool = False        # S2+ non-premiere fresh/upcoming
     is_season_finale: bool = False    # conservative final-season/finale heuristic
+
+    # Top-grossing film of its release year (box_office.py) — movies only
+    is_blockbuster: bool = False
 
     # Keyword-based discovery signals (from MDblist keywords)
     is_cult:              bool = False   # cult-classic or cult-film
@@ -423,6 +703,16 @@ class DiscoveryMeta:
     # Movies: "Physical" | "Streaming" | "Cinema" | "Production"
     # TV:     "Returning" | "Ended" | "Cancelled" | "Production"
     release_status: str | None = None
+    # The next date a "Cinema" / "Production" movie moves on (YYYY-MM-DD) and
+    # the status it moves to ("Cinema" / "Streaming" / "Physical"), when TMDB
+    # has published one.  The sash then reads "Oct 16 Cinema" rather than the
+    # bare status; release_status itself stays semantic for the greyscale
+    # treatment, cache tiers and slot matching.
+    upcoming_release_date: str | None = None
+    upcoming_release_window: str | None = None
+    # The first air date behind is_premiere, printed on its sash ("Premiered
+    # Oct 2"); the caller clears it when dates are off.
+    premiere_date: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -436,31 +726,37 @@ def extract_discovery_meta(
     award_noms: list[str],
     trending_rank: int | None,
     *,
+    tmdb_id: int | str | None = None,
     release_date: str | None = None,
     keywords: list[dict] | None = None,
-    festival_label_override:  str | None  = None,
+    festival_keyword:         str | None  = None,
+    imdb_id:                  str | None  = None,
     is_cult_override:         bool | None = None,
     is_true_story_override:   bool | None = None,
     is_metacritic_override:   bool | None = None,
     is_digital_release_override: bool | None = None,
     release_status_override: str | None = None,
+    upcoming_release_date: str | None = None,
+    upcoming_release_window: str | None = None,
     recent_digital_release_date: str | None = None,
     notable_studios:   dict[str, str] | None = None,
     notable_directors: dict[str, str] | None = None,
     notable_cast:      dict[str, str] | None = None,
-    festival_keywords: dict[str, str] | None = None,
     language_labels:   dict[str, str] | None = None,
+    is_watchlisted:    bool = False,
+    is_blockbuster:    bool = False,
 ) -> DiscoveryMeta:
     studios        = notable_studios   or NOTABLE_STUDIOS
     directors      = notable_directors or NOTABLE_DIRECTORS
     cast_list      = notable_cast      or NOTABLE_CAST
-    fest_keywords  = festival_keywords or FESTIVAL_KEYWORDS
 
     meta = DiscoveryMeta(
         award_wins=award_wins,
         award_noms=award_noms,
         trending_rank=trending_rank,
         original_language=tmdb_data.get("original_language"),
+        is_watchlisted=is_watchlisted,
+        is_blockbuster=is_blockbuster and media_type not in ("tv", "series"),
     )
 
     # Build keyword name set once — reused for festival detection and the
@@ -470,15 +766,18 @@ def extract_discovery_meta(
         if keywords else set()
     )
 
-    # --- Festival winners ---
-    # Prefer a pre-resolved label (from cache) to avoid re-scanning keywords.
-    if festival_label_override is not None:
-        meta.festival_label = festival_label_override
-    elif keyword_names:
-        for kw_name, label in fest_keywords.items():
-            if kw_name in keyword_names:
-                meta.festival_label = label
-                break
+    # --- Festival prize ---
+    # The label is resolved here rather than read from the cache, because a
+    # resolved label in the cache is a label that outlives its own correction.
+    # *festival_keyword* is the cached half — which festival, not which prize —
+    # and a fresh MDblist fetch supplies it from the keywords instead.  The
+    # top-prize half comes from the TMDB id, so it lands even when neither does.
+    meta.festival_label = resolve_festival_label(
+        festival_keyword if festival_keyword is not None
+        else match_festival_keyword(keyword_names),
+        tmdb_id if tmdb_id is not None else tmdb_data.get("id"),
+        imdb_id or tmdb_data.get("imdb_id"),
+    )
 
     # --- Keyword-based discovery signals ---
     # Each signal uses an override (from cache) when available; otherwise
@@ -503,6 +802,8 @@ def extract_discovery_meta(
 
     if release_status_override is not None:
         meta.release_status = release_status_override
+    meta.upcoming_release_date = upcoming_release_date
+    meta.upcoming_release_window = upcoming_release_window
 
     if _is_recent(recent_digital_release_date):
         meta.is_just_added = True
@@ -552,6 +853,7 @@ def extract_discovery_meta(
     tmdb_release_date = tmdb_data.get("tmdb_release_date") or release_date
     if is_tv and _is_recent(tmdb_release_date):
         meta.is_premiere = True
+        meta.premiere_date = tmdb_release_date
 
     if is_tv:
         next_ep = tmdb_data.get("next_episode") or None
@@ -639,8 +941,30 @@ def pick_sash(
     return None
 
 
+TRENDING_SLOTS = ("trending", "trending_broad")
+
+
+def shown_trending_rank(meta: DiscoveryMeta, priority: list[str]) -> int | None:
+    """The rank a trending_style other than "sash" draws: the title's rank when
+    a trending slot in *priority* covers it, wherever in the list that slot is.
+    The rank mark is separate from the sash, so nothing above it can hide it."""
+    rank = meta.trending_rank
+    if not rank:
+        return None
+    narrow = meta.trending_fetch_count or _cfg.TRENDING_FETCH_COUNT
+    broad = meta.trending_broad_fetch_count or _cfg.TRENDING_BROAD_FETCH_COUNT
+    if "trending" in priority and rank <= narrow:
+        return rank
+    if "trending_broad" in priority and narrow < rank <= broad:
+        return rank
+    return None
+
+
 def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
     """Return a label string if this slot has a match, else None."""
+
+    if slot == "watchlist":
+        return "Watchlist" if meta.is_watchlisted else None
 
     if slot == "wins":
         # Oscar Best Picture wins and Emmy Outstanding wins only.
@@ -715,7 +1039,9 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
         return "Returning" if meta.is_returning else None
 
     if slot == "premiere":
-        return "Premiere" if meta.is_premiere else None
+        if not meta.is_premiere:
+            return None
+        return premiered_label(meta.premiere_date) or "Premiere"
 
     if slot == "just_added":
         return "Just Added" if meta.is_just_added else None
@@ -733,6 +1059,9 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
 
     if slot == "metacritic":
         return "Must-See" if meta.is_metacritic_must_see else None
+
+    if slot == "blockbuster":
+        return "Blockbuster" if meta.is_blockbuster else None
 
     if slot == "cult":
         return "Cult Classic" if meta.is_cult else None
@@ -760,14 +1089,31 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
         return None
 
     if slot == "release_status":
-        return meta.release_status  # already a display string or None
+        return _release_status_label(meta)
 
-    if slot in ("cinema", "streaming", "physical", "production", "ended", "cancelled", "airing"):
+    if slot in RELEASE_STATUS_SLOTS:
         if meta.release_status and meta.release_status.lower() == slot:
-            return meta.release_status
+            return _release_status_label(meta)
         return None
 
     return None
+
+
+def _release_status_label(meta: DiscoveryMeta) -> str | None:
+    """The status as a display string — or, when the title's next move has a
+    published date, that date and what it opens: "Oct 16 Cinema" for a movie,
+    "Dec 25 Premiere" / "Mar 4 Season 3" / "Jan 8 Returns" for a series.
+    Checked here as well as upstream: a date beside a status that has already
+    arrived (Streaming, Ended, ...) would read as a promise it isn't."""
+    if meta.release_status in _DATED_STATUSES:
+        label = release_date_label(meta.upcoming_release_date, meta.upcoming_release_window)
+        if label:
+            return label
+    return meta.release_status
+
+
+# The statuses that are waiting on a next date — the only ones that can wear one.
+_DATED_STATUSES = frozenset({"Cinema", "Production", "Renewed", "Airing"})
 
 
 # ---------------------------------------------------------------------------
@@ -776,6 +1122,7 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
 
 ALL_PRIORITY_SLOTS: list[str] = [
     "most_popular",
+    "watchlist",
     "wins",
     "gg_wins",
     "festival",
@@ -790,6 +1137,7 @@ ALL_PRIORITY_SLOTS: list[str] = [
     "premiere",
     "just_added",
     "season_finale",
+    "blockbuster",
     "cult",
     "foreign",
     "new_release",
@@ -811,6 +1159,7 @@ ALL_PRIORITY_SLOTS: list[str] = [
     "ended",
     "cancelled",
     "airing",
+    "renewed",
 ]
 
 
@@ -818,74 +1167,205 @@ ALL_PRIORITY_SLOTS: list[str] = [
 # Operator override loader
 # ---------------------------------------------------------------------------
 
-_OVERRIDE_PATH = os.environ.get(
-    "DISCOVERY_OVERRIDES_PATH",
-    "/app/cache/discovery_overrides.json",
-)
+_OVERRIDE_PATH = _cfg.DISCOVERY_OVERRIDES_PATH
+
+# The file's sections and the module lists they feed.
+SECTIONS = ("studios", "directors", "cast")
+BUILTIN_LISTS: dict[str, dict[str, str]] = {
+    "studios":   dict(NOTABLE_STUDIOS),
+    "directors": dict(NOTABLE_DIRECTORS),
+    "cast":      dict(NOTABLE_CAST),
+}
+# The sash is narrow; the dashboard refuses labels longer than this and
+# names no TMDB credit comes near.
+MAX_LABEL_LENGTH = 40
+MAX_NAME_LENGTH = 200
+MAX_SECTION_ENTRIES = 2000
+
+# (mtime_ns, size) of the file the lists were last built from, None when absent.
+_loaded_stamp: tuple[int, int] | None = None
+_checked_at = 0.0
+_CHECK_INTERVAL = 3.0
 
 
-def _load_discovery_overrides() -> None:
-    """
-    Apply operator-supplied director / studio / cast lists from a JSON file.
+def _file_stamp() -> tuple[int, int] | None:
+    try:
+        st = os.stat(_OVERRIDE_PATH)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
 
-    Called once at module import time.  Silently skips when the file is
-    absent so the built-in defaults in this file are used unchanged.  Logs
-    a warning (and falls back to built-ins) if the file exists but is invalid.
 
-    See the module docstring at the top of this file for the full format.
-    """
+def _read_override_file() -> dict | None:
+    """The file's JSON object, or None when absent or unusable (logged)."""
     try:
         with open(_OVERRIDE_PATH, encoding="utf-8") as fh:
             data = json.load(fh)
     except FileNotFoundError:
-        return                        # normal — no overrides configured
+        return None                   # normal — no overrides configured
     except Exception as exc:
         logger.warning(
             f"discovery_overrides.json: failed to parse ({exc}) — using built-in lists"
         )
-        return
-
+        return None
     if not isinstance(data, dict):
         logger.warning("discovery_overrides.json: root must be a JSON object — ignoring")
-        return
+        return None
+    return data
 
-    mode         = data.get("mode", "replace")
-    studios_raw  = data.get("studios")
-    dirs_raw     = data.get("directors")
-    cast_raw     = data.get("cast")
 
-    counts: list[str] = []
+def _clean_section(raw) -> dict[str, str] | None:
+    if not isinstance(raw, dict):
+        return None
+    return {str(k): str(v) for k, v in raw.items() if str(k).strip() and str(v).strip()}
 
-    if mode == "merge":
-        # Add / overwrite individual entries; entries absent from the file
-        # remain from the built-in lists.
-        if isinstance(studios_raw, dict):
-            NOTABLE_STUDIOS.update(studios_raw)
-            counts.append(f"+{len(studios_raw)} studios")
-        if isinstance(dirs_raw, dict):
-            NOTABLE_DIRECTORS.update(dirs_raw)
-            counts.append(f"+{len(dirs_raw)} directors")
-        if isinstance(cast_raw, dict):
-            NOTABLE_CAST.update(cast_raw)
-            counts.append(f"+{len(cast_raw)} cast")
-        logger.info(f"discovery_overrides.json loaded (merge): {', '.join(counts) or 'no sections'}")
 
-    else:
-        # "replace" — each supplied section fully replaces its built-in list.
-        # Omitted sections keep their defaults.
-        if isinstance(studios_raw, dict):
-            NOTABLE_STUDIOS.clear()
-            NOTABLE_STUDIOS.update(studios_raw)
-            counts.append(f"{len(studios_raw)} studios")
-        if isinstance(dirs_raw, dict):
-            NOTABLE_DIRECTORS.clear()
-            NOTABLE_DIRECTORS.update(dirs_raw)
-            counts.append(f"{len(dirs_raw)} directors")
-        if isinstance(cast_raw, dict):
-            NOTABLE_CAST.clear()
-            NOTABLE_CAST.update(cast_raw)
-            counts.append(f"{len(cast_raw)} cast")
-        logger.info(f"discovery_overrides.json loaded (replace): {', '.join(counts) or 'no sections'}")
+def effective_lists(data: dict | None) -> dict[str, dict[str, str]]:
+    """The three lists *data* (the file's contents) produces on top of the
+    built-in ones.  "replace" (the default mode): a section present replaces
+    its built-in list.  "merge": its entries are added to the built-in list."""
+    lists = {name: dict(BUILTIN_LISTS[name]) for name in SECTIONS}
+    if not data:
+        return lists
+    merge = data.get("mode", "replace") == "merge"
+    for name in SECTIONS:
+        section = _clean_section(data.get(name))
+        if section is None:
+            continue
+        if merge:
+            lists[name].update(section)
+        else:
+            lists[name] = section
+    return lists
+
+
+def _load_discovery_overrides() -> None:
+    """
+    (Re)build the director / studio / cast lists from the built-in ones and
+    the operator's JSON file.  The lists are swapped in whole, never edited in
+    place, so a render reading them mid-reload sees one version or the other.
+
+    See the module docstring at the top of this file for the full format.
+    """
+    global NOTABLE_STUDIOS, NOTABLE_DIRECTORS, NOTABLE_CAST, _loaded_stamp
+    _loaded_stamp = _file_stamp()
+    data = _read_override_file()
+    lists = effective_lists(data)
+    NOTABLE_STUDIOS, NOTABLE_DIRECTORS, NOTABLE_CAST = (
+        lists["studios"], lists["directors"], lists["cast"]
+    )
+    if data is not None:
+        mode = "merge" if data.get("mode", "replace") == "merge" else "replace"
+        counts = [
+            f"{len(lists[name])} {name}" for name in SECTIONS
+            if isinstance(data.get(name), dict)
+        ]
+        logger.info(f"discovery_overrides.json loaded ({mode}): {', '.join(counts) or 'no sections'}")
+
+
+def refresh_overrides() -> bool:
+    """Reload the lists if the file changed since they were built — the
+    dashboard's editor writes it from whichever worker served the save.  A
+    clock read on most calls, one stat every few seconds.  True when the
+    lists were rebuilt."""
+    global _checked_at
+    now = time.monotonic()
+    if now - _checked_at < _CHECK_INTERVAL:
+        return False
+    _checked_at = now
+    if _file_stamp() == _loaded_stamp:
+        return False
+    _load_discovery_overrides()
+    return True
+
+
+def current_lists() -> dict:
+    """What the dashboard's editor shows: each list as it applies now, and
+    whether it is the built-in one or the operator's."""
+    data = _read_override_file()
+    lists = effective_lists(data)
+    merge = bool(data) and data.get("mode", "replace") == "merge"
+    out = {}
+    for name in SECTIONS:
+        custom = bool(data) and isinstance(data.get(name), dict)
+        out[name] = {
+            "entries": [{"name": k, "label": v} for k, v in lists[name].items()],
+            "custom":  custom,
+            "merged":  custom and merge,
+            "builtin": [{"name": k, "label": v} for k, v in BUILTIN_LISTS[name].items()],
+        }
+    return out
+
+
+def validate_entries(entries) -> dict[str, str]:
+    """An editor-sent list ([{"name", "label"}, ...]) as a section dict.
+    Raises ValueError on anything malformed."""
+    if not isinstance(entries, list):
+        raise ValueError("entries must be a list")
+    if len(entries) > MAX_SECTION_ENTRIES:
+        raise ValueError(f"more than {MAX_SECTION_ENTRIES} entries")
+    out: dict[str, str] = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            raise ValueError("each entry must be an object")
+        name = str(item.get("name") or "").strip()
+        label = str(item.get("label") or "").strip() or name
+        if not name:
+            raise ValueError("an entry has no name")
+        if len(name) > MAX_NAME_LENGTH:
+            raise ValueError(f"name longer than {MAX_NAME_LENGTH} characters: {name[:40]}…")
+        if len(label) > MAX_LABEL_LENGTH:
+            raise ValueError(f"label for {name} is longer than {MAX_LABEL_LENGTH} characters")
+        out[name] = label
+    return out
+
+
+def _sort_key(name: str) -> tuple[str, str]:
+    """A–Z ignoring case and accents, so "Cuarón" sorts with "Cuaron"."""
+    plain = "".join(c for c in unicodedata.normalize("NFKD", name) if not unicodedata.combining(c))
+    return (plain.casefold(), name)
+
+
+def sorted_section(section: dict[str, str]) -> dict[str, str]:
+    return {k: section[k] for k in sorted(section, key=_sort_key)}
+
+
+def override_path() -> str:
+    return _OVERRIDE_PATH
+
+
+def override_writable() -> bool:
+    if os.path.exists(_OVERRIDE_PATH):
+        return os.access(_OVERRIDE_PATH, os.W_OK)
+    return os.access(os.path.dirname(_OVERRIDE_PATH) or ".", os.W_OK)
+
+
+def save_sections(changes: dict[str, dict[str, str] | None]) -> None:
+    """Write the editor's lists to the file: a dict becomes that section's
+    full list, None drops the section so the built-in list applies again.
+
+    The file is rewritten in "replace" mode.  A hand-written "merge" file has
+    its other sections expanded to the lists they produced, so nothing the
+    operator sees changes except what they edited.  Written atomically, then
+    reloaded here; other workers pick it up in refresh_overrides().
+    """
+    data = _read_override_file() or {}
+    was_merge = data.get("mode", "replace") == "merge"
+    applied = effective_lists(data)
+    out: dict = {"mode": "replace"}
+    for name in SECTIONS:
+        if name in changes:
+            if changes[name] is not None:
+                out[name] = sorted_section(changes[name])
+        elif isinstance(data.get(name), dict):
+            out[name] = applied[name] if was_merge else _clean_section(data[name])
+    directory = os.path.dirname(_OVERRIDE_PATH) or "."
+    tmp = os.path.join(directory, f".{os.path.basename(_OVERRIDE_PATH)}.{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(out, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, _OVERRIDE_PATH)
+    _load_discovery_overrides()
 
 
 _load_discovery_overrides()

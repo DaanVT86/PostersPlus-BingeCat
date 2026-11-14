@@ -6,8 +6,9 @@ import v2_render as render
 
 
 @pytest.mark.parametrize("filename,old,new", [
-    ("rating_badges.py", '"letterboxd": 5', '"letterboxd": 4'),
-    ("rating_badges.py", 'font_size * 0.55', 'font_size * 0.56'),
+    ("rating_badges.py", '_BADGE_ROW   = 0.95', '_BADGE_ROW   = 0.96'),
+    ("rating_badges.py", '_MAX_W  = 2.6', '_MAX_W  = 2.7'),
+    ("graphic_badges.py", 'ASSET_DIR = "/app/cache/commons"', 'ASSET_DIR = "/app/cache/commons2"'),
     ("render_spec.py", '"sash_badge_pad": 1.0', '"sash_badge_pad": 1.1'),
     ("render_spec.py", '"imdb", "tmdb", "letterboxd"', '"tmdb", "imdb", "letterboxd"'),
     ("render_spec.py", 'return mode == 2', 'return mode == 1'),
@@ -31,11 +32,17 @@ def test_unapproved_transitive_code_has_its_own_build_identity(filename, old, ne
 
 
 @pytest.mark.parametrize("asset", [
-    "static/rating_badges/imdb.png", "static/rating_badges/tmdb.png",
-    "static/rating_badges/letterboxd.png", "static/rating_badges/trakt.png",
-    "static/rating_badges/tomatoes.png", "static/rating_badges/popcorn.png",
-    "static/rating_badges/metacritic.png", "static/rating_badges/metacriticuser.png",
-    "static/rating_badges/rogerebert.png", "languages/en.json", "languages/nl.json",
+    # Packaged rating-badge marks (rating_badges._FILES): IMDb, TMDB, Letterboxd,
+    # Trakt, RT fresh/rotten/lettered, Popcornmeter up/down, Metacritic, thumb.
+    *(f"static/rating_badges/{sha1}.svg" for sha1 in (
+        "0a1b5cd02f8aecdf4b9bbf1bda2950487e5c29c0", "bbdb45a8e78cf26bb19bc994a4553efcee54f38c",
+        "3c22c25f6e1ce3a26c0bd59e7f70729ddbaddb6b", "87ee5c6b8e0e4370837299905c1f105f32b23843",
+        "5099a1d8f0dccfa0584f25387d08ecc1434cb375", "4b2867d30f31941105f80f544acf1e283946e4e8",
+        "bcadeaaf2bd2b4f1421cbf5b1e8fe318e17856d0", "63bbcf6deb1bf8ec8268052e1cc41681794fed93",
+        "83ecbf269edf953837f6c930af510043e42e3964", "f36dd4ffb2045f91a84ae91cc73dd1fd33369cde",
+        "7f052d1f2827686651bc2f22bdc105dedb48ca07",
+    )),
+    "static/logos/metacritic-minimal-white.png", "languages/en.json", "languages/nl.json",
     "languages/de.json", "languages/pt.json", "languages/es.json",
 ])
 def test_badge_pixels_and_date_translations_are_identity_inputs(monkeypatch, asset):

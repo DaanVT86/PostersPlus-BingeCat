@@ -1,0 +1,410 @@
+"""TMDB ids for anime the community mapping doesn't know yet (anime_resolve)."""
+
+import asyncio
+import unittest
+from unittest import mock
+
+import anime_ids
+import anime_resolve as ar
+
+
+def _media(anilist_id, english=None, romaji=None, year=2026, prequel=None, fmt="TV"):
+    edges = [{"relationType": "PREQUEL", "node": {"id": prequel, "type": "ANIME", "format": "TV"}}] if prequel else []
+    return {"id": anilist_id, "format": fmt, "title": {"english": english, "romaji": romaji},
+            "synonyms": [], "startDate": {"year": year}, "relations": {"edges": edges}}
+
+
+class ResolveTests(unittest.TestCase):
+    def setUp(self):
+        self.cache = {}
+        self.metadata = {}
+        self.gone = set()
+
+        async def metadata(client, namespace, anime_id):
+            lookup = self.metadata.get(anime_id)
+            return None if lookup is None else ([16], False, [], None, "", None, None,
+                                                {"anime_lookup": lookup})
+        for p in (
+            mock.patch.object(ar, "get_cached_tvdb_json", self.cache.get),
+            mock.patch.object(ar, "set_cached_tvdb_json", lambda k, v, ttl: self.cache.__setitem__(k, v)),
+            mock.patch.object(ar.anime, "fetch_anime_metadata", metadata),
+            mock.patch.object(ar.anime, "_anilist_quiet_until", 0.0),
+            mock.patch("tmdb.tmdb_id_gone", lambda tid, mt: tid in self.gone),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, media_by_id, mapped, search=None, namespace="anilist", anime_id=2, media_type="series",
+             imdb=None):
+        async def anilist(client, anilist_id=None, mal_id=None):
+            return media_by_id.get(anilist_id)
+
+        def lookup(ns, aid, mt):
+            return mapped.get(aid)
+
+        async def search_tmdb(client, key, kind, media):
+            return (search or {}).get(media["id"])
+
+        async def tmdb_imdb_id(client, key, kind, tmdb_id):
+            self.imdb_asked.append(tmdb_id)
+            return (imdb or {}).get(tmdb_id, (None, True))
+
+        self.imdb_asked = []
+        with mock.patch.object(ar, "_anilist", anilist), \
+                mock.patch.object(ar.anime_ids, "lookup", lookup), \
+                mock.patch.object(ar, "_search_tmdb", search_tmdb), \
+                mock.patch.object(ar, "_tmdb_imdb_id", tmdb_imdb_id):
+            return asyncio.run(ar.resolve(None, namespace, anime_id, media_type, "key"))
+
+    def test_a_later_season_takes_its_prequels_ids(self):
+        # TOUGEN ANKI's second cour (204650) -> the first (177474), mapped.
+        media = {204650: _media(204650, "TOUGEN ANKI: Nikko Kegon Falls Arc", prequel=177474),
+                 177474: _media(177474, "TOUGEN ANKI", year=2025)}
+        mapped = {177474: anime_ids.MappedIds("253811", "tt32344704")}
+        got = self._run(media, mapped, anime_id=204650)
+        self.assertEqual(got, anime_ids.MappedIds("253811", "tt32344704"))
+        self.assertEqual(self.cache["animeres:v1:anilist:204650:tv"]["via"], "prequel:1")
+
+    def test_a_chain_of_seasons_is_walked(self):
+        media = {3: _media(3, prequel=2), 2: _media(2, prequel=1), 1: _media(1)}
+        got = self._run(media, {1: anime_ids.MappedIds("99", None)}, anime_id=3)
+        self.assertEqual(got.tmdb_id, "99")
+
+    def test_a_new_show_by_name(self):
+        media = {212888: _media(212888, "Overgeared", "Tempal: Item no Chikara")}
+        got = self._run(media, {}, search={212888: "324502"}, anime_id=212888)
+        self.assertEqual(got.tmdb_id, "324502")
+
+    def test_a_show_found_by_name_brings_its_imdb_id(self):
+        # The anime path reads MDBList by IMDb id only: without it, no ratings.
+        media = {212888: _media(212888, "Overgeared", "Tempal: Item no Chikara")}
+        got = self._run(media, {}, search={212888: "324502"}, anime_id=212888,
+                        imdb={"324502": ("tt43691353", True)})
+        self.assertEqual(got, anime_ids.MappedIds("324502", "tt43691353"))
+        self.assertEqual(self.imdb_asked, ["324502"])
+        # Cached: not asked again.
+        self._run(media, {}, search={212888: "324502"}, anime_id=212888)
+        self.assertEqual(self.imdb_asked, [])
+
+    def test_a_name_match_cached_without_its_imdb_id_is_looked_up_again(self):
+        self.cache["animeres:v1:anilist:212888:tv"] = {"tmdb_id": "324502", "imdb_id": None, "via": "search"}
+        media = {212888: _media(212888, "Overgeared")}
+        got = self._run(media, {}, search={212888: "324502"}, anime_id=212888,
+                        imdb={"324502": ("tt43691353", True)})
+        self.assertEqual(got.imdb_id, "tt43691353")
+        self.assertTrue(self.cache["animeres:v1:anilist:212888:tv"]["imdb_checked"])
+
+    def test_tmdb_not_answering_for_the_imdb_id_keeps_the_tmdb_id(self):
+        media = {6: _media(6, "Some Show")}
+        got = self._run(media, {}, search={6: "222"}, anime_id=6, imdb={"222": (None, False)})
+        self.assertEqual(got, anime_ids.MappedIds("222", None))
+        row = self.cache["animeres:v1:anilist:6:tv"]
+        self.assertFalse(row["imdb_checked"])
+        # Not asked again inside the retry window; asked once it has passed.
+        self._run(media, {}, search={6: "222"}, anime_id=6)
+        self.assertEqual(self.imdb_asked, [])
+        row["imdb_retry_at"] = 0
+        got = self._run(media, {}, search={6: "222"}, anime_id=6, imdb={"222": ("tt9", True)})
+        self.assertEqual(got, anime_ids.MappedIds("222", "tt9"))
+
+    def test_an_old_name_match_is_not_resolved_again_from_scratch(self):
+        # Only the IMDb id is asked for: a throttled AniList can't cost the
+        # title the TMDB id it already has.
+        self.cache["animeres:v1:anilist:6:tv"] = {"tmdb_id": "222", "imdb_id": None, "via": "search"}
+
+        async def throttled(*a, **k):
+            raise ar._Transient("AniList 429")
+        with mock.patch.object(ar, "_resolve", throttled):
+            got = self._run({}, {}, anime_id=6, imdb={"222": ("tt9", True)})
+        self.assertEqual(got, anime_ids.MappedIds("222", "tt9"))
+
+    def test_a_later_season_found_by_prequel_asks_nothing_of_tmdb(self):
+        media = {3: _media(3, prequel=1), 1: _media(1)}
+        self._run(media, {1: anime_ids.MappedIds("99", "tt1")}, anime_id=3)
+        self.assertEqual(self.imdb_asked, [])
+
+    def test_a_deleted_tmdb_id_in_the_mapping_is_passed_over(self):
+        # The AniList id's own row names a TMDB entry since deleted: the name
+        # search runs instead of handing the deleted id back.
+        self.gone.add("111")
+        media = {6: _media(6, "Some Show")}
+        got = self._run(media, {6: anime_ids.MappedIds("111", None)}, search={6: "222"}, anime_id=6)
+        self.assertEqual(got.tmdb_id, "222")
+
+    def test_a_deleted_prequel_id_is_walked_past(self):
+        self.gone.add("111")
+        media = {3: _media(3, prequel=2), 2: _media(2, prequel=1), 1: _media(1)}
+        mapped = {2: anime_ids.MappedIds("111", None), 1: anime_ids.MappedIds("99", None)}
+        self.assertEqual(self._run(media, mapped, anime_id=3).tmdb_id, "99")
+
+    def test_a_cached_hit_since_deleted_is_resolved_again(self):
+        media = {6: _media(6, "Some Show")}
+        self.assertEqual(self._run(media, {}, search={6: "111"}, anime_id=6).tmdb_id, "111")
+        self.gone.add("111")
+        self.assertEqual(self._run(media, {}, search={6: "222"}, anime_id=6).tmdb_id, "222")
+
+    def test_films_do_not_follow_prequels(self):
+        media = {5: _media(5, prequel=4, fmt="MOVIE"), 4: _media(4)}
+        self.assertIsNone(self._run(media, {4: anime_ids.MappedIds("1", None)},
+                                    anime_id=5, media_type="movie"))
+
+    def test_misses_are_cached_and_not_retried(self):
+        calls = []
+
+        async def anilist(client, anilist_id=None, mal_id=None):
+            calls.append(anilist_id)
+            return _media(anilist_id)
+
+        async def no_search(*a):
+            return None
+        with mock.patch.object(ar, "_anilist", anilist), \
+                mock.patch.object(ar.anime_ids, "lookup", lambda *a: None), \
+                mock.patch.object(ar, "_search_tmdb", no_search):
+            self.assertIsNone(asyncio.run(ar.resolve(None, "anilist", 7, "series", "k")))
+            self.assertIsNone(asyncio.run(ar.resolve(None, "anilist", 7, "series", "k")))
+        self.assertEqual(calls, [7])
+
+    def test_the_renders_cached_metadata_saves_an_anilist_call(self):
+        calls = []
+
+        async def anilist(client, anilist_id=None, mal_id=None):
+            calls.append(anilist_id)
+            return None
+        self.metadata[204650] = _media(204650, "TOUGEN ANKI: Nikko Kegon Falls Arc", prequel=177474)
+
+        async def no_search(*a):
+            return None
+        with mock.patch.object(ar, "_anilist", anilist), \
+                mock.patch.object(ar.anime_ids, "lookup",
+                                  lambda ns, aid, mt: anime_ids.MappedIds("253811", None) if aid == 177474 else None), \
+                mock.patch.object(ar, "_search_tmdb", no_search):
+            got = asyncio.run(ar.resolve(None, "anilist", 204650, "series", "k"))
+        self.assertEqual(got.tmdb_id, "253811")
+        self.assertEqual(calls, [])
+
+    def test_anilists_wait_is_honoured(self):
+        calls = []
+
+        async def anilist(client, anilist_id=None, mal_id=None):
+            calls.append(anilist_id)
+            return _media(anilist_id)
+        ar.anime.note_anilist_throttle("48")
+        self.assertTrue(ar.anime.anilist_cooling())
+        with mock.patch.object(ar, "_anilist", anilist):
+            self.assertIsNone(asyncio.run(ar.resolve(None, "anilist", 9, "series", "k")))
+        self.assertEqual(calls, [])
+        self.assertEqual(self.cache["animeres:v1:anilist:9:tv"], {})
+
+    def test_throttling_is_held_only_briefly(self):
+        ttls = {}
+
+        async def throttled(*a, **k):
+            raise ar._Transient("AniList 429")
+        with mock.patch.object(ar, "_anilist", throttled), \
+                mock.patch.object(ar, "set_cached_tvdb_json", lambda k, v, ttl: ttls.__setitem__(k, ttl)):
+            self.assertIsNone(asyncio.run(ar.resolve(None, "anilist", 8, "series", "k")))
+        self.assertEqual(ttls, {"animeres:v1:anilist:8:tv": ar._FAIL_TTL})
+
+
+class SearchTests(unittest.TestCase):
+    def _imdb(self, status, body=None, exc=None):
+        import httpx
+
+        def handler(request):
+            if exc:
+                raise exc
+            assert request.url.path == "/3/tv/324502/external_ids"
+            return httpx.Response(status, json=body or {})
+
+        async def go():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await ar._tmdb_imdb_id(client, "k", "tv", "324502")
+        return asyncio.run(go())
+
+    def test_imdb_id_from_external_ids(self):
+        import httpx
+        self.assertEqual(self._imdb(200, {"imdb_id": "tt43691353"}), ("tt43691353", True))
+        self.assertEqual(self._imdb(200, {"imdb_id": None}), (None, True))
+        self.assertEqual(self._imdb(404), (None, True))
+        self.assertEqual(self._imdb(429), (None, False))
+        self.assertEqual(self._imdb(0, exc=httpx.ConnectError("down")), (None, False))
+
+    def _search(self, results, media):
+        import httpx
+
+        def handler(request):
+            return httpx.Response(200, json={"results": results})
+
+        async def go():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await ar._search_tmdb(client, "k", "tv", media)
+        return asyncio.run(go())
+
+    def test_only_an_exact_animated_name_in_the_right_year(self):
+        media = _media(1, "Overgeared", "Tempal: Item no Chikara", year=2026)
+        hit = {"id": 324502, "name": "Overgeared", "original_name": "テムパル",
+               "genre_ids": [16, 10759], "first_air_date": "2026-10-02"}
+        self.assertEqual(self._search([hit], media), "324502")
+        self.assertIsNone(self._search([{**hit, "genre_ids": [18]}], media))           # live action
+        self.assertIsNone(self._search([{**hit, "first_air_date": "2019-01-01"}], media))  # another show
+        self.assertIsNone(self._search([{**hit, "name": "Overgeared Returns"}], media))   # near miss
+
+    def test_names_compare_without_case_or_punctuation(self):
+        self.assertEqual(ar._norm("A Wild Last Boss Appeared!"), ar._norm("a wild last-boss appeared"))
+
+
+class AnimeForImdbTests(unittest.TestCase):
+    """An IMDb id TMDB doesn't know, matched to a Kitsu entry by name and year."""
+
+    SBR = {"name": "Steel Ball Run: JoJo's Bizarre Adventure", "releaseInfo": "2026–",
+           "genres": ["Animation", "Action"], "country": "Japan"}
+
+    @staticmethod
+    def _kitsu(kitsu_id, en, start="2026-03-19", subtype="ONA"):
+        return {"id": str(kitsu_id), "attributes": {
+            "canonicalTitle": "Steel Ball Run: JoJo no Kimyou na Bouken", "titles": {"en": en},
+            "subtype": subtype, "startDate": start}}
+
+    def setUp(self):
+        self.cache = {}
+        self.searches = []
+        for p in (
+            mock.patch.object(ar, "get_cached_tvdb_json", self.cache.get),
+            mock.patch.object(ar, "set_cached_tvdb_json", lambda k, v, ttl: self.cache.__setitem__(k, v)),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, meta, entries, mapped=(49847,), media_type="series"):
+        async def cinemeta_meta(client, imdb_id, mt, **kw):
+            return meta
+
+        async def search(client, query):
+            self.searches.append(query)
+            return entries
+
+        with mock.patch("cinemeta.fetch_cinemeta_meta", cinemeta_meta), \
+             mock.patch("anime_search.kitsu_search", search), \
+             mock.patch.object(ar.anime_ids, "lookup",
+                               lambda ns, aid, mt: anime_ids.MappedIds("45790", "tt2359704") if aid in mapped else None):
+            return asyncio.run(ar.anime_for_imdb(None, "tt38268282", media_type))
+
+    def test_name_year_and_kind_match_a_mapped_entry(self):
+        sbr = self._kitsu(49847, "Steel Ball Run: JoJo's Bizarre Adventure")
+        self.assertEqual(self._run(self.SBR, [sbr]), 49847)
+        # Cached: Kitsu isn't asked again.
+        self.assertEqual(self._run(self.SBR, [sbr]), 49847)
+        self.assertEqual(len(self.searches), 1)
+
+    def test_no_match(self):
+        cases = {
+            "another name": [self._kitsu(1, "JoJo's Bizarre Adventure")],
+            "another year": [self._kitsu(1, "Steel Ball Run: JoJo's Bizarre Adventure", start="2025-01-01")],
+            "a film": [self._kitsu(1, "Steel Ball Run: JoJo's Bizarre Adventure", subtype="movie")],
+            "two entries": [self._kitsu(1, "Steel Ball Run: JoJo's Bizarre Adventure"),
+                            self._kitsu(2, "Steel Ball Run: JoJo's Bizarre Adventure", subtype="TV")],
+        }
+        for label, entries in cases.items():
+            with self.subTest(label):
+                self.cache.clear()
+                self.assertIsNone(self._run(self.SBR, entries, mapped=(1, 2)))
+
+    def test_unmapped_entry_is_not_used(self):
+        self.assertIsNone(self._run(self.SBR, [self._kitsu(5, "Steel Ball Run: JoJo's Bizarre Adventure")]))
+
+    def test_only_japanese_animation_is_searched(self):
+        for meta in ({**self.SBR, "country": "United States"}, {**self.SBR, "genres": ["Action"]}):
+            self.cache.clear()
+            self.assertIsNone(self._run(meta, [self._kitsu(49847, meta["name"])]))
+        self.assertEqual(self.searches, [])
+
+    def test_an_empty_search_is_not_held_against_the_title(self):
+        self.assertIsNone(self._run(self.SBR, []))
+        self.assertEqual(self.cache, {})
+
+
+    def test_requests_arriving_together_share_one_lookup(self):
+        sbr = self._kitsu(49847, "Steel Ball Run: JoJo's Bizarre Adventure")
+
+        async def cinemeta_meta(client, imdb_id, mt, **kw):
+            await asyncio.sleep(0.01)
+            return self.SBR
+
+        async def search(client, query):
+            self.searches.append(query)
+            return [sbr]
+
+        async def both():
+            return await asyncio.gather(*(ar.anime_for_imdb(None, "tt38268282", "series") for _ in range(3)))
+
+        with mock.patch("cinemeta.fetch_cinemeta_meta", cinemeta_meta), \
+             mock.patch("anime_search.kitsu_search", search), \
+             mock.patch.object(ar.anime_ids, "lookup", lambda ns, aid, mt: anime_ids.MappedIds("45790", None)):
+            self.assertEqual(asyncio.run(both()), [49847] * 3)
+        self.assertEqual(len(self.searches), 1)
+
+
+class ImdbIdAsAnimeTests(unittest.TestCase):
+    """/poster's gate in front of anime_for_imdb (main._imdb_id_as_anime)."""
+
+    def setUp(self):
+        import main
+        self.main = main
+        self.asked = []
+
+        async def anime_for_imdb(client, imdb_id, mt):
+            self.asked.append(imdb_id)
+            return 49847
+        for p in (
+            mock.patch.object(main, "_HTTP_CLIENT", object()),
+            mock.patch.object(main, "_resolve_tmdb_key", lambda k: "key"),
+            mock.patch.object(main._cfg, "ANIME_SOURCES_ENABLED", True),
+            mock.patch.object(main._cfg, "CINEMETA_ENABLED", True),
+            mock.patch.object(main.anime_ids, "is_ready", lambda: True),
+            mock.patch.object(main.anime_resolve, "anime_for_imdb", anime_for_imdb),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, resolved, imdb_id="tt38268282"):
+        async def resolve(client, imdb_id, mt, key):
+            if isinstance(resolved, Exception):
+                raise resolved
+            return resolved
+        with mock.patch.object(self.main, "resolve_imdb_to_tmdb", resolve):
+            return asyncio.run(self.main._imdb_id_as_anime(imdb_id, "series", None))
+
+    def test_only_an_id_tmdb_has_no_record_of_is_matched(self):
+        self.assertEqual(self._run(None), 49847)
+        self.assertIsNone(self._run({"tmdb_id": "45790", "media_type": "tv"}))
+        self.assertIsNone(self._run(self.main.IdResolveError("timeout")))
+        self.assertIsNone(self._run(None, imdb_id=""))
+        self.assertEqual(self.asked, ["tt38268282"])
+
+    def test_off_without_a_key(self):
+        with mock.patch.object(self.main, "_resolve_tmdb_key", lambda k: None):
+            self.assertIsNone(self._run(None))
+        self.assertEqual(self.asked, [])
+
+
+class CinemetaCountryRefetchTests(unittest.TestCase):
+    def test_a_row_from_before_country_is_refetched_only_when_wanted(self):
+        import cinemeta
+        cache = {cinemeta._cache_key("tt1", "series"): {"id": "tt1", "name": "Old"}}
+        fetched = []
+
+        async def fetch(client, imdb_id, mt):
+            fetched.append(imdb_id)
+            return {"id": imdb_id, "name": "New", "country": "Japan"}
+        with mock.patch.object(cinemeta, "get_cached_tvdb_json", cache.get), \
+             mock.patch.object(cinemeta, "set_cached_tvdb_json", lambda k, v, ttl: cache.__setitem__(k, v)), \
+             mock.patch.object(cinemeta, "_fetch_meta", fetch):
+            self.assertEqual(asyncio.run(cinemeta.fetch_cinemeta_meta(None, "tt1", "series"))["name"], "Old")
+            self.assertEqual(asyncio.run(cinemeta.fetch_cinemeta_meta(None, "tt1", "series",
+                                                                      want_country=True))["country"], "Japan")
+            asyncio.run(cinemeta.fetch_cinemeta_meta(None, "tt1", "series", want_country=True))
+        self.assertEqual(fetched, ["tt1"])
+
+
+if __name__ == "__main__":
+    unittest.main()

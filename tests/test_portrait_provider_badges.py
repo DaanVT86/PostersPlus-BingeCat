@@ -70,32 +70,31 @@ def test_defaults_and_inactive_options_restore_old_config_hash():
     ("tmdb", 87, "87%"), ("trakt", 0, "0%"), ("tomatoes", 87, "87%"), ("popcorn", 87, "87%"),
 ])
 def test_native_normalized_formatting_is_based_only_on_normalized_score(provider, value, text):
-    assert rating_badges.score_text(provider, value) == text
-    assert rating_badges.score_text(provider, value, "normalized") == str(value)
+    import v2_render
+
+    native = value * v2_render._BADGE_NATIVE_SCALES.get(provider, 100.0) / 100.0
+    assert rating_badges.score_text(provider, native, "native", False) == text
+    assert rating_badges.score_text(provider, native, "normalized", False) == str(value)
 
 
-def test_packaged_assets_are_complete_and_pinned():
-    root = Path(main.__file__).parent / "static/rating_badges"
-    manifest = json.loads((root / "manifest.json").read_text())
-    for provider in rating_badges.BADGE_PROVIDERS:
-        payload = (root / f"{provider}.png").read_bytes()
-        assert hashlib.sha256(payload).hexdigest() == manifest["assets"][f"{provider}.png"]
-        with Image.open(io.BytesIO(payload)) as image:
-            assert image.mode == "RGBA" and image.size == (128, 128)
-    assert "http" not in Path(rating_badges.__file__).read_text()
+def test_every_contract_provider_draws_from_a_packaged_mark():
+    from render_spec import BADGE_PROVIDERS
+
+    assert set(BADGE_PROVIDERS) <= set(rating_badges.PROVIDERS)
+    for style in ("color", "mono"):
+        assert rating_badges.assets_ready(BADGE_PROVIDERS, style)
+        for key in rating_badges._keys_for(BADGE_PROVIDERS, style):
+            assert rating_badges._asset_path(key).startswith(rating_badges._PACKAGED_MARKS)
 
 
 @pytest.mark.parametrize("mode,append", [(2, 0), (3, 1), (3, 2), (4, 0)])
 def test_badge_rows_render_with_zero_score_and_scale_all_three_together(mode, append):
     cfg = _request_config(main, canonicalize_config({"rating_display_mode": mode, "minimalist_append_mode": append, "rating_badges": "imdb,tmdb,letterboxd", "sash_mode": "hidden"}), "en")
-    scores = {"imdb": 0.0, "tmdb": 80.0, "letterboxd": 100.0}
-    font = ImageFont.truetype(str(Path(main.__file__).parent / "fonts/Inter-Bold.ttf"), 50)
+    scores = {"imdb": 0.0, "tmdb": 80.0, "letterboxd": 5.0}
     badges = rating_badges.entries(scores, cfg.rating_badges)
     assert [name for name, value in badges] == ["imdb", "tmdb", "letterboxd"]
-    row = rating_badges.label_image(font, cfg, "Long genre label", "2026", None, badges, (230, 230, 230, 255), 140)
-    assert row.width <= 140 and row.getbbox() is not None
     image = Image.new("RGBA", (500, 750), (30, 50, 90, 255))
-    rendered = main.build_poster(image.copy(), "N/A", "Drama", cfg, release_year="2026", rating_badge_scores=scores)
+    rendered = main.build_poster(image.copy(), "N/A", "Drama", cfg, release_year="2026", ratings=scores)
     without = main.build_poster(image.copy(), "N/A", "Drama", cfg, release_year="2026")
     assert rendered.tobytes() != without.tobytes()
 
@@ -142,4 +141,4 @@ def test_weighted_fallback_does_not_reintroduce_ineligible_badge_at_composition(
     assert selected == (rating,)  # The existing weighted fallback still needs this input.
     v2_render._compose(bundle, spec, None, base_reference=None, logo_reference=None,
                        used_ratings=selected, used_fact_fields=frozenset())
-    assert captured["rating_badge_scores"] == {}
+    assert captured["ratings"] == {}
