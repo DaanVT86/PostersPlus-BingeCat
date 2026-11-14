@@ -61,7 +61,7 @@ APPROVED_SOURCE_RECIPE_REVISION = "91cac721c050ee45072277ad4afe3e3880243c478fa73
 # 980745e7…).  ``ast.dump`` differs per Python minor, hence the map; the R2
 # image runs 3.14, pinned once it is built.
 PORTRAIT_CODE_IDENTITY = {
-    (3, 12): "6feabb3fd65d8ab844f739f7fbcc6195ef730b4d8a675852e3c8a344b22db3fd",
+    (3, 12): "30bf458224d46d9332d3fff5328e9bc98d3d08d9976f20d15a7ddacbbbc86792",
 }
 IN_APPROVED_RUNTIME = render.RENDERER_BUILD_FINGERPRINT == APPROVED_FINGERPRINT
 
@@ -88,6 +88,7 @@ def test_portrait_renderer_revision_is_byte_identical(monkeypatch):
     if expected is None:
         pytest.skip("no pinned portrait code identity for this Python version")
     monkeypatch.setattr(render, "_image_library_versions", lambda: {"pinned": "environment-independent"})
+    monkeypatch.setattr(render, "_optional_render_backends", lambda: {"pinned": "environment-independent"})
     assert render._compute_renderer_build_fingerprint() == expected
 
 

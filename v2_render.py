@@ -168,6 +168,8 @@ RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("fonts.py", ("*",)),
     ("pxscale.py", ("*",)),
     ("certifications.py", ("*",)),
+    # The fog keeps detected faces out of its colour vote (main._fog_faces).
+    ("face_detect.py", ("*",)),
     ("config.py", _COMPOSITOR_CONFIG_INPUTS),
     # Not JSON values, so hashed as definitions (rating badges normalise with them).
     ("config.py", ("SCORE_NORMALISERS", "LANDSCAPE_WIDTH", "LANDSCAPE_HEIGHT")),
@@ -203,6 +205,8 @@ def _renderer_assets() -> tuple[str, ...]:
     paths.extend(
         f"languages/{locale}.json" for locale in ("en", "pt", "nl", "de", "es")
     )
+    # The fog's face detector (main._fog_faces).
+    paths.append("models/face_detection_yunet.onnx")
     return tuple(sorted(set(paths)))
 
 
@@ -1494,10 +1498,48 @@ def _compute_semantic_revision(
     return digest.hexdigest()
 
 
+def _optional_render_backends() -> dict[str, Any]:
+    """Optional libraries whose presence changes pixels: skia draws the diagonal
+    sash (else a PIL fallback), cairosvg rasterises the SVG badge marks, and
+    OpenCV YuNet keeps faces out of the fog's colour vote (else no faces)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    import awards
+    import face_detect
+
+    def _dist(name: str) -> str:
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return "unavailable"
+
+    try:
+        import cairosvg  # noqa: F401
+
+        cairosvg_ok = True
+    except Exception:
+        cairosvg_ok = False
+    try:
+        model_sha256 = hashlib.sha256(Path(face_detect._MODEL_PATH).read_bytes()).hexdigest()
+    except OSError:
+        model_sha256 = "unavailable"
+    return {
+        "skia": {"available": bool(awards._HAS_SKIA), "version": _dist("skia-python")},
+        "cairosvg": {"available": cairosvg_ok, "version": _dist("CairoSVG")},
+        "face_detector": {
+            "available": face_detect.available(),
+            "model_sha256": model_sha256,
+            "opencv": face_detect._cv2.__version__ if face_detect._HAS_CV2 else "unavailable",
+            "signature": face_detect.DETECTOR_SIGNATURE,
+        },
+    }
+
+
 def _renderer_environment() -> dict[str, Any]:
     import config
 
     return {
+        "backends": _optional_render_backends(),
         "canvas": _CANVAS_SIZE,
         "config_inputs": {name: getattr(config, name) for name in _COMPOSITOR_CONFIG_INPUTS},
         "genre_map": config.GENRE_MAP,
@@ -1904,6 +1946,7 @@ LANDSCAPE_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("fonts.py", ("*",)),
     ("pxscale.py", ("*",)),
     ("certifications.py", ("*",)),
+    ("face_detect.py", ("*",)),
     ("tmdb.py", ("ensure_light_logo", "poster_canvas")),
     ("config.py", _COMPOSITOR_CONFIG_INPUTS),
     # Not JSON values, so hashed as definitions (rating badges normalise with them).

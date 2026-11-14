@@ -79,10 +79,15 @@ def _trace(fn) -> set[tuple[str, str]]:
     def offline(*_args, **_kwargs):
         raise AssertionError("a v2 render opened a network connection")
 
+    import main
+
     sys.setprofile(profile)
     try:
+        # The face-box memo would skip the detector on a warm cache.
         with patch.object(socket.socket, "connect", offline), \
-                patch.object(socket, "getaddrinfo", offline):
+                patch.object(socket, "getaddrinfo", offline), \
+                patch.object(main, "get_cached_face_boxes", lambda _key: None), \
+                patch.object(main, "set_cached_face_boxes", lambda _key, _boxes: None):
             fn()
     finally:
         sys.setprofile(None)
@@ -160,43 +165,57 @@ _PORTRAIT_SPECS = _portrait_specs()
 _LANDSCAPE_SPECS = [get_preset(meta.ref).config for meta in list_public_presets()]
 
 
-def _portrait_renders():
-    engine = render._composition_engine()
+def _portrait_cases(engine):
     for spec in _PORTRAIT_SPECS:
+        fog = render._request_config(engine, spec, "en")
+        # A cinema title is greyscaled, which turns the fog off, so fog configs
+        # also render a streaming title (the face-detector path).
+        statuses = ("Cinema", "Streaming") if (
+            fog.vignette_poster_color_top or fog.vignette_poster_color_bottom) else ("Cinema",)
         for locale in ("en", "nl", "de"):
             for logo, base in ((True, True), (False, True), (False, False)):
-                cfg = render._request_config(engine, spec, locale)
-                image = (_art((500, 750), (31, 83, 147)) if base
-                         else render._fallback_canvas(engine, "Drama", spec.fallback_bg_style))
-                labels = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
-                try:
-                    engine.build_poster(
-                        image, 83, "Drama", cfg,
-                        logo=_logo() if logo else None,
-                        fallback_title=None if logo else "The Matrix Reloaded",
-                        discovery_meta=_meta(engine),
-                        quality_tokens=[], release_year="1999", age_rating=12,
-                        no_poster=not base, metacritic_score=74, ratings=dict(_RATINGS),
-                        sash_date_label=f"Cinema · {date(2026, 12, 18).isoformat()}",
-                    )
-                finally:
-                    engine.i18n.BUNDLED_LABELS_ONLY.reset(labels)
+                for status in statuses:
+                    yield spec, locale, logo, base, status
+
+
+def _portrait_renders():
+    engine = render._composition_engine()
+    for spec, locale, logo, base, status in _portrait_cases(engine):
+        cfg = render._request_config(engine, spec, locale)
+        image = (_art((500, 750), (31, 83, 147)) if base
+                 else render._fallback_canvas(engine, "Drama", spec.fallback_bg_style))
+        labels = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
+        try:
+            engine.build_poster(
+                image, 83, "Drama", cfg,
+                logo=_logo() if logo else None,
+                fallback_title=None if logo else "The Matrix Reloaded",
+                discovery_meta=_meta(engine, release_status=status),
+                quality_tokens=[], release_year="1999", age_rating=12,
+                no_poster=not base, metacritic_score=74, ratings=dict(_RATINGS),
+                sash_date_label=f"Cinema · {date(2026, 12, 18).isoformat()}",
+            )
+        finally:
+            engine.i18n.BUNDLED_LABELS_ONLY.reset(labels)
 
 
 def _landscape_renders():
     engine = render._composition_engine()
     for spec in _LANDSCAPE_SPECS:
         for badge in ("top_left", "top_right", "logo"):
-            for logo in (True, False):
+            for logo, fog in ((True, False), (False, False), (True, True)):
                 cfg = render._request_config(engine, spec, "en")
                 cfg.landscape_badge_pos = badge
+                if fog:
+                    cfg.vignette_poster_color_top = cfg.vignette_poster_color_bottom = True
                 labels = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
                 try:
                     render.build_landscape(
                         _art((1000, 563), (120, 60, 30)), 83, "Drama", cfg,
                         logo=_logo() if logo else None,
                         fallback_title=None if logo else "The Matrix",
-                        discovery_meta=_meta(engine), release_year="1999",
+                        discovery_meta=_meta(engine, release_status="Streaming"),
+                        release_year="1999",
                     )
                 finally:
                     engine.i18n.BUNDLED_LABELS_ONLY.reset(labels)
@@ -224,6 +243,7 @@ render._composition_engine()
 def test_portrait_renders_execute_only_revision_covered_code():
     called = _trace(_portrait_renders)
     assert ("main.py", "_build_poster") in called
+    assert ("face_detect.py", "detect_face_boxes") in called   # the fog ran
     missing = _uncovered(called, _closure(render.RENDERER_REVISION_CODE_ROOTS))
     assert missing == [], "\n".join(f"{m}::{n}" for m, n in missing)
 
@@ -231,5 +251,23 @@ def test_portrait_renders_execute_only_revision_covered_code():
 def test_landscape_renders_execute_only_revision_covered_code():
     called = _trace(_landscape_renders)
     assert ("landscape.py", "_build_landscape") in called
+    assert ("face_detect.py", "detect_face_boxes") in called   # the fog ran
     missing = _uncovered(called, _closure(render.LANDSCAPE_REVISION_CODE_ROOTS))
     assert missing == [], "\n".join(f"{m}::{n}" for m, n in missing)
+
+
+def test_optional_backends_that_change_pixels_change_the_revision():
+    # skia on/off draws a different sash; no face detector means a different fog.
+    import awards
+    import face_detect
+
+    base = render._compute_renderer_revision()
+    landscape = render._compute_landscape_renderer_revision()
+    with patch.object(awards, "_HAS_SKIA", not awards._HAS_SKIA):
+        assert render._compute_renderer_revision() != base
+        assert render._compute_landscape_renderer_revision() != landscape
+    detector = face_detect.available()
+    with patch.object(face_detect, "available", lambda: not detector):
+        assert render._compute_renderer_revision() != base
+    assert "models/face_detection_yunet.onnx" in render.RENDERER_REVISION_ASSET_MANIFEST
+    assert set(render._renderer_environment()["backends"]) == {"skia", "cairosvg", "face_detector"}
