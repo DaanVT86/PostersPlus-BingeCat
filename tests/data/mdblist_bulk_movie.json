@@ -1,0 +1,204 @@
+[
+ {
+  "title": "The Godfather",
+  "type": "movie",
+  "year": 1972,
+  "ids": {
+   "imdb": "tt0068646",
+   "trakt": 196,
+   "tmdb": 238,
+   "tvdb": 275,
+   "mal": null,
+   "mdblist": "a2d7"
+  },
+  "released": "1972-03-14",
+  "age_rating": 16,
+  "genres": [
+   {
+    "id": 4,
+    "title": "Crime"
+   },
+   {
+    "id": 6,
+    "title": "Drama"
+   }
+  ],
+  "ratings": [
+   {
+    "source": "imdb",
+    "value": 9.2,
+    "score": 92,
+    "votes": 2265173,
+    "url": 90
+   },
+   {
+    "source": "metacritic",
+    "value": 100,
+    "score": 100,
+    "votes": 16,
+    "url": "/the-godfather"
+   },
+   {
+    "source": "metacriticuser",
+    "value": 9.2,
+    "score": 92.0,
+    "votes": 4581,
+    "url": null
+   },
+   {
+    "source": "trakt",
+    "value": 88,
+    "score": 88,
+    "votes": 34646,
+    "url": null
+   },
+   {
+    "source": "tomatoes",
+    "value": 97,
+    "score": 97,
+    "votes": 155,
+    "url": "/m/the_godfather",
+    "fresh": 1
+   },
+   {
+    "source": "popcorn",
+    "value": 98,
+    "score": 98,
+    "votes": 41113,
+    "url": "/m/the_godfather"
+   },
+   {
+    "source": "tmdb",
+    "value": 86,
+    "score": 86,
+    "votes": 23762,
+    "url": null
+   },
+   {
+    "source": "letterboxd",
+    "value": 9.0,
+    "score": 90,
+    "votes": 2970096,
+    "url": "/film/the-godfather/"
+   },
+   {
+    "source": "rogerebert",
+    "value": 4.0,
+    "score": null,
+    "votes": null,
+    "url": "the-godfather-1972"
+   },
+   {
+    "source": "myanimelist",
+    "value": null,
+    "score": null,
+    "votes": null,
+    "url": null
+   }
+  ],
+  "status": "Released",
+  "updated": "2026-10-05T08:05:16.000Z",
+  "awards": "Won: Best Picture (Oscars, 1973). Plus 1 more Oscar, 4 Oscar nominations, 4 wins & 2 nominations."
+ },
+ {
+  "title": "The Shawshank Redemption",
+  "type": "movie",
+  "year": 1994,
+  "ids": {
+   "imdb": "tt0111161",
+   "trakt": 234,
+   "tmdb": 278,
+   "tvdb": 190,
+   "mal": null,
+   "mdblist": "a0"
+  },
+  "released": "1994-09-23",
+  "age_rating": 15,
+  "genres": [
+   {
+    "id": 4,
+    "title": "Crime"
+   },
+   {
+    "id": 6,
+    "title": "Drama"
+   }
+  ],
+  "ratings": [
+   {
+    "source": "imdb",
+    "value": 9.3,
+    "score": 93,
+    "votes": 3253096,
+    "url": 43
+   },
+   {
+    "source": "metacritic",
+    "value": 82,
+    "score": 82,
+    "votes": 22,
+    "url": "/the-shawshank-redemption"
+   },
+   {
+    "source": "metacriticuser",
+    "value": 9.2,
+    "score": 92.0,
+    "votes": 2246,
+    "url": null
+   },
+   {
+    "source": "trakt",
+    "value": 91,
+    "score": 91,
+    "votes": 48287,
+    "url": null
+   },
+   {
+    "source": "tomatoes",
+    "value": 89,
+    "score": 89,
+    "votes": 147,
+    "url": "/m/shawshank_redemption",
+    "fresh": 1
+   },
+   {
+    "source": "popcorn",
+    "value": 98,
+    "score": 98,
+    "votes": 53483,
+    "url": "/m/shawshank_redemption"
+   },
+   {
+    "source": "tmdb",
+    "value": 87,
+    "score": 87,
+    "votes": 31601,
+    "url": null
+   },
+   {
+    "source": "letterboxd",
+    "value": 9.2,
+    "score": 92,
+    "votes": 3179221,
+    "url": "/film/the-shawshank-redemption/"
+   },
+   {
+    "source": "rogerebert",
+    "value": 3.5,
+    "score": null,
+    "votes": null,
+    "url": "the-shawshank-redemption-1994"
+   },
+   {
+    "source": "myanimelist",
+    "value": null,
+    "score": null,
+    "votes": null,
+    "url": null
+   }
+  ],
+  "status": "Released",
+  "updated": "2026-10-15T06:21:39.000Z",
+  "awards": "Nominated: Best Picture (Oscars, 1995). Plus 5 more Oscar nominations & 1 nomination."
+ }
+]

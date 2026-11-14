@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
+import re
 from typing import Any, Mapping
 
 from i18n import normalize_locale
@@ -26,6 +27,7 @@ _SASH_SLOTS = frozenset(
         "new_release", "metacritic", "true_story", "short_film",
         "mini_series", "binge_ready", "trending_broad", "cinema",
         "streaming", "physical", "production", "ended", "cancelled", "airing",
+        "blockbuster",
     }
 )
 _SASH_EXPANSIONS = {
@@ -58,11 +60,117 @@ PORTRAIT_DEFAULTS = {
     "meta_order": "", "minimalist_separator": "pip",
     "minimalist_rating_separator": "star", "rating_badges": "",
     "rating_badge_scale": "native", "rating_badge_style": "color",
+    # r2 visual options, named and ranged as upstream PostersPlus parses them.
+    # Fog: a vignette tinted from the poster's own colour.
+    "vignette_poster_color_top": False, "vignette_poster_color_bottom": False,
+    "vignette_color_style": "shade", "vignette_color_saturation": 2.5,
+    "vignette_color_lightness": 1.3, "vignette_color_blur": 1.0,
+    "vignette_color_ramp": True, "vignette_color_local": True,
+    # Rating Bar glow colour: "" is white, "match" the bar's own colour.
+    "score_glow_color": "",
+    # Notch: side-chip nudges and the edge notch's centre line.
+    "sash_chip_x": 0.0, "sash_chip_y": 0.0, "sash_edge_y": 0.5,
+    # Graphic badges (badge_display_mode 7).  Group 1 defaults to the age
+    # certificate beside the chip; upstream's default also names the stream
+    # slots, which BingeCat has no data for.
+    "badge_group1": "chip:4:cert", "badge_group2": "", "badge_group3": "", "badge_group4": "",
+    "badge_cert_style": "solid", "badge_logo_style": "solid", "badge_cinema_style": "auto",
+    "badge_logo_scale": 1.0, "badge_overflow": "move",
+    "label_font": "inter",
 }
+# Optional floats must be written as JSON floats in the canonical form.
+PORTRAIT_FLOAT_FIELDS = frozenset(name for name, value in PORTRAIT_DEFAULTS.items() if isinstance(value, float))
+GRAPHIC_BADGE_MODE = 7
+# The graphic-badge slots BingeCat can fill from its own facts.  Upstream also has
+# video, audio, res and legacy; those need a stream-quality source and stay off.
+GRAPHIC_BADGE_SLOTS = ("cert", "network", "studio", "cinema")
+GRAPHIC_BADGE_ANCHORS = ("chip", "tl", "tr", "bl", "br", "above_logo", "below_logo")
+GRAPHIC_BADGE_GROUPS = ("badge_group1", "badge_group2", "badge_group3", "badge_group4")
+GRAPHIC_GROUP_MAX_ITEMS = 4
+GRAPHIC_GROUP_SIZE, GRAPHIC_GROUP_SIZE_RANGE = 22, (10, 60)
+GRAPHIC_GROUP_SPACING, GRAPHIC_GROUP_SPACING_RANGE = 0.028, (0.0, 0.08)
+SASH_BADGE_POSITIONS = ("center", "left", "right", "auto", "auto_hug", "edge_left", "edge_right")
+# Upstream fonts.LABEL_FONTS; operator-uploaded "custom-" fonts are not offered.
+LABEL_FONTS = (
+    "inter", "almarai", "rubik", "jakarta", "manrope", "montserrat", "robotocondensed",
+    "barlowcondensed", "oswald", "spacegrotesk", "exo2", "fira", "opensans",
+)
+_GLOW_COLOR = re.compile(r"^#[0-9a-f]{6}$")
 BADGE_PROVIDERS = (
     "imdb", "tmdb", "letterboxd", "trakt", "tomatoes", "popcorn",
     "metacritic", "metacriticuser", "rogerebert",
 )
+
+
+def parse_badge_group(raw: object) -> dict[str, Any] | None:
+    """Mirror of upstream ``graphic_badges.parse_group`` over BingeCat's slots.
+
+    ``None`` for off or unreadable.  Upstream clamps and skips what it does not
+    know; ``is_canonical_badge_group`` turns that into a rejection."""
+    if not isinstance(raw, str):
+        return None
+    parts = raw.strip().lower().split(":")
+    if not 3 <= len(parts) <= 5:
+        return None
+    size, spacing = GRAPHIC_GROUP_SIZE, GRAPHIC_GROUP_SPACING
+    try:
+        if len(parts) >= 4:
+            size = int(max(GRAPHIC_GROUP_SIZE_RANGE[0], min(GRAPHIC_GROUP_SIZE_RANGE[1], round(float(parts[3])))))
+        if len(parts) == 5:
+            spacing = float(parts[4])
+            if math.isnan(spacing):
+                return None
+            spacing = round(max(GRAPHIC_GROUP_SPACING_RANGE[0], min(GRAPHIC_GROUP_SPACING_RANGE[1], spacing)), 3)
+        max_items = max(1, min(GRAPHIC_GROUP_MAX_ITEMS, int(parts[1])))
+    except (ValueError, OverflowError):
+        return None
+    xy = None
+    align = "l"
+    if "," in parts[0]:
+        point = parts[0].split(",")
+        if len(point) not in (2, 3):
+            return None
+        try:
+            x, y = float(point[0]), float(point[1])
+        except ValueError:
+            return None
+        if not all(0.0 <= v <= 1.0 for v in (x, y)):
+            return None
+        if len(point) == 3:
+            if point[2] not in ("l", "c", "r"):
+                return None
+            align = point[2]
+        else:
+            align = "l" if x < 0.5 else ("r" if x > 0.5 else "c")
+        xy = (round(x, 3), round(y, 3))
+    elif parts[0] not in GRAPHIC_BADGE_ANCHORS:
+        return None
+    slots: list[str] = []
+    for slot in parts[2].split(","):
+        slot = slot.strip()
+        if slot in GRAPHIC_BADGE_SLOTS and slot not in slots:
+            slots.append(slot)
+    if not slots:
+        return None
+    return {"anchor": parts[0] if xy is None else "custom", "xy": xy, "align": align,
+            "max": max_items, "slots": tuple(slots), "size": size, "spacing": spacing}
+
+
+def format_badge_group(group: Mapping[str, Any]) -> str:
+    """Mirror of upstream ``graphic_badges.format_group``: the canonical spelling."""
+    anchor = f"{group['xy'][0]:g},{group['xy'][1]:g},{group['align']}" if group["xy"] else group["anchor"]
+    spec = f"{anchor}:{group['max']}:{','.join(group['slots'])}"
+    if group["spacing"] != GRAPHIC_GROUP_SPACING:
+        return f"{spec}:{group['size']}:{group['spacing']:g}"
+    return spec if group["size"] == GRAPHIC_GROUP_SIZE else f"{spec}:{group['size']}"
+
+
+def is_canonical_badge_group(raw: object) -> bool:
+    """Empty (off) or exactly the spelling upstream writes for a group of our slots."""
+    if raw == "":
+        return True
+    group = parse_badge_group(raw)
+    return group is not None and format_badge_group(group) == raw
 
 
 def badge_layout(config: Mapping[str, Any]) -> bool:
@@ -79,18 +187,61 @@ def weighted_rating_needed(config: Mapping[str, Any], has_badges: bool) -> bool:
     )
 
 
+def _validated_r2_options(config: Mapping[str, Any]) -> dict[str, Any]:
+    """The r2 options with defaults filled in and floats normalised; raises on a bad value.
+
+    Ranges are the ones upstream's request parser clamps to, but here an
+    out-of-range value is an error: signed configs are never silently repaired."""
+    out: dict[str, Any] = {}
+    for name in ("vignette_poster_color_top", "vignette_poster_color_bottom", "vignette_color_ramp", "vignette_color_local"):
+        value = config.get(name, PORTRAIT_DEFAULTS[name])
+        if not isinstance(value, bool):
+            raise ValueError(f"invalid {name}")
+        out[name] = value
+    for name, low, high in (
+        ("vignette_color_saturation", 0.0, 3.0), ("vignette_color_lightness", 0.4, 2.5),
+        ("vignette_color_blur", 0.0, 1.0), ("sash_chip_x", -0.045, 0.25),
+        ("sash_chip_y", -0.02, 0.15), ("sash_edge_y", 0.05, 0.95), ("badge_logo_scale", 0.5, 2.0),
+    ):
+        value = config.get(name, PORTRAIT_DEFAULTS[name])
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
+            raise ValueError(f"invalid {name}")
+        out[name] = float(value)
+    glow = config.get("score_glow_color", "")
+    if not isinstance(glow, str) or (glow not in {"", "match"} and not _GLOW_COLOR.fullmatch(glow)):
+        raise ValueError("invalid score_glow_color")
+    out["score_glow_color"] = glow
+    out["vignette_color_style"] = config.get("vignette_color_style", PORTRAIT_DEFAULTS["vignette_color_style"])
+    taken: set[str] = set()
+    for name in GRAPHIC_BADGE_GROUPS:
+        raw = config.get(name, PORTRAIT_DEFAULTS[name])
+        if not is_canonical_badge_group(raw):
+            raise ValueError(f"invalid {name}")
+        slots = set((parse_badge_group(raw) or {"slots": ()})["slots"])
+        if taken & slots:
+            raise ValueError("a graphic badge slot belongs to one group")
+        taken |= slots
+        out[name] = raw
+    return out
+
+
 def portrait_options(config: Mapping[str, Any]) -> dict[str, Any]:
     """Validate extensions and emit only active non-default visual choices."""
     result = {}
     choices = {
-        "sash_badge_pos": {"center", "left", "right"}, "sash_side": {"right", "left"},
+        "sash_badge_pos": set(SASH_BADGE_POSITIONS), "sash_side": {"right", "left"},
         "minimalist_separator": {"pip", "bullet"},
         "minimalist_rating_separator": {"star", "pip", "bullet", "bullet_star"},
         "rating_badge_scale": {"native", "normalized"}, "rating_badge_style": {"color", "mono"},
+        "vignette_color_style": {"shade", "muted", "reference"},
+        "badge_cert_style": {"solid", "frosted"}, "badge_logo_style": {"solid", "frosted"},
+        "badge_cinema_style": {"auto", "frosted"}, "badge_overflow": {"move", "hide"},
+        "label_font": set(LABEL_FONTS),
     }
     for name, allowed in choices.items():
-        if name in config and config[name] not in allowed:
+        if name in config and (not isinstance(config[name], str) or config[name] not in allowed):
             raise ValueError(f"invalid {name}")
+    extra = _validated_r2_options(config)
     pad = config.get("sash_badge_pad", 1.0)
     if isinstance(pad, bool) or not isinstance(pad, (int, float)) or not 0.5 <= pad <= 1.5:
         raise ValueError("invalid sash_badge_pad")
@@ -136,9 +287,19 @@ def portrait_options(config: Mapping[str, Any]) -> dict[str, Any]:
         result["meta_order"] = order
     boundaries = list(zip(visible_order, visible_order[1:]))
     sash = config.get("show_award_sash", True) and config.get("sash_mode", "sash") != "hidden"
+    notch = sash and config.get("sash_mode", "sash") == "notch"
+    graphic = config.get("badge_display_mode", 0) == GRAPHIC_BADGE_MODE
+    position = config.get("sash_badge_pos", "center")
+    # "auto" places the notch beside the graphic badges; without them it is centred.
+    auto = position in {"auto", "auto_hug"}
+    side_chip = notch and (position in {"left", "right"} or (auto and graphic))
+    top_tint = extra["vignette_poster_color_top"] and config.get("top_gradient", "high") != "off"
+    bottom_tint = extra["vignette_poster_color_bottom"] and config.get("bottom_gradient", "high") != "off"
+    fog = top_tint or bottom_tint
+    group_slots = {slot for name in GRAPHIC_BADGE_GROUPS for slot in (parse_badge_group(extra[name]) or {"slots": ()})["slots"]}
     active = {
-        "sash_badge_pos": sash and config.get("sash_mode", "sash") == "notch",
-        "sash_badge_pad": sash and config.get("sash_mode", "sash") == "notch",
+        "sash_badge_pos": notch and (graphic or not auto),
+        "sash_badge_pad": notch,
         "sash_side": sash and config.get("sash_mode", "sash") == "sash",
         "rating_badges": badge_layout(config),
         "rating_badge_scale": badge_layout(config) and bool(names),
@@ -147,8 +308,24 @@ def portrait_options(config: Mapping[str, Any]) -> dict[str, Any]:
             and any("rating" not in pair for pair in boundaries),
         "minimalist_rating_separator": mode == 3 and config.get("minimalist_append_mode", 0) in {1, 2}
             and any("rating" in pair for pair in boundaries),
+        "sash_chip_x": side_chip, "sash_chip_y": side_chip,
+        "sash_edge_y": notch and position in {"edge_left", "edge_right"},
+        "vignette_poster_color_top": config.get("top_gradient", "high") != "off",
+        "vignette_poster_color_bottom": config.get("bottom_gradient", "high") != "off",
+        "vignette_color_style": fog, "vignette_color_blur": fog, "vignette_color_ramp": fog,
+        "vignette_color_local": fog,
+        "vignette_color_saturation": fog and extra["vignette_color_style"] == "shade",
+        "vignette_color_lightness": fog and extra["vignette_color_style"] == "shade",
+        "score_glow_color": mode == 1,
+        **{name: graphic for name in GRAPHIC_BADGE_GROUPS},
+        "badge_overflow": graphic and bool(group_slots),
+        "badge_cert_style": graphic and "cert" in group_slots,
+        "badge_logo_style": graphic and bool(group_slots & {"network", "studio"}),
+        "badge_logo_scale": graphic and bool(group_slots & {"network", "studio"}),
+        "badge_cinema_style": graphic and "cinema" in group_slots,
+        "label_font": True,
     }
-    values = dict(config, sash_badge_pad=float(pad), rating_badges=providers)
+    values = dict(config, sash_badge_pad=float(pad), rating_badges=providers, **extra)
     for name, enabled in active.items():
         value = values.get(name, PORTRAIT_DEFAULTS[name])
         if enabled and value != PORTRAIT_DEFAULTS[name]:
@@ -250,6 +427,30 @@ class CanonicalRenderSpec:
     rating_badges: str = ""
     rating_badge_scale: str = "native"
     rating_badge_style: str = "color"
+    # R2 options (PORTRAIT_DEFAULTS); canonical JSON carries them only when
+    # active and non-default, so earlier configs keep their hashes.
+    vignette_poster_color_top: bool = False
+    vignette_poster_color_bottom: bool = False
+    vignette_color_style: str = "shade"
+    vignette_color_saturation: float = 2.5
+    vignette_color_lightness: float = 1.3
+    vignette_color_blur: float = 1.0
+    vignette_color_ramp: bool = True
+    vignette_color_local: bool = True
+    score_glow_color: str = ""
+    sash_chip_x: float = 0.0
+    sash_chip_y: float = 0.0
+    sash_edge_y: float = 0.5
+    badge_group1: str = "chip:4:cert"
+    badge_group2: str = ""
+    badge_group3: str = ""
+    badge_group4: str = ""
+    badge_cert_style: str = "solid"
+    badge_logo_style: str = "solid"
+    badge_cinema_style: str = "auto"
+    badge_logo_scale: float = 1.0
+    badge_overflow: str = "move"
+    label_font: str = "inter"
 
     def canonical_json(self) -> str:
         payload = asdict(self)
@@ -429,9 +630,13 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
         values.setdefault("sash_badge_inset", client_insets[1])
     top_gradient = _choice(values.get("top_gradient"), defaults.top_gradient, {"off", "low", "medium", "high", "custom"})
     bottom_gradient = _choice(values.get("bottom_gradient"), defaults.bottom_gradient, {"off", "low", "medium", "high", "custom"})
-    badge_display_mode = _int(values.get("badge_display_mode"), defaults.badge_display_mode, 0, 5)
-    if badge_display_mode not in {0, 3}:
-        raise ValueError("badge_display_mode is restricted to 0 or 3 for BingeCat custom configs")
+    if "resolution" in values:
+        # The v2 canvas is fixed at 500x750; upstream's larger canvases are not offered.
+        raise ValueError("resolution is not supported by the v2 contract")
+    # One past the highest mode, so a larger value is rejected instead of clamped onto 7.
+    badge_display_mode = _int(values.get("badge_display_mode"), defaults.badge_display_mode, 0, GRAPHIC_BADGE_MODE + 1)
+    if badge_display_mode not in {0, 3, GRAPHIC_BADGE_MODE}:
+        raise ValueError("badge_display_mode is restricted to 0, 3 or 7 for BingeCat custom configs")
     sash_input = values.get("sash_priority")
     # Canonical JSON stores the normalized active slots and exclusions in two
     # fields.  Recombine them at the boundary so the published canonical JSON
@@ -560,7 +765,11 @@ def compile_requirements(spec: CanonicalRenderSpec) -> DataRequirements:
         ratings=ratings,
         awards=sash_visible and bool(slots & {"wins", "gg_wins", "festival", "pic_noms", "gg_noms"}),
         keywords=sash_visible and bool(slots & {"cult", "true_story", "metacritic"}),
-        certification=spec.badge_display_mode == 3,
+        certification=spec.badge_display_mode == 3 or (
+            spec.badge_display_mode == GRAPHIC_BADGE_MODE
+            and any("cert" in (parse_badge_group(getattr(spec, name)) or {"slots": ()})["slots"]
+                    for name in GRAPHIC_BADGE_GROUPS)
+        ),
         trending=sash_visible and bool(slots & {"trending", "trending_broad"}),
         lifecycle=sash_visible and bool(slots & {"new_season", "returning", "premiere", "just_added", "season_finale", "short_film", "mini_series", "binge_ready", "cinema", "streaming", "physical", "production", "ended", "cancelled", "airing"}),
         release=sash_visible and bool(slots & {"new_release", "cinema", "streaming", "physical"}),

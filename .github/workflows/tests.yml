@@ -1,0 +1,64 @@
+name: Tests
+
+# The Docker workflow only proves the image builds; this runs the suite, so a
+# regression is caught on the PR rather than on the first instance to pull it.
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'Showcase/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # The image's interpreter (dockerfile: python:3.14-slim).
+          python-version: '3.14'
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Install cairo headers and GL libraries
+        # pycairo builds from source against the cairo headers, as in the image's
+        # builder stage.  skia-python needs libEGL/libGL present to load (the
+        # image unpacks bare stubs; the full packages are fine here).  libfribidi0
+        # turns on Pillow's raqm layout, as in the image.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config libegl1 libgl1 libfribidi0
+
+      - name: Install dependencies
+        # Same substitution as the dockerfile: RapidOCR declares the GUI OpenCV
+        # wheel, the image ships the headless one in its place.
+        run: |
+          pip install -r requirements.txt pytest
+          pip uninstall -y opencv-python
+          pip install --force-reinstall --no-deps 'opencv-python-headless>=4.8,<5'
+
+      - name: Create the cache directory
+        # The app keeps its SQLite cache, settings file and image caches under
+        # /app/cache (the image creates it; see dockerfile), and the suite
+        # exercises those paths for real.  The runner has no /app at all.
+        run: sudo mkdir -p /app/cache && sudo chown -R "$USER" /app
+
+      - name: Run tests
+        run: python -m pytest -q

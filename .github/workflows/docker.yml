@@ -17,7 +17,7 @@ on:
       - 'discovery_overrides.example.json'
       - '.github/**'
       - 'Showcase/**'
-  # Manual trigger from the Actions tab — useful for re-publishing :latest
+  # Manual trigger from the Actions tab — useful for re-publishing :latest (built from dev)
   # after a registry-state hiccup, or when paths-ignore swallowed a push
   # that you actually want rebuilt.
   workflow_dispatch:
@@ -31,16 +31,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -48,7 +48,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/umbraprojects/postersplus
           # Disable the metadata-action's automatic :latest behaviour — its
@@ -59,8 +59,8 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            # main branch → :latest and :main
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # dev branch → :latest (and :dev below)
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev' }}
             # branch push → :<branch-name> (main, dev)
             type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/heads/') }}
             # version tag (v1.2.3) → :1.2.3, :1.2, :1
@@ -69,7 +69,7 @@ jobs:
             type=semver,pattern={{major}}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: true

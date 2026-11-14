@@ -1,0 +1,82 @@
+# Contributing
+
+## Branches
+
+**All pull requests target `dev`.**
+
+`main` is release-only. It moves when a version ships, by a `dev` -> `main`
+merge — never by a contributor PR. A PR opened against `main` is closed
+automatically by the PR Base Guard workflow, with instructions for retargeting
+it; your commits are untouched and changing the base is a two-click edit.
+
+If you are working from a fork, branch from `dev` rather than committing to your
+fork's `main`, and open the PR against `UmbraProjects:dev`.
+
+## Adding a poster translation
+
+Poster text (genre labels and info-sash labels) is translated per language in
+`languages/<code>.json`. See the Poster Translations section of URL_REFERENCE.md for
+the full rules. The two that trip people up:
+
+- **Copy `languages/en.json` whole and translate only the values.** The keys are
+  the exact canonical English strings the renderer emits; a missing key falls
+  back to the English string, so a partial file renders half in English.
+- **Region files are not diffs.** `pt-br.json` takes precedence over `pt.json`
+  per *table*, not per *key*, so anything absent from a region file falls
+  through to English rather than to the base language. A region file must carry
+  the full vocabulary.
+
+Contributed languages must be in Latin, Greek, Cyrillic, Hebrew or Arabic
+script — between them the label fonts (Inter, Rubik, Almarai) have no CJK,
+Indic or Thai glyphs. Right-to-left lines are reordered
+with the bidi algorithm, which is enough for Hebrew. Arabic-script languages
+are also shaped (their letters joined) by Pillow's raqm layout; a new one has
+to be added to `_SHAPED_LANGS` in `i18n.py`. The i18n tests fail on any
+character no label font can draw, and on a file missing any key from
+`en.json`.
+
+## Adding a setting
+
+Every operator setting is declared once, in `config.py`, through
+`settings.env()`:
+
+```python
+FOO_LIMIT = int(_env("FOO_LIMIT", "10", group="Caching", kind="int",
+                     label="Foo limit", help="What it does and when to change it.",
+                     min=0, max=100, advanced=True))
+```
+
+That one call reads the value (saved settings file, then environment, then the
+default) *and* registers the field the admin dashboard renders, so there is
+nothing else to wire up. `group` must be one of `settings.GROUP_ORDER`, `kind`
+one of `settings.KINDS`, and `help` is required — a test checks all three.
+Mark it `advanced=True` if it is a tuning knob nobody needs to run an
+instance; those get a `### \`KEY\`` section in `ADVANCED.md`. Everything else
+gets a `KEY=` line (with a comment) in `.env.example`. CONFIGURATION.md's settings
+reference is generated — run `python3 tools/settings_docs.py --write` — and
+`tests/test_settings_docs.py` fails if any of the three is out of step, or if
+a module reads a setting from `os.environ` behind the registry's back.
+
+## Adding a poster URL setting
+
+A setting the poster URL carries also needs a short name, which the
+configurator writes in place of the long one: add it to the end of
+`ALIASES` in `param_aliases.py` (a `landscape_` twin is `_` and its portrait
+short name), to `tests/data/param_aliases_snapshot.json`, and to the table in
+URL_REFERENCE.md. A short name is permanent once released, since installed
+URLs carry it: never change or reuse one. `tests/test_param_aliases.py` fails
+if a setting has none, two clash, or a released one changed.
+
+If the configurator only sends the setting in one state (say, only when it is
+switched on), the server's default must be the other state, or the user has
+no way to send it: the same test checks every such line in `buildBaseParams`.
+
+## Before opening a PR
+
+The configurator URL behavior tests use Node.js on `PATH`. CI explicitly installs
+Node.js 24 LTS; locally, those tests skip with an installation hint if Node is
+unavailable. Use `python3 -m pytest tests/ -q -rs` to see skip reasons.
+
+```bash
+python3 -m pytest tests/ -q
+```

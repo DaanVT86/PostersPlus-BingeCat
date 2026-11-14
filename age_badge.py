@@ -108,7 +108,7 @@ def _font(name: str, size: int):
     key = (name, size)
     if key not in _font_cache:
         try:
-            _font_cache[key] = ImageFont.truetype(name, size)
+            _font_cache[key] = ImageFont.truetype(name, size, layout_engine=ImageFont.Layout.BASIC)
         except IOError:
             _font_cache[key] = ImageFont.load_default()
     return _font_cache[key]
@@ -385,9 +385,10 @@ def draw_tier_bar(
         bar_mask = bar_mask.point(lambda v: v * bar_alpha // 255)
     bar_strip = Image.new("RGBA", (bw, bh), colors["primary"][:3] + (0,))
     bar_strip.putalpha(bar_mask)
-    bar_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    bar_layer.paste(bar_strip, (x, y))
-    image.alpha_composite(bar_layer)
+    # Composite at the offset instead of via a full-canvas transparent layer —
+    # same result (transparent pixels are a no-op), a fraction of the pixels.
+    # This is the form the glow above already uses.
+    image.alpha_composite(bar_strip, dest=(x, y))
 
     # ── 3. Highlight sheen ────────────────────────────────────────────────
     hl_w    = max(1, bw // 2)
@@ -397,6 +398,139 @@ def draw_tier_bar(
         hl_mask = hl_mask.point(lambda v: v * hl_fill[3] // 255)
     hl_strip = Image.new("RGBA", (hl_w, bh), hl_fill[:3] + (0,))
     hl_strip.putalpha(hl_mask)
-    hl_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    hl_layer.paste(hl_strip, (x, y))
-    image.alpha_composite(hl_layer)
+    image.alpha_composite(hl_strip, dest=(x, y))
+
+
+# ---------------------------------------------------------------------------
+# Mode 6 — corner bookmark
+# ---------------------------------------------------------------------------
+
+# Shape of the fold, all as fractions of the requested size:
+_BM_TIP_RADIUS = 0.18    # rounding on the two tips that meet the poster edges
+_BM_INNER_BOW  = 0.04    # outward bulge of the inner edge — the folded-ribbon read
+_BM_RIM        = 0.12    # width of the rim light running along the inner edge
+_BM_CORNER_LIT = 0.18    # strength of the corner-to-inner-edge lighting gradient
+
+
+def _convex_sdf(points: Sequence[tuple[float, float]], w: int, h: int) -> np.ndarray:
+    """Signed distance (negative inside) from every pixel centre to a CCW convex path."""
+    ys, xs = np.mgrid[0:h, 0:w]
+    px = xs + 0.5
+    py = ys + 0.5
+    nearest = np.full((h, w), np.inf)
+    inside = np.ones((h, w), bool)
+    for i, (ax, ay) in enumerate(points):
+        bx, by = points[(i + 1) % len(points)]
+        ex, ey = bx - ax, by - ay
+        wx, wy = px - ax, py - ay
+        seg = ex * ex + ey * ey
+        t = np.clip((wx * ex + wy * ey) / seg, 0.0, 1.0) if seg else 0.0
+        dx, dy = wx - t * ex, wy - t * ey
+        nearest = np.minimum(nearest, dx * dx + dy * dy)
+        inside &= (ex * wy - ey * wx) >= 0
+    dist = np.sqrt(nearest)
+    return np.where(inside, -dist, dist)
+
+
+def _bookmark_core(leg: float, radius: float, samples: int = 24) -> list[tuple[float, float]]:
+    """The path that becomes the fold once it is dilated by `radius`.
+
+    Dilation is what rounds the two tips, so the core stops a radius short of the
+    poster edges and `leg` stays the true reach of the finished mark.  The outer
+    corner instead runs well past the origin: dilating a point that is already
+    off-canvas keeps the corner square, so the mark stays flush with the poster
+    edges however much the client rounds them.
+    """
+    out = -3.0 * radius
+    tip = leg - radius
+    top  = (tip, 0.0)
+    left = (0.0, tip)
+
+    # Inner edge as a quadratic Bezier bowing away from the corner.
+    mid_x, mid_y = (top[0] + left[0]) / 2.0, (top[1] + left[1]) / 2.0
+    ctrl = (mid_x + _BM_INNER_BOW * leg, mid_y + _BM_INNER_BOW * leg)
+
+    points = [(out, out), top]
+    for i in range(1, samples + 1):
+        t = i / samples
+        u = 1.0 - t
+        points.append((
+            u * u * top[0] + 2 * u * t * ctrl[0] + t * t * left[0],
+            u * u * top[1] + 2 * u * t * ctrl[1] + t * t * left[1],
+        ))
+    return points
+
+
+def draw_quality_corner_bookmark(
+    image: Image.Image,
+    quality_tokens: Sequence[str],
+    *,
+    bookmark_size: int = 16,
+    side: str = "left",
+    bottom: bool = False,
+) -> None:
+    """Render a small tier-coloured fold attached to a poster top corner.
+
+    ``side="right"`` mirrors it into the top-right corner, for when a diagonal
+    sash has taken the top-left; ``bottom`` flips it into a bottom corner.
+    """
+    W, H = image.size
+    if W < 2 or H < 2:
+        return
+
+    size = min(max(6, int(bookmark_size)), W, H)
+    colors = _tier(_score_points(quality_tokens))
+    spill = max(2, round(size * 0.45))
+    canvas = min(size + spill, W, H)
+
+    radius = max(0.75, _BM_TIP_RADIUS * size)
+    sdf = _convex_sdf(_bookmark_core(float(size), radius), canvas, canvas)
+    # Coverage from the distance field: antialiasing without a supersampled draw.
+    cover = np.clip(radius - sdf + 0.5, 0.0, 1.0)
+
+    ys, xs = np.mgrid[0:canvas, 0:canvas]
+    face = np.array(colors["primary"][:3], dtype=float)
+    highlight = np.array(colors["highlight"][:3], dtype=float)
+
+    # Corner-lit gradient: brightest where the fold meets the corner, settling
+    # into the flat tier colour by the time it reaches the inner edge.
+    lit = (1.0 - np.clip((xs + ys + 1.0) / (2.0 * size), 0.0, 1.0)) ** 2 * _BM_CORNER_LIT
+    rgb = face * np.ones((canvas, canvas, 1)) * (1 - lit[..., None]) + highlight * lit[..., None]
+    alpha = cover * (colors["primary"][3] / 255.0)
+
+    # Rim light hugging the inner edge — reads as the lit lip of a folded ribbon.
+    rim_w = _BM_RIM * size
+    rim = np.clip(1.0 - np.abs((radius - sdf) - rim_w) / rim_w, 0.0, 1.0) * cover
+    rgb = rgb * (1 - rim[..., None] * 0.45) + highlight * (rim[..., None] * 0.45)
+    alpha = np.clip(alpha + rim * (colors["highlight"][3] / 255.0) * 0.9, 0.0, 1.0)
+
+    mark = Image.fromarray(
+        np.dstack([rgb.clip(0, 255), alpha * 255]).astype(np.uint8),
+    )
+
+    def _blurred(color, peak_alpha: float, blur: float) -> Image.Image:
+        layer = np.dstack([
+            np.ones((canvas, canvas, 1)) * np.array(color[:3], dtype=float),
+            cover * peak_alpha,
+        ]).astype(np.uint8)
+        return Image.fromarray(layer).filter(
+            ImageFilter.GaussianBlur(max(1.0, size * blur))
+        )
+
+    # A restrained halo carries over the existing quality-notch language, and a
+    # tight contact shadow keeps the fold legible against pale artwork.
+    below = _blurred(colors["glow"], colors["glow"][3], 0.11)
+    shadow = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    offset = max(1, round(size * 0.05))
+    shadow.alpha_composite(
+        _blurred(colors["shadow"], min(140, colors["shadow"][3]), 0.07),
+        dest=(offset, offset),
+    )
+
+    composite = Image.alpha_composite(Image.alpha_composite(below, shadow), mark)
+    if side == "right":
+        composite = composite.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    if bottom:
+        composite = composite.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+    image.alpha_composite(composite, dest=(W - canvas if side == "right" else 0,
+                                           H - canvas if bottom else 0))

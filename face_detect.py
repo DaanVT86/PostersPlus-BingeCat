@@ -14,11 +14,16 @@ the saliency crop.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import logging
 import os
 import threading
 
 import numpy as np
+from PIL import Image
+
+import config as _cfg
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +33,51 @@ try:
 except Exception:
     _HAS_CV2 = False
 
-_MODEL_PATH = os.environ.get(
-    "YUNET_MODEL_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "models",
-                 "face_detection_yunet.onnx"),
+_MODEL_PATH = _cfg.YUNET_MODEL_PATH or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "models", "face_detection_yunet.onnx",
 )
 _SCORE_THRESHOLD = 0.6
+# An image this wide with no faces found is scanned again at half size.  YuNet
+# misses big close-ups at native size — a 430 px face in a 1280 px backdrop
+# (TMDB 1751701) scores 0.84 at half size and nothing at full — so without the
+# retry the crop falls back to saliency and can frame a wall or a hood.  On 300
+# cached backdrops it found faces in 12 of the 56 with none, improving 4 crops
+# and worsening none.
+_RETRY_MIN_WIDTH = 640
+
+# Longest side inference ever runs at.  YuNet sizes its buffers to the input
+# and keeps them: a 3840x2160 original (what 1500/2000 px canvases fetch)
+# peaked at ~770 MB and left ~250 MB resident per worker, against ~140 MB at
+# 1280.  Larger images are detected at this size and the boxes scaled back.
+# The default canvases (w1280 backdrops, 500/780 posters) are within it, so
+# their results are unchanged.
+_MAX_SIDE = 1280
+
+# Part of every face_box_cache key, so a different model or threshold never
+# reuses boxes another detector found.
+DETECTOR_SIGNATURE = (
+    f"yunet:{os.path.basename(_MODEL_PATH)}:{_SCORE_THRESHOLD}:half{_RETRY_MIN_WIDTH}"
+)
+
+
+
+@functools.cache
+def model_sha256() -> str:
+    """Digest of the YuNet model file; "unavailable" when it can't be read."""
+    try:
+        with open(_MODEL_PATH, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return "unavailable"
+
+
+def cache_signature() -> str:
+    """face_box_cache key prefix: DETECTOR_SIGNATURE plus the OpenCV version and
+    model digest (the values the renderer environment fingerprint records), so
+    a persistent cache never serves boxes an older detector found."""
+    opencv = _cv2.__version__ if _HAS_CV2 else "unavailable"
+    return f"{DETECTOR_SIGNATURE}:cv{opencv}:{model_sha256()}"
+
 
 _detector = None
 _load_failed = False
@@ -89,24 +133,60 @@ def detect_faces(image) -> list[tuple[float, float, float]]:
     still letting bounding-box area break ties between two similarly-confident
     real faces (e.g. lead vs. background extra) as originally intended.
     """
+    return [(x + fw / 2.0, fw, max(score, 0.0) ** 3 * fw * fh)
+            for x, _y, fw, fh, score in detect_face_boxes(image)]
+
+
+def available() -> bool:
+    """Whether a detector is loaded — so an empty result can be told apart from
+    "detection unavailable", which must not be cached as "no faces"."""
+    return _ensure_detector() is not None
+
+
+def detect_face_boxes(image) -> list[tuple[float, float, float, float, float]]:
+    """[(x, y, width, height, score), …] in pixels for detected faces.
+
+    Empty list when there are no faces or detection is unavailable.  The tinted
+    vignette uses the boxes to keep faces out of its colour vote (see
+    main._fog_profile); detect_faces reduces them to the crop's weights.
+    """
     det = _ensure_detector()
     if det is None:
         return []
     try:
+        iw, ih = image.size
+        if iw == 0 or ih == 0:
+            return []
+        scale = max(iw, ih) / _MAX_SIDE
+        if scale > 1:
+            image = image.resize((max(1, round(iw / scale)), max(1, round(ih / scale))),
+                                 Image.Resampling.BILINEAR, reducing_gap=2.0)
         arr = np.asarray(image.convert("RGB"))[:, :, ::-1].copy()  # RGB→BGR
         h, w = arr.shape[:2]
-        if h == 0 or w == 0:
-            return []
-        with _infer_lock:
-            det.setInputSize((w, h))
-            _n, faces = det.detect(arr)
-        if faces is None:
-            return []
-        out = []
-        for f in faces:
-            x, fw, fh, score = float(f[0]), float(f[2]), float(f[3]), float(f[-1])
-            out.append((x + fw / 2.0, fw, max(score, 0.0) ** 3 * fw * fh))
-        return out
+        faces = _detect_at(det, arr)
+        if not faces and w >= _RETRY_MIN_WIDTH:
+            # Nothing at native size: look again at half size, for faces too
+            # large for the model to pick up at native size.
+            small = _cv2.resize(arr, (w // 2, h // 2), interpolation=_cv2.INTER_AREA)
+            sx, sy = w / (w // 2), h / (h // 2)
+            faces = [(x * sx, y * sy, fw * sx, fh * sy, score)
+                     for x, y, fw, fh, score in _detect_at(det, small)]
+        if scale > 1:
+            sx, sy = iw / w, ih / h
+            faces = [(x * sx, y * sy, fw * sx, fh * sy, score)
+                     for x, y, fw, fh, score in faces]
+        return faces
     except Exception as exc:
         logger.warning(f"face detect error: {exc}")
         return []
+
+
+def _detect_at(det, bgr) -> list[tuple[float, float, float, float, float]]:
+    h, w = bgr.shape[:2]
+    with _infer_lock:
+        det.setInputSize((w, h))
+        _n, faces = det.detect(bgr)
+    if faces is None:
+        return []
+    return [(float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[-1]))
+            for f in faces]

@@ -30,6 +30,11 @@ def report_fake_textless_poster(
     if not _cfg.TEXTLESS_FAKE_REPORT:
         return
 
+    # The report is for fixing TMDB; art from other sources (fanart.tv,
+    # absolute urls) has nothing to edit there.
+    if str(image_path).startswith(("http://", "https://")):
+        return
+
     normalized_type = "tv" if str(media_type).lower() == "tv" else "movie"
     normalized_id = str(tmdb_id).strip()
     normalized_path = "/" + str(image_path).strip().lstrip("/")

@@ -142,8 +142,9 @@ RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "draw_frosted_bar",
             "draw_score_bar",
             "draw_score_bar_vertical",
-            "sample_frosted_bar_rgb",
             "score_color_for_mode",
+            "bar_fill_color",
+            "frosted_bar_box",
         ),
     ),
     (
@@ -151,21 +152,40 @@ RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "draw_award_badge",
             "draw_award_sash",
-            "sample_frosted_notch_rgb",
-            "sample_frosted_sash_rgb",
+            "dominant_frost_rgb",
+            "_frosted_tint",
+            "side_chip_band",
+            "_notch_heights",
+            "_SIDE_MARGIN",
         ),
     ),
-    # Cross-module imports are not followed by the per-module AST closure.
+    # Cross-module imports are not followed by the per-module AST closure, so
+    # every module the engine calls into is listed (whole modules for the
+    # small render-only ones).  tests/test_renderer_revision_coverage.py traces
+    # renders and fails on executed code outside this closure.
     ("rating_badges.py", ("*",)),
+    ("graphic_badges.py", ("*",)),
+    ("fonts.py", ("*",)),
+    ("pxscale.py", ("*",)),
+    ("certifications.py", ("*",)),
+    # The fog keeps detected faces out of its colour vote (main._fog_faces).
+    ("face_detect.py", ("*",)),
     ("config.py", _COMPOSITOR_CONFIG_INPUTS),
+    # Not JSON values, so hashed as definitions (rating badges normalise with them).
+    ("config.py", ("SCORE_NORMALISERS", "LANDSCAPE_WIDTH", "LANDSCAPE_HEIGHT")),
     ("render_spec.py", (
         "PORTRAIT_DEFAULTS", "BADGE_PROVIDERS", "portrait_options",
         "badge_layout", "weighted_rating_needed",
     )),
-    ("age_badge.py", ("draw_quality_age_badge", "draw_tier_bar", "_score_points")),
-    ("discovery.py", ("DiscoveryMeta", "pick_sash")),
-    ("tmdb.py", ("LOGO_ABS_MAX_H", "composite_logo", "logo_centre_y")),
-    ("i18n.py", ("load_languages", "translate_genre", "translate_sash")),
+    ("age_badge.py", (
+        "draw_quality_age_badge", "draw_quality_corner_bookmark", "draw_tier_bar", "_score_points",
+    )),
+    ("discovery.py", ("DiscoveryMeta", "TRENDING_SLOTS", "pick_sash", "shown_trending_rank")),
+    ("tmdb.py", ("LOGO_ABS_MAX_H", "composite_logo", "ensure_light_logo", "logo_centre_y", "poster_canvas")),
+    ("i18n.py", (
+        "language_text", "load_languages", "native_digits", "needs_shaping",
+        "translate_genre", "translate_sash", "upper_label", "visual",
+    )),
 )
 
 
@@ -174,7 +194,7 @@ def _renderer_assets() -> tuple[str, ...]:
         (_BASE_DIR / "fonts", frozenset({".ttf"})),
         (_BASE_DIR / "static" / "genre_bg", frozenset({".png"})),
         (_BASE_DIR / "static" / "logos", frozenset({".png"})),
-        (_BASE_DIR / "static" / "rating_badges", frozenset({".png"})),
+        (_BASE_DIR / "static" / "rating_badges", frozenset({".svg"})),
     )
     paths = [
         path.relative_to(_BASE_DIR).as_posix()
@@ -185,6 +205,8 @@ def _renderer_assets() -> tuple[str, ...]:
     paths.extend(
         f"languages/{locale}.json" for locale in ("en", "pt", "nl", "de", "es")
     )
+    # The fog's face detector (main._fog_faces).
+    paths.append("models/face_detection_yunet.onnx")
     return tuple(sorted(set(paths)))
 
 
@@ -430,8 +452,6 @@ def _resolve_spec(bundle: RenderInputBundle) -> CanonicalRenderSpec:
         expected = json.loads(spec.canonical_json())
         if _json_compatible(bundle.canonical_config) != expected:
             raise RenderInputError("canonical_config_required")
-        if spec.badge_display_mode not in {0, 3}:
-            raise RenderInputError("unsupported_badge_mode")
 
     if spec.sha256() != bundle.config_sha256:
         raise RenderConflict("config_hash_mismatch")
@@ -1097,7 +1117,33 @@ def _request_config(engine, spec: CanonicalRenderSpec, locale: str):
     config.badge_display_mode = spec.badge_display_mode
     config.wait_for_quality = False
     config.greyscale_no_quality = False
+    # The contract's Minimalist "Dual rating" (3) is the engine's mode 4; the
+    # engine's own 3 is upstream's Split, which the contract does not offer.
+    if spec.minimalist_append_mode == 3:
+        config.minimalist_append_mode = 4
     return config
+
+
+# Native provider scales, so a badge prints the provider's own form ("7.8",
+# "3.9") from the snapshot's normalized score.  Everything else is a percentage.
+_BADGE_NATIVE_SCALES = {"imdb": 10.0, "letterboxd": 5.0, "metacriticuser": 10.0, "rogerebert": 4.0}
+
+
+def _badge_ratings(
+    bundle: RenderInputBundle,
+    used_ratings: tuple[ProviderRating, ...],
+) -> dict[str, float]:
+    """Per-provider scores for rating badges, in MDBList's native form."""
+    out: dict[str, float] = {}
+    for rating in reversed(used_ratings):
+        if (
+            rating.metric == "score"
+            and (rating.vote_count is None or rating.vote_count >= 10)
+            and rating.checked_at <= bundle.snapshot.evaluated_at < rating.expires_at
+        ):
+            scale = _BADGE_NATIVE_SCALES.get(rating.provider, 100.0)
+            out[rating.provider] = rating.normalized_score * scale / 100.0
+    return out
 
 
 def _discovery_meta(
@@ -1240,39 +1286,37 @@ def _compose(
     fallback_title = None
     if logo is None and not spec.textless and not spec.use_original_art:
         fallback_title = title
-    age_rating = (
-        facts.age_rating
-        if "age_rating" in used_fact_fields
-        else facts.certification
-        if "certification" in used_fact_fields
-        else None
-    )
+    certification = facts.certification if "certification" in used_fact_fields else None
+    age_rating = facts.age_rating if "age_rating" in used_fact_fields else None
+    if age_rating is None and spec.badge_display_mode != 7:
+        # Mode 3's age badge prints the certificate text as-is; the graphic
+        # chip takes it as ``certification`` and int()s ``age_rating``.
+        age_rating = certification
     score = _score(spec, bundle, used_ratings)
-    rendered = engine.build_poster(
-        image,
-        score if score is not None else "N/A",
-        genre,
-        _request_config(engine, spec, bundle.locale),
-        logo=logo,
-        fallback_title=fallback_title,
-        discovery_meta=_discovery_meta(engine, spec, bundle, used_fact_fields),
-        quality_tokens=[],
-        release_year=(
-            str(facts.release_year) if "release_year" in used_fact_fields else None
-        ),
-        age_rating=age_rating,
-        no_poster=base_reference is None,
-        metacritic_score=_metacritic_score(used_ratings),
-        rating_badge_scores={
-            rating.provider: rating.normalized_score
-            for rating in reversed(used_ratings)
-            if rating.metric == "score"
-            and (rating.vote_count is None or rating.vote_count >= 10)
-            and rating.checked_at <= bundle.snapshot.evaluated_at < rating.expires_at
-        },
-        **({"sash_date_label": f"{facts.upcoming_release_window.title()} · {facts.upcoming_release_date.isoformat()}"}
-           if "upcoming_release_date" in used_fact_fields else {}),
-    )
+    labels_token = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
+    try:
+        rendered = engine.build_poster(
+            image,
+            score if score is not None else "N/A",
+            genre,
+            _request_config(engine, spec, bundle.locale),
+            logo=logo,
+            fallback_title=fallback_title,
+            discovery_meta=_discovery_meta(engine, spec, bundle, used_fact_fields),
+            quality_tokens=[],
+            release_year=(
+                str(facts.release_year) if "release_year" in used_fact_fields else None
+            ),
+            age_rating=age_rating,
+            certification=certification,
+            no_poster=base_reference is None,
+            metacritic_score=_metacritic_score(used_ratings),
+            ratings=_badge_ratings(bundle, used_ratings),
+            **({"sash_date_label": f"{facts.upcoming_release_window.title()} · {facts.upcoming_release_date.isoformat()}"}
+               if "upcoming_release_date" in used_fact_fields else {}),
+        )
+    finally:
+        engine.i18n.BUNDLED_LABELS_ONLY.reset(labels_token)
     return rendered.convert("RGB")
 
 
@@ -1409,12 +1453,46 @@ def _image_library_versions() -> dict[str, str]:
     try:
         import cairo
 
-        versions["cairo"] = cairo.cairo_version_string()
+        versions["pycairo_cairo"] = cairo.cairo_version_string()
         versions["pycairo"] = getattr(cairo, "version", "unknown")
     except ImportError:
-        versions["cairo"] = "unavailable"
+        versions["pycairo_cairo"] = "unavailable"
         versions["pycairo"] = "unavailable"
     return versions
+
+
+# Every distribution cairosvg's import and rasterisation load (CSS parsing and
+# matching, the XML parser, the cffi binding to native cairo).  Pillow is in
+# _image_library_versions.
+_SVG_RASTER_DISTRIBUTIONS = (
+    "CairoSVG", "cairocffi", "cffi", "pycparser",
+    "cssselect2", "tinycss2", "webencodings", "defusedxml",
+)
+
+
+def _svg_raster_backend() -> dict[str, Any]:
+    """cairosvg draws SVG badge marks and logos through cairocffi, which loads
+    native cairo itself, so pycairo's absence says nothing about it."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    def _dist(name: str) -> str:
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return "unavailable"
+
+    try:
+        import cairocffi
+        import cairosvg  # noqa: F401
+
+        native_cairo = cairocffi.cairo_version_string()
+    except Exception:
+        native_cairo = "unavailable"
+    return {
+        "available": native_cairo != "unavailable",
+        "native_cairo": native_cairo,
+        "versions": {name: _dist(name) for name in _SVG_RASTER_DISTRIBUTIONS},
+    }
 
 
 def _compute_semantic_revision(
@@ -1452,10 +1530,38 @@ def _compute_semantic_revision(
     return digest.hexdigest()
 
 
+def _optional_render_backends() -> dict[str, Any]:
+    """Optional libraries whose presence changes pixels: skia draws the diagonal
+    sash (else a PIL fallback), cairosvg rasterises the SVG badge marks, and
+    OpenCV YuNet keeps faces out of the fog's colour vote (else no faces)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    import awards
+    import face_detect
+
+    def _dist(name: str) -> str:
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return "unavailable"
+
+    return {
+        "skia": {"available": bool(awards._HAS_SKIA), "version": _dist("skia-python")},
+        "cairosvg": _svg_raster_backend(),
+        "face_detector": {
+            "available": face_detect.available(),
+            "model_sha256": face_detect.model_sha256(),
+            "opencv": face_detect._cv2.__version__ if face_detect._HAS_CV2 else "unavailable",
+            "signature": face_detect.DETECTOR_SIGNATURE,
+        },
+    }
+
+
 def _renderer_environment() -> dict[str, Any]:
     import config
 
     return {
+        "backends": _optional_render_backends(),
         "canvas": _CANVAS_SIZE,
         "config_inputs": {name: getattr(config, name) for name in _COMPOSITOR_CONFIG_INPUTS},
         "genre_map": config.GENRE_MAP,
@@ -1476,13 +1582,7 @@ def _source_recipe_environment() -> dict[str, Any]:
         versions["opencv"] = cv2.__version__
     except ImportError:
         versions["opencv"] = "unavailable"
-    try:
-        from importlib.metadata import version
-
-        versions["cairosvg"] = version("CairoSVG")
-    except Exception:
-        versions["cairosvg"] = "unavailable"
-    return {"libraries": versions}
+    return {"libraries": versions, "svg_raster": _svg_raster_backend()}
 
 
 def _compute_renderer_revision(
@@ -1503,6 +1603,15 @@ def _compute_render_policy_revision(*, source_overrides: Mapping[str, str] | Non
         b"postersplus-bingecat-v2-render-policy",
         RENDER_POLICY_REVISION_CODE_ROOTS,
         source_overrides=source_overrides,
+    )
+
+
+def _compute_source_recipe_revision() -> str:
+    return _compute_semantic_revision(
+        b"postersplus-bingecat-v2-source-recipe",
+        SOURCE_RECIPE_REVISION_CODE_ROOTS,
+        assets=SOURCE_RECIPE_REVISION_ASSET_MANIFEST,
+        environment=_source_recipe_environment(),
     )
 
 
@@ -1541,12 +1650,7 @@ if os.environ.get("POSTERSPLUS_EXPECTED_RENDERER_REVISION", "").strip() not in (
         f"computed {RENDERER_REVISION} "
         f"(build fingerprint {RENDERER_BUILD_FINGERPRINT})"
     )
-SOURCE_RECIPE_REVISION = _compute_semantic_revision(
-    b"postersplus-bingecat-v2-source-recipe",
-    SOURCE_RECIPE_REVISION_CODE_ROOTS,
-    assets=SOURCE_RECIPE_REVISION_ASSET_MANIFEST,
-    environment=_source_recipe_environment(),
-)
+SOURCE_RECIPE_REVISION = _compute_source_recipe_revision()
 
 
 def render(
@@ -1808,19 +1912,24 @@ def _compose_landscape(
         _title(bundle.snapshot, bundle.locale) if logo is None and not text_art else None
     )
     score = _score(spec.fact_spec(), bundle, used_ratings)
-    rendered = build_landscape(
-        image,
-        score if score is not None else "N/A",
-        genre,
-        _request_config(engine, spec.base, bundle.locale),
-        logo=logo,
-        fallback_title=fallback_title,
-        discovery_meta=_discovery_meta(engine, spec.base, bundle, used_fact_fields),
-        release_year=(
-            str(facts.release_year) if "release_year" in used_fact_fields else None
-        ),
-        badge_position=spec.landscape_badge_pos,
-    )
+    config = _request_config(engine, spec.base, bundle.locale)
+    config.landscape_badge_pos = spec.landscape_badge_pos
+    labels_token = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
+    try:
+        rendered = build_landscape(
+            image,
+            score if score is not None else "N/A",
+            genre,
+            config,
+            logo=logo,
+            fallback_title=fallback_title,
+            discovery_meta=_discovery_meta(engine, spec.base, bundle, used_fact_fields),
+            release_year=(
+                str(facts.release_year) if "release_year" in used_fact_fields else None
+            ),
+        )
+    finally:
+        engine.i18n.BUNDLED_LABELS_ONLY.reset(labels_token)
     return rendered.convert("RGB")
 
 
@@ -1837,12 +1946,37 @@ LANDSCAPE_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("landscape.py", ("*",)),
     ("landscape_spec.py", ("*",)),
-    ("main.py", ("RequestConfig", "_make_fallback_canvas")),
-    ("ratings.py", ("_cairo_pill_mask",)),
+    # landscape.py imports these from main.py inside its functions.
+    ("main.py", (
+        "RequestConfig", "_make_fallback_canvas", "_gradient_alpha", "_meta_sorted",
+        "_greyscale_wanted", "greyscale_rgba", "_claim_footprint", "_legacy_badge",
+        "_draw_custom_group", "_draw_legacy_bookmark", "_draw_logo_group", "_occupied_cols",
+        "_fog_pick", "_fog_faces", "_vignette_tint_band", "_vignette_frost_band",
+        "_vignette_level_band", "_vignette_composite", "_vignette_fog_ramp",
+        "_VIGNETTE_SAT_FULL", "_VIGNETTE_MATCH_MIN_CONF", "_VIGNETTE_SEAM_H",
+    )),
+    ("ratings.py", (
+        "_cairo_pill_mask", "_soften", "bar_fill_color", "draw_frosted_bar",
+        "frosted_bar_box", "parse_custom_score_palette", "score_color_for_mode",
+    )),
+    ("awards.py", ("_CHIP_RADIUS", "_frost_ink", "_frosted_tint", "dominant_frost_rgb")),
+    ("age_badge.py", ("_score_points",)),
+    ("rating_badges.py", ("*",)),
+    ("graphic_badges.py", ("*",)),
+    ("fonts.py", ("*",)),
+    ("pxscale.py", ("*",)),
+    ("certifications.py", ("*",)),
+    ("face_detect.py", ("*",)),
+    ("tmdb.py", ("ensure_light_logo", "poster_canvas")),
     ("config.py", _COMPOSITOR_CONFIG_INPUTS),
+    # Not JSON values, so hashed as definitions (rating badges normalise with them).
+    ("config.py", ("SCORE_NORMALISERS", "LANDSCAPE_WIDTH", "LANDSCAPE_HEIGHT")),
     ("render_spec.py", ("CanonicalRenderSpec", "canonicalize_config", "compile_requirements")),
-    ("discovery.py", ("DiscoveryMeta", "pick_sash")),
-    ("i18n.py", ("load_languages", "normalize_locale", "translate_genre", "translate_sash")),
+    ("discovery.py", ("DiscoveryMeta", "TRENDING_SLOTS", "pick_sash", "shown_trending_rank")),
+    ("i18n.py", (
+        "language_text", "load_languages", "native_digits", "needs_shaping",
+        "normalize_locale", "translate_genre", "translate_sash", "upper_label", "visual",
+    )),
     (
         "integration_contract.py",
         ("ImmutableRenderSnapshot", "RenderInputBundle", "SourceArtReference"),

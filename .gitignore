@@ -30,3 +30,6 @@ Thumbs.db
 
 # Claude Code local state (machine-specific permissions)
 .claude/
+
+# Cached Wikipedia/Wikidata responses for tools/audit_festival_winners.py
+tools/.audit-cache/

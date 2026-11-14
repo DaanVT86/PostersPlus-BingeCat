@@ -23,6 +23,8 @@ import asyncio
 import io
 import logging
 import math
+import random
+import time
 
 import httpx
 from PIL import Image
@@ -96,25 +98,46 @@ def _get_semaphore() -> "asyncio.Semaphore":
 # Auth
 # ---------------------------------------------------------------------------
 
+# A failed login is not tried again for a while: every render that wants TVDB
+# art would otherwise log in anew, one after another under the token lock,
+# each with up to a 15 s timeout.  A rejected key (401) waits for a restart,
+# which is when a corrected key would arrive.
+_LOGIN_RETRY_SECS = 300.0
+_login_failed_at: float | None = None
+_login_rejected = False
+
+
 async def _login(client: httpx.AsyncClient) -> str | None:
     """Exchange the API key for a bearer token. Returns None on failure."""
+    global _login_failed_at, _login_rejected
+    if _login_rejected:
+        return None
+    if _login_failed_at is not None and time.monotonic() - _login_failed_at < _LOGIN_RETRY_SECS:
+        return None
     payload: dict = {"apikey": SERVER_TVDB_KEY}
     if TVDB_SUBSCRIBER_PIN:
         payload["pin"] = TVDB_SUBSCRIBER_PIN
     try:
         logger.info("External API Call: TVDB login")
         resp = await client.post(f"{_API_BASE}/login", json=payload, timeout=15.0)
+        if resp.status_code == 401:
+            _login_rejected = True
+            logger.error("TVDB rejected the API key (401); TVDB art is off until restart")
+            return None
         resp.raise_for_status()
         token = ((resp.json() or {}).get("data") or {}).get("token")
         if not token:
+            _login_failed_at = time.monotonic()
             logger.warning("TVDB login returned no token")
             return None
         set_cached_tvdb_json(
             _TOKEN_CACHE_KEY, {"token": token}, _TOKEN_TTL_SECONDS
         )
+        _login_failed_at = None
         return token
     except Exception as exc:
-        logger.warning(f"TVDB login failed: {exc}")
+        _login_failed_at = time.monotonic()
+        logger.warning(f"TVDB login failed: {exc}; not retried for {_LOGIN_RETRY_SECS:.0f}s")
         return None
 
 
@@ -253,10 +276,14 @@ def _to_tvdb_lang(code: str | None) -> str | None:
     their base language (es-mx → spa): a Mexican-Spanish request still wants
     Spanish artwork, and the alternative is matching nothing at all. The strict
     region separation TMDB gives us simply isn't available from this provider.
+    Portuguese is the exception: TVDB keeps Brazil's ("pt") apart from
+    Portugal's ("por"), so pt-br asks for Brazil's and the rest for Portugal's.
     """
     if not code:
         return code
     c = code.strip().lower().replace("_", "-")
+    if c == "pt-br":
+        return "pt"
     base = c.split("-", 1)[0]
     return _LANG_2_TO_3.get(base, base)
 
@@ -349,7 +376,8 @@ async def fetch_tvdb_artworks(
         return {"logos": [], "backgrounds": [], "posters": []}
 
     want = _record_type(media_type)
-    cache_key = f"art:{want}:{tvdb_id}"
+    # v2 keeps includesText (backgrounds read it, see tvdb_poster_url).
+    cache_key = f"art:v2:{want}:{tvdb_id}"
     if cache_metadata:
         cached = get_cached_tvdb_json(cache_key)
         if cached is not None:
@@ -374,10 +402,16 @@ async def fetch_tvdb_artworks(
             if not image:
                 continue
             url = image if image.startswith("http") else f"{_ARTWORK_BASE}/{image.lstrip('/')}"
+            thumb = art.get("thumbnail") or ""
             out[cat].append({
                 "url": url,
                 "language": art.get("language"),
                 "score": float(art.get("score") or 0),
+                "text": art.get("includesText"),
+                # Only the dashboard's picker shows it; rows cached before it
+                # was kept fall back to the full image.
+                "thumb": thumb if thumb.startswith("http") or not thumb
+                else f"{_ARTWORK_BASE}/{thumb.lstrip('/')}",
             })
         for cat in out:
             out[cat].sort(key=lambda a: a["score"], reverse=True)
@@ -472,18 +506,236 @@ async def fetch_v2_artwork_candidates(
     return tuple(out)
 
 
+# ---------------------------------------------------------------------------
+# Metadata spine (titles neither TMDB nor Cinemeta know)
+# ---------------------------------------------------------------------------
+
+# Bumped whenever the normaliser changes, so rows built by the old logic are
+# re-fetched rather than served.
+_METADATA_VERSION = "v1"
+
+# TVDB genre slugs that aren't a plain IMDb/TMDB genre name; the rest go
+# through Cinemeta's name map.
+_GENRE_SLUGS = {
+    "science-fiction": "sci-fi",
+    "children":        "kids",
+    "talk-show":       "talk-show",
+    "game-show":       "game-show",
+    "suspense":        "thriller",
+    "martial-arts":    "action",
+    "mini-series":     "drama",
+    "anime":           "animation",
+}
+
+_STATUS = {
+    "continuing": "Returning Series",
+    "ended":      "Ended",
+    "upcoming":   "Planned",
+}
+
+
+def _pick_name(record: dict, language: str | None) -> str | None:
+    """The title in the requested language, else English, else TVDB's own
+    ``name`` (which is in the original language)."""
+    names = {
+        t.get("language"): t.get("name")
+        for t in ((record.get("translations") or {}).get("nameTranslations") or [])
+        if isinstance(t, dict) and t.get("name")
+    }
+    for lang in (_to_tvdb_lang(language), "eng"):
+        if lang and names.get(lang):
+            return names[lang]
+    return record.get("name") or None
+
+
+async def _fetch_record(client: httpx.AsyncClient, tvdb_id: int, want: str) -> dict | None:
+    """The slim extended record, cached; None when TVDB has no such id."""
+    cache_key = f"meta:{_METADATA_VERSION}:{want}:{tvdb_id}"
+    cached = get_cached_tvdb_json(cache_key)
+    if cached is not None:
+        return None if cached.get("__miss__") else cached
+    endpoint = "series" if want == "series" else "movies"
+    async with _get_semaphore():
+        data = await _authed_get(
+            client, f"/{endpoint}/{tvdb_id}/extended",
+            params={"short": "true", "meta": "translations"},
+        )
+    if not isinstance(data, dict) or not data.get("id"):
+        # _authed_get folds errors into None, so only a short negative window.
+        set_cached_tvdb_json(cache_key, {"__miss__": True}, TVDB_NEG_CACHE_DURATION * 86400)
+        return None
+    slim = {
+        k: data.get(k)
+        for k in ("id", "name", "image", "year", "firstAired", "first_release",
+                  "originalLanguage", "genres", "remoteIds", "status",
+                  "averageRuntime", "runtime", "translations")
+        if data.get(k) is not None
+    }
+    set_cached_tvdb_json(cache_key, slim, TVDB_ARTWORK_CACHE_DURATION * 86400)
+    return slim
+
+
+async def fetch_tvdb_metadata(
+    client: httpx.AsyncClient,
+    *,
+    media_type: str,
+    tvdb_id_hint: int | str | None = None,
+    imdb_id: str | None = None,
+    language: str | None = None,
+) -> tuple | None:
+    """A TVDB record shaped like ``tmdb.fetch_poster_metadata``'s 8-tuple, the
+    way ``cinemeta.normalise`` shapes Cinemeta's — the last metadata spine, for
+    titles only TVDB lists (small documentaries, parodies, web series).
+
+    The record's own poster is the one-sheet, title and all, so it goes in as
+    a text-bearing poster; the best neutral background is the backdrop, which
+    main.py's backdrop-to-portrait rule crops and puts our logo (or drawn
+    title) on.  None when TVDB is off or has no such title.
+    """
+    if not tvdb_enabled():
+        return None
+    want = _record_type(media_type)
+    try:
+        tvdb_id = await resolve_tvdb_id(
+            client, media_type=media_type, tvdb_id_hint=tvdb_id_hint, imdb_id=imdb_id,
+        )
+        if not tvdb_id:
+            return None
+        record = await _fetch_record(client, tvdb_id, want)
+        if record is None:
+            return None
+        artworks = await fetch_tvdb_artworks(client, tvdb_id, media_type)
+    except Exception as exc:
+        logger.warning(f"TVDB metadata fetch failed for {tvdb_id_hint or imdb_id}: {exc}")
+        return None
+
+    from cinemeta import _blank_tmdb_data, _map_genres
+
+    title = _pick_name(record, language) or "Unknown Title"
+
+    if want == "series":
+        date = str(record.get("firstAired") or "")
+    else:
+        date = str((record.get("first_release") or {}).get("date") or "")
+    release_date = date[:10] if len(date) >= 10 and date[4] == "-" else None
+    year_src = str(record.get("year") or date)
+    release_year = year_src[:4] if year_src[:4].isdigit() else None
+
+    genre_names = []
+    for g in record.get("genres") or []:
+        if isinstance(g, dict):
+            slug = (g.get("slug") or "").lower()
+            genre_names.append(_GENRE_SLUGS.get(slug) or g.get("name") or slug)
+
+    poster = record.get("image") or None
+    if poster and not poster.startswith("http"):
+        poster = f"{_ARTWORK_BASE}/{poster.lstrip('/')}"
+    background = _select_by_language(artworks.get("backgrounds") or [], ["null"])
+
+    tmdb_data = _blank_tmdb_data()
+    tmdb_data["tvdb_id"]              = tvdb_id
+    tmdb_data["cinemeta_source"]      = "tvdb"
+    tmdb_data["original_title"]       = record.get("name")
+    tmdb_data["tmdb_release_date"]    = release_date
+    tmdb_data["original_poster_path"] = poster
+    tmdb_data["runtime"] = record.get("averageRuntime") or record.get("runtime") or None
+    lang3 = record.get("originalLanguage")
+    if lang3:
+        tmdb_data["original_language"] = _LANG_3_TO_2.get(lang3, lang3)
+    status = ((record.get("status") or {}).get("name") or "").strip()
+    if status:
+        tmdb_data["tmdb_status"] = _STATUS.get(status.lower(), status)
+    for remote in record.get("remoteIds") or []:
+        if not isinstance(remote, dict):
+            continue
+        source, rid = (remote.get("sourceName") or "").lower(), str(remote.get("id") or "")
+        if source == "imdb" and rid.startswith("tt"):
+            tmdb_data["imdb_id"] = rid
+        elif "themoviedb" in source and rid.isdigit():
+            tmdb_data["cinemeta_tmdb_id"] = rid
+
+    logger.info(f"TVDB metadata for tvdb_id={tvdb_id}: {title!r} ({release_year})")
+    return (_map_genres(genre_names), False, [], release_year, title, poster,
+            background["url"] if background else None, tmdb_data)
+
+
+# A series TMDB has closed ("Ended", or a "Miniseries" of one season) that
+# TVDB already lists a further season for — Cyberpunk: Edgerunners, whose
+# second season TVDB had dated while TMDB still called it a finished
+# miniseries.  Only the status, the next/last aired days and the official
+# season numbers are kept; the record goes stale faster than artwork does,
+# so it is held for days, not weeks.
+_SERIES_STATUS_VERSION = "v1"
+_SERIES_STATUS_TTL = 2 * 86400
+# _authed_get folds a throttle or an outage into the same None as "no such
+# series", so a miss is held only hours: a blip mustn't hide a revival.
+_SERIES_STATUS_MISS_TTL = 6 * 3600
+
+
+async def fetch_series_status(
+    client: httpx.AsyncClient,
+    *,
+    tvdb_id_hint: int | str | None = None,
+    imdb_id: str | None = None,
+    tmdb_id: str | None = None,
+) -> dict | None:
+    """``{"status", "next_aired", "last_aired", "seasons"}`` for a series:
+    TVDB's status in lower case ("continuing" | "ended" | "upcoming"), its
+    next and last aired days (ISO, or None) and its official season numbers
+    above 0.  None when TVDB is off, has no such series, or didn't answer."""
+    if not tvdb_enabled():
+        return None
+    try:
+        tvdb_id = await resolve_tvdb_id(client, media_type="series", tvdb_id_hint=tvdb_id_hint,
+                                        imdb_id=imdb_id, tmdb_id=tmdb_id)
+        if not tvdb_id:
+            return None
+        cache_key = f"status:{_SERIES_STATUS_VERSION}:{tvdb_id}"
+        cached = get_cached_tvdb_json(cache_key)
+        if cached is not None:
+            return None if cached.get("__miss__") else cached
+        async with _get_semaphore():
+            data = await _authed_get(client, f"/series/{tvdb_id}/extended", params={"short": "true"})
+    except Exception as exc:
+        logger.warning(f"TVDB series status failed for {tvdb_id_hint or imdb_id or tmdb_id}: {exc}")
+        return None
+    if not isinstance(data, dict) or not data.get("id"):
+        set_cached_tvdb_json(cache_key, {"__miss__": True}, _SERIES_STATUS_MISS_TTL)
+        return None
+
+    def _day(value) -> str | None:
+        value = str(value or "")
+        return value[:10] if len(value) >= 10 and value[4] == "-" else None
+
+    seasons = sorted({
+        int(s["number"]) for s in data.get("seasons") or []
+        if isinstance(s, dict) and ((s.get("type") or {}).get("type") == "official")
+        and isinstance(s.get("number"), int) and s["number"] > 0
+    })
+    result = {
+        "status": ((data.get("status") or {}).get("name") or "").strip().lower() or None,
+        "next_aired": _day(data.get("nextAired")),
+        "last_aired": _day(data.get("lastAired")),
+        "seasons": seasons,
+    }
+    set_cached_tvdb_json(cache_key, result, _SERIES_STATUS_TTL)
+    return result
+
+
 def _select_by_language(
     items: list[dict],
     languages: list[str] | None,
     *,
     strict: bool = False,
 ) -> dict | None:
-    """Pick the best artwork by language preference. Tries each requested language
-    in turn, then language-neutral, then English. Items are pre-sorted by score.
+    """Pick the best artwork by language preference. Items are pre-sorted by
+    score.  "null" in *languages* stands for language-neutral artwork.
 
-    When ``strict`` is False (backgrounds/posters), an unrelated foreign-language
-    item is accepted as a last resort. When ``strict`` is True (logos), that
-    catch-all is dropped and ``None`` is returned instead — so the caller's
+    When ``strict`` is False (backgrounds/posters), the requested languages are
+    followed by language-neutral, then English, then an unrelated foreign-
+    language item as a last resort.  When ``strict`` is True (logos), the
+    requested list is the whole order — it already says where neutral and
+    English go — and ``None`` is returned when it runs out, so the caller's
     provider chain (TMDB/Metahub) is tried rather than serving, say, a French
     logo for an English title."""
     if not items:
@@ -492,15 +744,18 @@ def _select_by_language(
         if not language:
             continue
         for it in items:
-            if it.get("language") == language:
+            if (it.get("language") in (None, "")) if language == "null" \
+                    else it.get("language") == language:
                 return it
+    if strict:
+        return None
     for it in items:
         if it.get("language") in (None, ""):
             return it
     for it in items:
         if it.get("language") == "eng":
             return it
-    return None if strict else items[0]
+    return items[0]
 
 
 # ---------------------------------------------------------------------------
@@ -530,16 +785,25 @@ def _logo_language_order(
     logo_language: str | None,
     original_language: str | None,
     logo_priority: str,
+    secondary_language: str | None = None,
 ) -> list[str]:
     """Ordered list of TVDB (3-letter) language codes to prefer, derived from the
-    same priority rules TMDB uses so both sources agree on which languages count
-    as a match (and, crucially, which don't).
+    same priority TMDB walks so both sources agree on which languages count as
+    a match (and, crucially, which don't).  "null" is language-neutral; Metahub
+    is not a TVDB source and is left out.
 
     Deduplicated because region collapsing can fold two distinct TMDB entries
     onto one TVDB code — es-mx before es both become spa."""
-    from tmdb import image_language_order
-    order = image_language_order(logo_language or "en", original_language, logo_priority)
-    return list(dict.fromkeys(lang for lang in (_to_tvdb_lang(c) for c in order) if lang))
+    from tmdb import logo_language_steps
+    steps = logo_language_steps(
+        logo_language or "en", original_language, logo_priority, secondary_language
+    )
+    return list(dict.fromkeys(
+        lang
+        for lang in (step if step == "null" else _to_tvdb_lang(step)
+                     for step in steps if step != "metahub")
+        if lang
+    ))
 
 
 async def fetch_tvdb_logo(
@@ -548,11 +812,14 @@ async def fetch_tvdb_logo(
     logo_language: str | None = None,
     original_language: str | None = None,
     logo_priority: str = "native_original",
+    secondary_language: str | None = None,
 ) -> Image.Image | None:
     """Best TVDB clearlogo as an alpha-trimmed RGBA image, or None."""
     chosen = _select_by_language(
         artworks.get("logos", []),
-        _logo_language_order(logo_language, original_language, logo_priority),
+        _logo_language_order(
+            logo_language, original_language, logo_priority, secondary_language
+        ),
         strict=True,
     )
     if not chosen:
@@ -588,6 +855,7 @@ async def tvdb_logo(
     logo_language: str | None = None,
     original_language: str | None = None,
     logo_priority: str = "native_original",
+    secondary_language: str | None = None,
     imdb_id: str | None = None,
     tmdb_id: str | None = None,
     tvdb_id_hint: int | str | None = None,
@@ -611,6 +879,7 @@ async def tvdb_logo(
         logo = await fetch_tvdb_logo(
             client, artworks, logo_language,
             original_language=original_language, logo_priority=logo_priority,
+            secondary_language=secondary_language,
         )
         if logo is not None:
             logger.info(f"TVDB logo rescue succeeded for tvdb_id={tvdb_id}")
@@ -636,15 +905,17 @@ async def fetch_tvdb_backdrop(
         return None
     url = chosen["url"]
     # Reuse TMDB's crop + cache-version scheme so behaviour and invalidation match.
-    from tmdb import _crop_and_normalise_backdrop, normalise_poster, _CROP_VERSION
+    from tmdb import _crop_and_normalise_backdrop, normalise_poster, _CROP_VERSION, poster_canvas, _canvas_suffix
+    size = poster_canvas()
     cache_key = (
         _cache_key_for(url, "backdrop") + f"_{_CROP_VERSION}" + ("_ta" if avoid_text else "")
+        + _canvas_suffix(size)
     )
     cached = get_cached_tmdb_poster(cache_key)
     if cached:
         logger.info(f"TVDB backdrop cache hit for {tvdb_id}")
         image = Image.open(io.BytesIO(cached)).convert("RGBA")
-        if image.size != (POSTER_WIDTH, POSTER_HEIGHT):
+        if image.size != size:
             image = normalise_poster(image)
         return image
 
@@ -657,7 +928,7 @@ async def fetch_tvdb_backdrop(
         logger.warning(f"TVDB backdrop parse failed for {tvdb_id}: {exc}")
         return None
     image = await asyncio.get_running_loop().run_in_executor(
-        None, _crop_and_normalise_backdrop, image, f"tvdb:{tvdb_id}", avoid_text
+        None, _crop_and_normalise_backdrop, image, f"tvdb:{tvdb_id}", avoid_text, size
     )
     buf = io.BytesIO()
     image.convert("RGB").save(buf, format="JPEG", quality=92)
@@ -702,22 +973,33 @@ async def fetch_tvdb_poster(
     artworks: dict[str, list[dict]],
     tvdb_id: int,
     language: str | None = None,
+    *,
+    textless_only: bool = False,
 ) -> Image.Image | None:
-    """Best TVDB poster, normalised to poster dimensions. NOTE: TVDB posters
-    frequently carry burned-in title text — callers must vet with text detection
-    before compositing a logo over one."""
-    _lang = _to_tvdb_lang(language)
-    chosen = _select_by_language(artworks.get("posters", []), [_lang] if _lang else None)
+    """Best TVDB poster, normalised to poster dimensions.
+
+    A language-neutral poster first: TVDB's no-language posters are textless
+    in practice, whatever their includesText flag says, while language-tagged
+    ones nearly all carry the title — and often in a style our text detection
+    misses.  ``textless_only`` stops there; otherwise a poster in *language*
+    comes next (a real poster, title and all, beats a genre canvas).  Callers
+    still vet the result before compositing a logo over it."""
+    posters = artworks.get("posters", [])
+    if textless_only:
+        chosen = _select_by_language(posters, ["null"], strict=True)
+    else:
+        _lang = _to_tvdb_lang(language)
+        chosen = _select_by_language(posters, ["null"] + ([_lang] if _lang else []))
     if not chosen:
         return None
     url = chosen["url"]
-    from tmdb import normalise_poster
-    cache_key = _cache_key_for(url, "poster")
+    from tmdb import normalise_poster, poster_canvas, _canvas_suffix
+    cache_key = _cache_key_for(url, "poster") + _canvas_suffix(poster_canvas())
     cached = get_cached_tmdb_poster(cache_key)
     if cached:
         logger.info(f"TVDB poster cache hit for {tvdb_id}")
         image = Image.open(io.BytesIO(cached)).convert("RGBA")
-        if image.size != (POSTER_WIDTH, POSTER_HEIGHT):
+        if image.size != poster_canvas():
             image = normalise_poster(image)
         return image
 
@@ -744,6 +1026,7 @@ async def tvdb_poster(
     imdb_id: str | None = None,
     tmdb_id: str | None = None,
     tvdb_id_hint: int | str | None = None,
+    textless_only: bool = False,
 ) -> tuple[Image.Image | None, int | None]:
     """One-call poster rescue: resolve id, pull artwork index, return the best
     poster normalised to poster dimensions, plus the resolved id for the caller's
@@ -761,8 +1044,105 @@ async def tvdb_poster(
         if not tvdb_id:
             return None, None
         artworks = await fetch_tvdb_artworks(client, tvdb_id, media_type)
-        image = await fetch_tvdb_poster(client, artworks, tvdb_id, language)
+        image = await fetch_tvdb_poster(
+            client, artworks, tvdb_id, language, textless_only=textless_only)
         return image, tvdb_id
     except Exception as exc:
         logger.warning(f"TVDB poster rescue failed: {exc}")
         return None, None
+
+
+# ---------------------------------------------------------------------------
+# Poster source (poster_source=tvdb) and the dashboard's candidate list
+# ---------------------------------------------------------------------------
+
+_RANDOM_POOL = 5
+_LANG_3_TO_2 = {three: two for two, three in _LANG_2_TO_3.items()}
+# The dashboard's names for TVDB's two Portuguese tags (see _to_tvdb_lang).
+_ART_LANG_3_TO_2 = {**_LANG_3_TO_2, "por": "pt-pt", "pt": "pt-br"}
+
+
+def poster_source_enabled() -> bool:
+    from config import TVDB_POSTER_SOURCE
+    return bool(TVDB_POSTER_SOURCE and tvdb_enabled())
+
+
+async def tvdb_poster_url(
+    client: httpx.AsyncClient,
+    *,
+    media_type: str,
+    tmdb_id: str | None = None,
+    imdb_id: str | None = None,
+    languages: list[str] | None = None,
+    random_top: bool = False,
+    kind: str = "posters",
+) -> str | None:
+    """A TVDB poster url for the tvdb poster source, or None.
+
+    Without *languages*: the best language-neutral poster, which on TVDB means
+    textless.  With *languages* (original-art mode): the best poster in the
+    first of those languages that has one.  *random_top* picks one of the
+    top five instead.  Neither mode trusts includesText.
+
+    ``kind="backgrounds"`` asks the same of the backgrounds, for landscape
+    (landscape_art_source=tvdb).  They are tagged the same way: a language
+    on one that carries the title (key art, a title card), none on clean
+    art.  For them includesText can be trusted where it is false (measured
+    2026-10-01: 12 of 13 tagged "false" were clean, where tagged "true" ones
+    carry text), so an original pick passes over those: drawn as-is, a clean
+    background would leave the title off altogether."""
+    if not poster_source_enabled():
+        return None
+    try:
+        tvdb_id = await resolve_tvdb_id(
+            client, media_type=media_type, imdb_id=imdb_id, tmdb_id=tmdb_id,
+        )
+        if not tvdb_id:
+            return None
+        posters = (await fetch_tvdb_artworks(client, tvdb_id, media_type)).get(kind, [])
+    except Exception as exc:
+        logger.warning(f"TVDB {kind} source failed for {media_type} {tmdb_id}: {exc}")
+        return None
+    if languages is None:
+        pool = [p for p in posters if p.get("language") in (None, "")]
+    else:
+        pool = []
+        for code in dict.fromkeys(_to_tvdb_lang(c) for c in languages if c):
+            pool = [p for p in posters if p.get("language") == code
+                    and not (kind == "backgrounds" and p.get("text") is False)]
+            if pool:
+                break
+    if not pool:
+        return None
+    return (random.choice(pool[:_RANDOM_POOL]) if random_top else pool[0])["url"]
+
+
+async def artwork_candidates(
+    client: httpx.AsyncClient,
+    *,
+    media_type: str,
+    tmdb_id: str | None = None,
+    imdb_id: str | None = None,
+) -> dict[str, list[dict]]:
+    """Every TVDB poster, logo and background for a title, best first, for
+    the dashboard.  Languages come back as the app's 2-letter codes (None =
+    neutral)."""
+    out: dict[str, list[dict]] = {"posters": [], "logos": [], "backdrops": []}
+    if not tvdb_enabled():
+        return out
+    tvdb_id = await resolve_tvdb_id(
+        client, media_type=media_type, imdb_id=imdb_id, tmdb_id=tmdb_id,
+    )
+    if not tvdb_id:
+        return out
+    artworks = await fetch_tvdb_artworks(client, tvdb_id, media_type)
+    for kind, source in (("posters", "posters"), ("logos", "logos"), ("backdrops", "backgrounds")):
+        for art in artworks.get(source, []):
+            code = art.get("language") or None
+            out[kind].append({
+                "path": art["url"],
+                "thumb": art.get("thumb") or art["url"],
+                "language": _ART_LANG_3_TO_2.get(code, code) if code else None,
+                "score": art.get("score", 0),
+            })
+    return out

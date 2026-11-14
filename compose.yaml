@@ -30,6 +30,7 @@ services:
       - TVDB_USE_POSTERS=${TVDB_USE_POSTERS:-false}
       - TVDB_LOGO_PRIORITY=${TVDB_LOGO_PRIORITY:-3}
       - ACCESS_KEY=${ACCESS_KEY:-}
+      - ADMIN_KEY=${ADMIN_KEY:-}
       - WORKERS=${WORKERS:-1}
       - TEXTLESS_DETECTION_CONCURRENCY=${TEXTLESS_DETECTION_CONCURRENCY:-2}
       - TEXTLESS_DETECTION_MAX_VOTES=${TEXTLESS_DETECTION_MAX_VOTES:-3000}
@@ -37,13 +38,16 @@ services:
       - AIOSTREAMS_AUTH=${AIOSTREAMS_AUTH:-}
       - QUALITY_OLD_CACHE_DURATION=${QUALITY_OLD_CACHE_DURATION:-90}
       - QUALITY_BG_CONCURRENCY=${QUALITY_BG_CONCURRENCY:-5}
-      - CDN_CACHE_TTL=${CDN_CACHE_TTL:-0}
+      - CDN_CACHE_TTL=${CDN_CACHE_TTL:-auto}
       - COMPOSITE_CACHE_TTL=${COMPOSITE_CACHE_TTL:-604800}
-      - COMPOSITE_MAX_ENTRIES=${COMPOSITE_MAX_ENTRIES:-0}
+      - COMPOSITE_MAX_ENTRIES=${COMPOSITE_MAX_ENTRIES:-500000}
       - DEFAULT_LOGO_LANGUAGE=${DEFAULT_LOGO_LANGUAGE:-en}
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      # Exec form (no shell) so a probe that overruns is killed outright rather
+      # than leaving an orphaned python3 behind; see the HEALTHCHECK note in
+      # the dockerfile.
+      test: ["CMD", "python3", "-c", "import http.client; c = http.client.HTTPConnection('localhost', 8000, timeout=8); c.request('GET', '/health'); r = c.getresponse(); raise SystemExit(0 if r.status == 200 else 1)"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 15s
