@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+import os
 import re
 from dataclasses import dataclass, fields, replace
 from datetime import date, datetime, timedelta, timezone
@@ -13,6 +14,7 @@ from typing import Any, Callable
 import httpx
 
 import box_office
+import graphic_badges
 import tvdb
 from awards import FETCH_FAILED, _RateLimited, parse_mdblist_awards
 from bingecat_resolver import ResolvedIdentity, resolve_v2_identity
@@ -24,7 +26,6 @@ from discovery import (
     NOTABLE_STUDIOS,
 )
 from integration_contract import (
-    BadgeFactsEnvelope,
     BadgeLogoEntry,
     CONTRACT_SCHEMA,
     CONTRACT_VERSION,
@@ -55,6 +56,7 @@ from render_spec import (
     DataRequirements,
     canonicalize_config,
     compile_requirements,
+    graphic_badge_slots,
 )
 from source_art import (
     STORE_RECIPE_VERSIONS,
@@ -66,11 +68,13 @@ from source_art import (
 from tmdb import (
     V2ArtworkCandidate,
     V2TMDBMetadata,
+    fetch_network_logo_path,
     fetch_v2_metadata,
     fetch_v2_release_status,
     fetch_v2_trending_rank,
     image_language_order,
 )
+from v2_render import badge_logo_choice
 
 ProviderCallable = Callable[..., Any]
 OPTIONAL_MISSING_TTL = timedelta(hours=24)
@@ -105,12 +109,15 @@ class ProviderHooks:
     fetch_release: ProviderCallable
     fetch_tvdb: ProviderCallable
     materialize_art: ProviderCallable
-    # None skips the Blockbuster lookup (tests that wire only the core hooks).
+    # None skips the Blockbuster lookup, the looked-up badge network and the
+    # badge logo download (tests that wire only the core hooks).
     fetch_box_office: ProviderCallable | None = None
+    fetch_network_logo: ProviderCallable | None = None
+    ensure_badge_logo: ProviderCallable | None = None
 
     @classmethod
     def all(cls, value: ProviderCallable) -> "ProviderHooks":
-        return cls(value, value, value, value, value, value, value, value)
+        return cls(*(value,) * len(fields(cls)))
 
 
 @dataclass(frozen=True)
@@ -298,6 +305,8 @@ DEFAULT_HOOKS = ProviderHooks(
     fetch_tvdb=tvdb.fetch_v2_artwork_candidates,
     materialize_art=_default_materialize_art,
     fetch_box_office=box_office.is_blockbuster,
+    fetch_network_logo=fetch_network_logo_path,
+    ensure_badge_logo=graphic_badges.ensure_logo,
 )
 
 
@@ -366,8 +375,14 @@ _TMDB_DERIVED_FACTS = frozenset(
         "is_mini_series",
         "is_binge_ready",
         "release_status",
+        "networks",
+        "companies",
+        "streamer_network",
+        "is_blockbuster",
     }
 )
+# One TMDB group from the details body, as upstream's badge facts.
+_BADGE_LOGO_FACTS = frozenset({"networks", "companies", "streamer_network"})
 
 
 def _badge_logo_entries(rows: tuple[dict, ...]) -> tuple[BadgeLogoEntry, ...]:
@@ -388,32 +403,48 @@ async def _badge_facts(
     metadata: V2TMDBMetadata,
     runtime: EnrichmentRuntime,
     evaluated_at: datetime,
-) -> BadgeFactsEnvelope:
-    """Graphic-badge and Blockbuster facts, a by-product of a TMDB metadata
-    fetch: networks and companies come from the same details body, and the
-    Blockbuster list is one cached call per release year (box_office.py).
+    *,
+    logos: bool = True,
+    blockbuster: bool = True,
+) -> NormalizedFactsEnvelope:
+    """Graphic-badge and Blockbuster facts from one TMDB metadata fetch, as a
+    facts envelope holding only those fields.  BingeCat's off-prod producer
+    calls it too, so its values equal what enrich records.
 
-    No renderer requirement asks for them yet, so they never trigger a provider
-    call of their own, never make a result partial and add no provider status.
-    A Blockbuster list that can't be had leaves the fact absent, not False.
+    ``logos``: networks (series) and companies from the details body, and
+    ``streamer_network``, the network upstream's ``pick_logos`` looks up by id
+    (one cached call per network, ``fetch_network_logo``).  ``blockbuster``:
+    one cached top-grossing list per release year (box_office.py), movies
+    only.  An answer that can't be had leaves its fact absent, never False or
+    a logo-less guess, so the next enrich asks again.
     """
     groups: list[tuple[str, dict[str, Any]]] = []
-    logos: dict[str, Any] = {"companies": _badge_logo_entries(metadata.companies)}
-    if metadata.media_type == "series":
-        logos["networks"] = _badge_logo_entries(metadata.networks)
-    groups.append(("tmdb", logos))
-    lookup = runtime.hooks.fetch_box_office
-    if metadata.media_type == "movie" and lookup is not None and runtime.tmdb_key:
+    if logos:
+        entries: dict[str, Any] = {"companies": _badge_logo_entries(metadata.companies)}
+        if metadata.media_type == "series":
+            entries["networks"] = _badge_logo_entries(metadata.networks)
+        lookup = _badge_network_lookup(entries, metadata.media_type)
+        resolve = getattr(runtime.hooks, "fetch_network_logo", None)
+        if lookup is not None and resolve is not None and runtime.tmdb_key:
+            try:
+                path = await _maybe_await(resolve(runtime.client, lookup, runtime.tmdb_key))
+                if path:
+                    entries["streamer_network"] = BadgeLogoEntry(id=lookup, logo_path=path)
+            except Exception:
+                pass
+        groups.append(("tmdb", entries))
+    top_grossing = runtime.hooks.fetch_box_office
+    if blockbuster and metadata.media_type == "movie" and top_grossing is not None and runtime.tmdb_key:
         try:
             hit = await _maybe_await(
-                lookup(runtime.client, metadata.tmdb_id, metadata.release_date, runtime.tmdb_key)
+                top_grossing(runtime.client, metadata.tmdb_id, metadata.release_date, runtime.tmdb_key)
             )
         except Exception:
             hit = None
         if isinstance(hit, bool):
             groups.append(("tmdb_box_office", {"is_blockbuster": hit}))
     expires_at = evaluated_at + timedelta(days=7)
-    return BadgeFactsEnvelope(
+    return NormalizedFactsEnvelope(
         values={name: value for _source, values in groups for name, value in values.items()},
         provenance=tuple(
             {
@@ -426,6 +457,41 @@ async def _badge_facts(
             for source, values in groups
         ),
     )
+
+
+def _badge_network_lookup(facts: dict[str, Any], media_type: str) -> int | None:
+    """The network id upstream's ``pick_logos`` wants looked up, if any."""
+    rows = {
+        name: [row if isinstance(row, dict) else row.model_dump() for row in facts[name]]
+        for name in ("networks", "companies")
+        if facts.get(name) is not None
+    }
+    return graphic_badges.pick_logos(rows, media_type)[2]
+
+
+def _badge_required_fields(
+    badge_slots: frozenset[str],
+    sash_slots: frozenset[str],
+    media_type: str,
+) -> frozenset[str]:
+    """Facts the graphic badges and the Blockbuster sash need.  A film's
+    network badge also needs ``streamer_network`` when its companies name a
+    streamer studio (``_badge_network_lookup``), checked against the facts."""
+    required: set[str] = set()
+    if "network" in badge_slots:
+        required.add("networks" if media_type == "series" else "companies")
+    if "studio" in badge_slots:
+        required.add("companies")
+    if "cinema" in badge_slots:
+        required.add("release_status")
+    if "blockbuster" in sash_slots and media_type == "movie":
+        required.add("is_blockbuster")
+    return frozenset(required)
+
+
+def _streamer_network_missing(facts: dict[str, Any], media_type: str) -> bool:
+    lookup = _badge_network_lookup(facts, media_type)
+    return lookup is not None and (facts.get("streamer_network") or {}).get("id") != lookup
 
 
 def _render_specs(request: EnrichmentRequest) -> tuple[CanonicalRenderSpec, ...]:
@@ -978,7 +1044,10 @@ async def enrich(
     fact_specs = specs + tuple(spec.fact_spec() for spec in landscape_specs)
     requirements = _requirements(fact_specs)
     sash_slots = _requested_sash_slots(fact_specs)
-    required_fact_fields = _required_fact_fields(sash_slots)
+    badge_slots = frozenset(slot for spec in fact_specs for slot in graphic_badge_slots(spec))
+    required_fact_fields = _required_fact_fields(sash_slots) | _badge_required_fields(
+        badge_slots, sash_slots, request.media.media_type
+    )
     hooks = runtime.hooks
     art_runtime = replace(
         runtime,
@@ -1301,6 +1370,12 @@ async def enrich(
     # a false value and retrying an unrelated provider.
     tmdb_fact_fields -= {"is_just_added"}
     tmdb_facts_missing = tmdb_fact_fields - facts.keys()
+    if (
+        not request.artwork_only
+        and "network" in badge_slots
+        and _streamer_network_missing(facts, request.media.media_type)
+    ):
+        tmdb_facts_missing |= {"streamer_network"}
     release_year_missing = (
         False
         if request.artwork_only
@@ -1325,8 +1400,8 @@ async def enrich(
             genre_missing,
         )
     )
-    release_status_needed = (
-        False if request.artwork_only else bool(_RELEASE_STATUS_SLOTS & sash_slots)
+    release_status_needed = False if request.artwork_only else bool(
+        _RELEASE_STATUS_SLOTS & sash_slots or "release_status" in required_fact_fields
     )
     needs_tmdb_provider = bool(
         missing_art_kinds
@@ -1476,11 +1551,26 @@ async def enrich(
             expires_at=evaluated_at + timedelta(days=7),
         )
 
-    badge_facts = (
-        await _badge_facts(metadata, runtime, evaluated_at)
-        if metadata is not None and not request.artwork_only
-        else None
-    )
+        # Badge facts are refreshed together: a known companies list is never
+        # mixed with a fresh streamer network, nor kept beside fresh networks.
+        badge_missing = tmdb_facts_missing & (_BADGE_LOGO_FACTS | {"is_blockbuster"})
+        if badge_missing:
+            fresh = await _badge_facts(
+                metadata,
+                runtime,
+                evaluated_at,
+                logos=bool(badge_missing & _BADGE_LOGO_FACTS),
+                blockbuster="is_blockbuster" in badge_missing,
+            )
+            values = fresh.values.model_dump(mode="python", exclude_none=True)
+            for group in fresh.provenance:
+                if group.source == "tmdb":
+                    for name in _BADGE_LOGO_FACTS:
+                        facts.pop(name, None)
+                        fact_evidence.pop(name, None)
+                for name in group.fields:
+                    facts[name] = values[name]
+                    fact_evidence[name] = group
 
     if (
         not request.artwork_only
@@ -1604,6 +1694,29 @@ async def enrich(
                     missing_fields=("release_status",),
                 )
             )
+
+    # Core-local badge logo cache (graphic_badges.LOGO_DIR, keyed by the
+    # immutable TMDB logo path): render reads it offline, so the logos these
+    # facts call for are fetched here, the artwork-only lane included.
+    media_type = "series" if provider_media_type in {"tv", "series"} else "movie"
+    badge_logos = [
+        logo
+        for logo in badge_logo_choice(NormalizedFacts.model_validate(facts), media_type, badge_slots)
+        if logo is not None
+    ]
+    if hooks.ensure_badge_logo is not None:
+        for logo in badge_logos:
+            try:
+                await _maybe_await(hooks.ensure_badge_logo(runtime.client, logo))
+            except Exception:
+                pass
+    if any(not os.path.isfile(graphic_badges._logo_file(logo)) for logo in badge_logos):
+        statuses.append(
+            ProviderResultStatus(
+                provider="source_art", status="missing", observed_at=evaluated_at,
+                missing_fields=("badge_logo",), expires_at=evaluated_at + timedelta(hours=6),
+            )
+        )
 
     candidates = list(metadata.candidates if metadata else ())
 
@@ -1978,6 +2091,12 @@ async def enrich(
         missing_normalized.append("genre")
     if (
         not request.artwork_only
+        and "network" in badge_slots
+        and _streamer_network_missing(facts, request.media.media_type)
+    ):
+        missing_normalized.append("streamer_network")
+    if (
+        not request.artwork_only
         and requirements.certification
         and not ({"certification", "age_rating"} & facts.keys())
     ):
@@ -2022,7 +2141,6 @@ async def enrich(
         source_art=tuple(source_art),
         partial=partial,
         retry_at=retry_at,
-        badge_facts=badge_facts,
     )
     if landscape_specs:
         # Only landscape requests get the extra field, so portrait responses

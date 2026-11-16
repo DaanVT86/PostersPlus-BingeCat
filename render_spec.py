@@ -743,6 +743,17 @@ def canonicalize_config(raw: Mapping[str, Any]) -> CanonicalRenderSpec:
     return replace(spec, **portrait_options({**asdict(spec), **{name: extensions[name] for name in PORTRAIT_DEFAULTS if name in extensions}}))
 
 
+def graphic_badge_slots(spec: CanonicalRenderSpec) -> frozenset[str]:
+    """The graphic-badge slots this spec draws; none outside mode 7."""
+    if spec.badge_display_mode != GRAPHIC_BADGE_MODE:
+        return frozenset()
+    return frozenset(
+        slot
+        for name in GRAPHIC_BADGE_GROUPS
+        for slot in (parse_badge_group(getattr(spec, name)) or {"slots": ()})["slots"]
+    )
+
+
 def compile_requirements(spec: CanonicalRenderSpec) -> DataRequirements:
     """Derive only the external facts that can affect this visual config."""
     sash_visible = spec.show_award_sash and spec.sash_mode != "hidden"
@@ -765,11 +776,7 @@ def compile_requirements(spec: CanonicalRenderSpec) -> DataRequirements:
         ratings=ratings,
         awards=sash_visible and bool(slots & {"wins", "gg_wins", "festival", "pic_noms", "gg_noms"}),
         keywords=sash_visible and bool(slots & {"cult", "true_story", "metacritic"}),
-        certification=spec.badge_display_mode == 3 or (
-            spec.badge_display_mode == GRAPHIC_BADGE_MODE
-            and any("cert" in (parse_badge_group(getattr(spec, name)) or {"slots": ()})["slots"]
-                    for name in GRAPHIC_BADGE_GROUPS)
-        ),
+        certification=spec.badge_display_mode == 3 or "cert" in graphic_badge_slots(spec),
         trending=sash_visible and bool(slots & {"trending", "trending_broad"}),
         lifecycle=sash_visible and bool(slots & {"new_season", "returning", "premiere", "just_added", "season_finale", "short_film", "mini_series", "binge_ready", "cinema", "streaming", "physical", "production", "ended", "cancelled", "airing"}),
         release=sash_visible and bool(slots & {"new_release", "cinema", "streaming", "physical"}),
