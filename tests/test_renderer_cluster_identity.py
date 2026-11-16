@@ -73,7 +73,8 @@ def test_policy_is_separate_but_unknown_policy_cannot_reuse_byte_approval():
 def test_manifest_covers_whole_badge_module_and_explicit_portrait_dependencies():
     assert ("rating_badges.py", ("*",)) in render.RENDERER_REVISION_CODE_ROOTS
     roots = dict(render.RENDERER_REVISION_CODE_ROOTS)["render_spec.py"]
-    assert set(roots) == {"PORTRAIT_DEFAULTS", "BADGE_PROVIDERS", "portrait_options", "badge_layout", "weighted_rating_needed"}
+    assert set(roots) == {"PORTRAIT_DEFAULTS", "BADGE_PROVIDERS", "portrait_options", "badge_layout",
+                          "weighted_rating_needed", "graphic_badge_slots"}
 
 
 def test_revision_startup_guard_is_outside_identity_and_fails_on_mismatch():

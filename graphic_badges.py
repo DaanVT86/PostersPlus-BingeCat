@@ -24,8 +24,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
 import logging
 import os
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -875,16 +877,74 @@ def pick_logos(facts: dict | None, media_type: str) -> tuple[Logo | None, Logo |
     return network, studio, lookup
 
 
+# Every distribution cairosvg's import and rasterisation load (CSS parsing and
+# matching, the XML parser, the cffi binding to native cairo).  Pillow is in
+# v2_render._image_library_versions.
+SVG_RASTER_DISTRIBUTIONS = (
+    "CairoSVG", "cairocffi", "cffi", "pycparser",
+    "cssselect2", "tinycss2", "webencodings", "defusedxml",
+)
+
+
+def svg_raster_backend() -> dict:
+    """cairosvg draws SVG badge marks and logos through cairocffi, which loads
+    native cairo itself, so pycairo's absence says nothing about it."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    def _dist(name: str) -> str:
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return "unavailable"
+
+    try:
+        import cairocffi
+        import cairosvg  # noqa: F401
+
+        native_cairo = cairocffi.cairo_version_string()
+    except Exception:
+        native_cairo = "unavailable"
+    return {
+        "available": native_cairo != "unavailable",
+        "native_cairo": native_cairo,
+        "versions": {name: _dist(name) for name in SVG_RASTER_DISTRIBUTIONS},
+    }
+
+
+@lru_cache(maxsize=1)
+def svg_raster_fingerprint() -> str:
+    """The rasteriser an SVG logo's cached PNG was made with (per process)."""
+    payload = json.dumps(svg_raster_backend(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def _logo_file(logo: Logo) -> str:
+    """A raster TMDB logo is immutable by path.  An SVG one is cached as the
+    PNG this rasteriser made, so the rasteriser is part of its name: after an
+    upgrade a kept cache volume can't serve another rasteriser's pixels."""
     stem = os.path.splitext(os.path.basename(logo.path))[0]
+    if logo.path.endswith(".svg"):
+        stem = f"{stem}.svg-{svg_raster_fingerprint()}"
     return os.path.join(LOGO_DIR, f"{logo.kind}_{logo.id}_{stem}.png")
+
+
+def logo_file_ok(logo: Logo) -> bool:
+    """Whether the cached logo is there and decodes as a non-empty image."""
+    try:
+        with Image.open(_logo_file(logo)) as im:
+            im.load()
+            return im.width > 0 and im.height > 0
+    except Exception:
+        return False
 
 
 async def ensure_logo(client, logo: Logo | None) -> None:
     """Download a network or studio logo once, as a PNG.  SVG logos are
     rasterised here so rendering never needs cairosvg for them.  A failure
-    leaves the badge out and is retried on the next request."""
-    if logo is None or os.path.exists(_logo_file(logo)):
+    leaves the badge out and is retried on the next request; so is a cached
+    file that doesn't decode.  Each writer has its own temporary file and
+    publishes it whole with one atomic rename."""
+    if logo is None or logo_file_ok(logo):
         return
     try:
         if logo.path.endswith(".svg"):
@@ -901,10 +961,17 @@ async def ensure_logo(client, logo: Logo | None) -> None:
         logger.warning(f"Graphic badges: {logo.kind} logo {logo.id} fetch failed: {exc}")
         return
     os.makedirs(LOGO_DIR, exist_ok=True)
-    tmp = _logo_file(logo) + ".part"
-    with open(tmp, "wb") as fh:
-        fh.write(png)
-    os.replace(tmp, _logo_file(logo))
+    fd, tmp = tempfile.mkstemp(dir=LOGO_DIR, prefix=".logo-", suffix=".part")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(png)
+        os.replace(tmp, _logo_file(logo))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # A shape that is mostly one solid block (a badge, a shield: Marvel Studios'
@@ -1044,23 +1111,39 @@ def logo_size(shape: tuple[int, int], row_h: int, fill: float = _LOGO_FILL,
     return max(1, round(w)), max(2, round(h))
 
 
-@lru_cache(maxsize=128)
+class _NoLogoMark(Exception):
+    pass
+
+
 def _logo_mark(logo: Logo, h: int, scale: float = 1.0) -> Image.Image | None:
+    """The logo's white mark.  A miss is never memoised, so a logo that is
+    downloaded or repaired later is drawn without a restart."""
+    try:
+        return _loaded_logo_mark(logo, h, scale)
+    except _NoLogoMark:
+        return None
+
+
+@lru_cache(maxsize=128)
+def _loaded_logo_mark(logo: Logo, h: int, scale: float = 1.0) -> Image.Image:
     path = _logo_file(logo)
     if not os.path.exists(path):
-        return None
+        raise _NoLogoMark
     try:
         a = logo_alpha(Image.open(path))
     except Exception as exc:
         logger.error(f"Graphic badges: {logo.kind} logo {logo.id} unreadable: {exc}")
-        return None
+        raise _NoLogoMark from exc
     if a.shape[0] < 2:
-        return None
+        raise _NoLogoMark
     fill = float(a.mean()) / 255
     m = Image.fromarray(a).resize(logo_size(a.shape, h, fill, scale), Image.Resampling.LANCZOS)
     out = Image.new("RGBA", m.size, (255, 255, 255, 0))
     out.putalpha(m)
     return out
+
+
+_logo_mark.cache_clear = _loaded_logo_mark.cache_clear
 
 
 # ---------------------------------------------------------------------------

@@ -23,11 +23,13 @@ from typing import Any, Mapping
 import PIL
 from PIL import Image, ImageOps, features
 
+import graphic_badges
 from integration_contract import (
     CONTRACT_SCHEMA,
     CONTRACT_VERSION,
     ImmutableRenderSnapshot,
     MediaIdentity,
+    NormalizedFacts,
     ProviderRating,
     RenderInputBundle,
     RenderResultMetadata,
@@ -49,6 +51,7 @@ from render_spec import (
     DataRequirements,
     canonicalize_config,
     badge_layout,
+    graphic_badge_slots,
     weighted_rating_needed,
     compile_requirements,
 )
@@ -175,7 +178,7 @@ RENDERER_REVISION_CODE_ROOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("config.py", ("SCORE_NORMALISERS", "LANDSCAPE_WIDTH", "LANDSCAPE_HEIGHT")),
     ("render_spec.py", (
         "PORTRAIT_DEFAULTS", "BADGE_PROVIDERS", "portrait_options",
-        "badge_layout", "weighted_rating_needed",
+        "badge_layout", "weighted_rating_needed", "graphic_badge_slots",
     )),
     ("age_badge.py", (
         "draw_quality_age_badge", "draw_quality_corner_bookmark", "draw_tier_bar", "_score_points",
@@ -573,6 +576,7 @@ _SLOT_FACT_FIELDS = {
     "short_film": "is_short_film",
     "mini_series": "is_mini_series",
     "binge_ready": "is_binge_ready",
+    "blockbuster": "is_blockbuster",
     "cinema": "release_status",
     "streaming": "release_status",
     "physical": "release_status",
@@ -659,6 +663,8 @@ def _selected_sash_fact(
             matched = bool(facts.is_mini_series)
         elif slot == "binge_ready":
             matched = bool(facts.is_binge_ready)
+        elif slot == "blockbuster":
+            matched = bool(facts.is_blockbuster)
         elif slot in {
             "cinema",
             "streaming",
@@ -790,6 +796,50 @@ def _displayed_upcoming_date(
         return False
 
 
+_UPCOMING_PAIR = frozenset({"upcoming_release_date", "upcoming_release_window"})
+
+
+def _cinema_home_date(snapshot: ImmutableRenderSnapshot) -> date | None:
+    """The cinema badge's date, as upstream: a film in cinemas (or not out)
+    shows its first home release, a series in production its premiere; only
+    a date not yet past at the snapshot clock, from a pair fresh at it."""
+    facts = snapshot.facts.values
+    event, window, status = (
+        facts.upcoming_release_date, facts.upcoming_release_window, facts.release_status,
+    )
+    if event is None or not (
+        window == "streaming" and status in {"cinema", "production"}
+        or window == "airing" and status == "production"
+    ):
+        return None
+    instant = snapshot.evaluated_at
+    if event < instant.astimezone(timezone.utc).date():
+        return None
+    fresh = any(
+        _UPCOMING_PAIR <= set(group.fields) and group.checked_at <= instant < group.expires_at
+        for group in snapshot.facts.provenance
+    )
+    return event if fresh else None
+
+
+def _graphic_badge_fact_fields(
+    spec: CanonicalRenderSpec,
+    snapshot: ImmutableRenderSnapshot,
+) -> frozenset[str]:
+    """Facts the mode 7 network, studio and cinema slots draw from."""
+    slots = graphic_badge_slots(spec)
+    used: set[str] = set()
+    if "network" in slots:
+        used.update({"networks", "companies", "streamer_network"})
+    if "studio" in slots:
+        used.add("companies")
+    if "cinema" in slots:
+        used.add("release_status")
+        if _cinema_home_date(snapshot) is not None:
+            used.update(_UPCOMING_PAIR)
+    return frozenset(used)
+
+
 def _used_fact_fields(
     spec: CanonicalRenderSpec,
     requirements: DataRequirements,
@@ -797,9 +847,15 @@ def _used_fact_fields(
     *,
     base_reference: SourceArtReference | None,
     logo_reference: SourceArtReference | None,
+    include_graphic_badges: bool = True,
 ) -> frozenset[str]:
+    """``include_graphic_badges=False`` leaves out what only the graphic badges read:
+    upstream gives the sash, the greyscale and the sash date no release
+    status that just the cinema badge asked for."""
     populated = set(snapshot.facts.values.model_dump(mode="python", exclude_none=True))
     used: set[str] = set()
+    if include_graphic_badges:
+        used.update(_graphic_badge_fact_fields(spec, snapshot))
     if requirements.release_year:
         used.add("release_year")
     if requirements.certification:
@@ -1227,6 +1283,9 @@ def _discovery_meta(
             bool(facts.is_season_finale) if "is_season_finale" in used_fields else False
         ),
         is_cult=bool(facts.is_cult) if "is_cult" in used_fields else False,
+        is_blockbuster=(
+            bool(facts.is_blockbuster) if "is_blockbuster" in used_fields else False
+        ),
         is_true_story=(
             bool(facts.is_true_story) if "is_true_story" in used_fields else False
         ),
@@ -1242,6 +1301,57 @@ def _discovery_meta(
         ),
         release_status=release_status,
     )
+
+
+def badge_logo_choice(
+    facts: NormalizedFacts,
+    media_type: str,
+    slots: frozenset[str],
+) -> tuple[graphic_badges.Logo | None, graphic_badges.Logo | None]:
+    """(network, studio) logos the graphic badges draw, upstream's
+    ``pick_logos`` answered from the facts alone: the looked-up network is
+    the ``streamer_network`` fact, so neither enrich nor render guesses."""
+    network, studio, lookup = graphic_badges.pick_logos(
+        facts.model_dump(mode="python", include={"networks", "companies"}, exclude_none=True),
+        media_type,
+    )
+    if lookup is not None:
+        streamer = facts.streamer_network
+        network = (
+            graphic_badges.make_logo("network", lookup, streamer.logo_path)
+            if streamer is not None and streamer.id == lookup and streamer.logo_path
+            else None
+        )
+    return (
+        network if "network" in slots else None,
+        studio if "studio" in slots else None,
+    )
+
+
+def _badge_logos(
+    bundle: RenderInputBundle,
+    spec: CanonicalRenderSpec,
+) -> tuple[graphic_badges.Logo | None, graphic_badges.Logo | None]:
+    """Render reads Core's local logo cache only (filled by enrich, keyed by
+    the immutable TMDB path).  A logo the facts call for but the cache lacks,
+    or holds unreadable, is a conflict, so the caller re-enriches instead of
+    losing the badge."""
+    logos = badge_logo_choice(
+        bundle.snapshot.facts.values, bundle.media.media_type, graphic_badge_slots(spec),
+    )
+    if any(logo is not None and not graphic_badges.logo_file_ok(logo) for logo in logos):
+        raise RenderConflict("missing_badge_logo")
+    return logos
+
+
+def _cinema_run(
+    spec: CanonicalRenderSpec,
+    snapshot: ImmutableRenderSnapshot,
+) -> graphic_badges.CinemaRun | None:
+    status = snapshot.facts.values.release_status
+    if "cinema" not in graphic_badge_slots(spec) or status not in {"cinema", "production"}:
+        return None
+    return graphic_badges.CinemaRun(status.title(), _cinema_home_date(snapshot))
 
 
 def _fallback_canvas(engine, genre: str, style: str) -> Image.Image:
@@ -1293,6 +1403,16 @@ def _compose(
         # chip takes it as ``certification`` and int()s ``age_rating``.
         age_rating = certification
     score = _score(spec, bundle, used_ratings)
+    # The sash, its date and the greyscale read only what they asked for.
+    sash_fact_fields = _used_fact_fields(
+        spec,
+        compile_requirements(spec),
+        bundle.snapshot,
+        base_reference=base_reference,
+        logo_reference=logo_reference,
+        include_graphic_badges=False,
+    )
+    badge_logos = _badge_logos(bundle, spec)
     labels_token = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
     try:
         rendered = engine.build_poster(
@@ -1302,7 +1422,7 @@ def _compose(
             _request_config(engine, spec, bundle.locale),
             logo=logo,
             fallback_title=fallback_title,
-            discovery_meta=_discovery_meta(engine, spec, bundle, used_fact_fields),
+            discovery_meta=_discovery_meta(engine, spec, bundle, sash_fact_fields),
             quality_tokens=[],
             release_year=(
                 str(facts.release_year) if "release_year" in used_fact_fields else None
@@ -1310,10 +1430,12 @@ def _compose(
             age_rating=age_rating,
             certification=certification,
             no_poster=base_reference is None,
+            badge_logos=badge_logos,
+            cinema_run=_cinema_run(spec, bundle.snapshot),
             metacritic_score=_metacritic_score(used_ratings),
             ratings=_badge_ratings(bundle, used_ratings),
             **({"sash_date_label": f"{facts.upcoming_release_window.title()} · {facts.upcoming_release_date.isoformat()}"}
-               if "upcoming_release_date" in used_fact_fields else {}),
+               if "upcoming_release_date" in sash_fact_fields else {}),
         )
     finally:
         engine.i18n.BUNDLED_LABELS_ONLY.reset(labels_token)
@@ -1461,38 +1583,9 @@ def _image_library_versions() -> dict[str, str]:
     return versions
 
 
-# Every distribution cairosvg's import and rasterisation load (CSS parsing and
-# matching, the XML parser, the cffi binding to native cairo).  Pillow is in
-# _image_library_versions.
-_SVG_RASTER_DISTRIBUTIONS = (
-    "CairoSVG", "cairocffi", "cffi", "pycparser",
-    "cssselect2", "tinycss2", "webencodings", "defusedxml",
-)
-
-
-def _svg_raster_backend() -> dict[str, Any]:
-    """cairosvg draws SVG badge marks and logos through cairocffi, which loads
-    native cairo itself, so pycairo's absence says nothing about it."""
-    from importlib.metadata import PackageNotFoundError, version
-
-    def _dist(name: str) -> str:
-        try:
-            return version(name)
-        except PackageNotFoundError:
-            return "unavailable"
-
-    try:
-        import cairocffi
-        import cairosvg  # noqa: F401
-
-        native_cairo = cairocffi.cairo_version_string()
-    except Exception:
-        native_cairo = "unavailable"
-    return {
-        "available": native_cairo != "unavailable",
-        "native_cairo": native_cairo,
-        "versions": {name: _dist(name) for name in _SVG_RASTER_DISTRIBUTIONS},
-    }
+# The SVG rasteriser's identity lives with the logo cache that keys on it.
+_SVG_RASTER_DISTRIBUTIONS = graphic_badges.SVG_RASTER_DISTRIBUTIONS
+_svg_raster_backend = graphic_badges.svg_raster_backend
 
 
 def _compute_semantic_revision(
@@ -2132,6 +2225,7 @@ __all__ = [
     "RenderError",
     "RenderInputError",
     "RenderUnavailable",
+    "badge_logo_choice",
     "canonical_landscape_snapshot_sha256",
     "canonical_snapshot_sha256",
     "landscape_preset_catalog",
