@@ -58,11 +58,11 @@ APPROVED_POLICY_REVISION = "e0857c57098953ff71207c7173957d03769fba4067cda156dcc0
 APPROVED_SOURCE_RECIPE_REVISION = "91cac721c050ee45072277ad4afe3e3880243c478fa73638acf18bfe92ef82ca"
 # Library-independent portrait code identity (code roots + assets + config) of
 # R2, the upstream sync of 2026-11 with the graphic-badge and Blockbuster
-# projection (R1 at base was 3.11 6def692e…, 3.12 980745e7…; the sync alone
+# projection and logo cache fixes (R1 at base was 3.11 6def692e…, 3.12 980745e7…; the sync alone
 # 3.12 748de619…).  ``ast.dump`` differs per Python minor, hence the map; the
 # R2 image runs 3.14, pinned once it is built.
 PORTRAIT_CODE_IDENTITY = {
-    (3, 12): "04ed094da1138a875b14a175568666503ae736c3fb735a97ae0e0d0f9b536640",
+    (3, 12): "46add3a5731a3f88c37f937c887a42806eb8cf1ab0239a7efc3aee4059152fad",
 }
 IN_APPROVED_RUNTIME = render.RENDERER_BUILD_FINGERPRINT == APPROVED_FINGERPRINT
 

@@ -389,3 +389,93 @@ def test_snapshot_hash_ignores_badge_facts_for_specs_that_do_not_draw_them():
     for drawn in (_canonical_config(**GROUPS),
                   _canonical_config(show_award_sash=True, sash_mode="sash", sash_priority=["blockbuster"])):
         assert digest(drawn, with_badges) != digest(drawn, without)
+
+
+# --- logo cache ------------------------------------------------------------------
+
+
+def _png_bytes() -> bytes:
+    import io
+
+    buffer = io.BytesIO()
+    image = Image.new("RGBA", (240, 80), (0, 0, 0, 0))
+    image.paste((240, 240, 245, 255), (10, 10, 230, 70))
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class _Client:
+    def __init__(self, payload: bytes, barrier=None):
+        self.payload, self.barrier, self.urls = payload, barrier, []
+
+    async def get(self, url, timeout=None):
+        self.urls.append(url)
+        if self.barrier is not None:
+            await asyncio.to_thread(self.barrier.wait)
+        return SimpleNamespace(content=self.payload, raise_for_status=lambda: None)
+
+
+def test_concurrent_logo_writers_each_publish_a_whole_file(monkeypatch):
+    import os
+    import threading
+
+    payload, writers = _png_bytes(), 8
+    logo = graphic_badges.make_logo("company", 420, MARVEL["logo_path"])
+    client = _Client(payload, threading.Barrier(writers))
+    published, real_replace = [], os.replace
+
+    def replace_spy(src, dst):
+        published.append((src, os.path.getsize(src)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(graphic_badges.os, "replace", replace_spy)
+    threads = [threading.Thread(target=lambda: asyncio.run(graphic_badges.ensure_logo(client, logo)))
+               for _ in range(writers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(published) == writers
+    assert len({src for src, _ in published}) == writers           # one temp file per writer
+    assert {size for _, size in published} == {len(payload)}       # never a partial publish
+    assert Path(graphic_badges._logo_file(logo)).read_bytes() == payload
+    assert [p.name for p in Path(graphic_badges.LOGO_DIR).iterdir()] == [
+        Path(graphic_badges._logo_file(logo)).name]
+
+
+def test_an_unreadable_cached_logo_is_a_conflict_and_is_repaired():
+    config = _canonical_config(**GROUPS)
+    facts = _envelope(({"companies": [MARVEL]},))
+    logo = graphic_badges.make_logo("company", 420, MARVEL["logo_path"])
+    path = Path(graphic_badges._logo_file(logo))
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"")                                          # a zero-byte publish
+    with pytest.raises(render.RenderConflict) as raised:
+        render.render(_bundle(config, facts))
+    assert raised.value.code == "missing_badge_logo"
+    assert graphic_badges._logo_mark(logo, 22) is None
+    asyncio.run(graphic_badges.ensure_logo(_Client(_png_bytes()), logo))
+    assert graphic_badges.logo_file_ok(logo)
+    # The miss above was not memoised: the repaired logo is drawn at once.
+    assert graphic_badges._logo_mark(logo, 22) is not None
+
+
+def test_svg_logo_cache_name_carries_the_rasteriser_fingerprint(monkeypatch):
+    import importlib.metadata
+
+    svg = graphic_badges.make_logo("network", 213, "/netflix.svg")
+    png = graphic_badges.make_logo("company", 420, MARVEL["logo_path"])
+    graphic_badges.svg_raster_fingerprint.cache_clear()
+    before = (graphic_badges._logo_file(svg), graphic_badges._logo_file(png))
+    assert f".svg-{graphic_badges.svg_raster_fingerprint()}.png" in before[0]
+    real_version = importlib.metadata.version
+    monkeypatch.setattr(importlib.metadata, "version",
+                        lambda dist: "0.0-test" if dist == "CairoSVG" else real_version(dist))
+    graphic_badges.svg_raster_fingerprint.cache_clear()
+    try:
+        after = (graphic_badges._logo_file(svg), graphic_badges._logo_file(png))
+    finally:
+        monkeypatch.undo()
+        graphic_badges.svg_raster_fingerprint.cache_clear()
+    assert after[0] != before[0]                                   # another rasteriser, another file
+    assert after[1] == before[1]                                   # raster logos: immutable by path
