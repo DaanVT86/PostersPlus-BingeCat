@@ -21,6 +21,7 @@ from pydantic import (
     StrictBool,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -690,6 +691,42 @@ class EnrichmentRequest(ContractDTO):
         return self
 
 
+# Graphic-badge facts (upstream graphic_badges / Blockbuster sash).  They sit
+# outside NormalizedFacts on purpose: NormalizedFacts is inside the render
+# policy identity (ImmutableRenderSnapshot), so a new field there would change
+# RENDERER_REVISION.  No renderer reads these yet; they are reported by enrich
+# only, and the renderer bump that draws them moves them into the snapshot.
+BadgeFactField = Literal["companies", "is_blockbuster", "networks"]
+TMDBLogoPath = Annotated[
+    str,
+    StringConstraints(max_length=128, pattern=r"^/[A-Za-z0-9_-]{1,100}\.(?:png|svg|jpg|jpeg)$"),
+]
+
+
+class BadgeLogoEntry(StrictModel):
+    """A TMDB network or production company, as upstream ``_logo_entries``."""
+
+    id: Annotated[int, Field(strict=True, ge=1, le=DB_INTEGER_MAX)]
+    logo_path: TMDBLogoPath | None = None
+
+
+class BadgeFacts(StrictModel):
+    is_blockbuster: StrictBool | None = None
+    networks: tuple[BadgeLogoEntry, ...] | None = Field(default=None, max_length=16)
+    companies: tuple[BadgeLogoEntry, ...] | None = Field(default=None, max_length=32)
+
+
+class BadgeFactProvenance(FactProvenance):
+    fields: tuple[BadgeFactField, ...] = Field(min_length=1, max_length=3)
+
+
+class BadgeFactsEnvelope(NormalizedFactsEnvelope):
+    """Same values/provenance shape and rules as the sash facts envelope."""
+
+    values: BadgeFacts = Field(default_factory=BadgeFacts)
+    provenance: tuple[BadgeFactProvenance, ...] = Field(default=(), max_length=3)
+
+
 class EnrichmentResult(ContractDTO):
     media: MediaIdentity
     evaluated_at: AwareDatetime
@@ -700,6 +737,15 @@ class EnrichmentResult(ContractDTO):
     source_art: tuple[SourceArtReference, ...] = Field(default=(), max_length=24)
     partial: StrictBool = False
     retry_at: AwareDatetime | None = None
+    badge_facts: BadgeFactsEnvelope | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_badge_facts(self, handler):
+        # Responses without badge facts stay byte-identical to before.
+        data = handler(self)
+        if self.badge_facts is None:
+            data.pop("badge_facts", None)
+        return data
 
     @field_validator("titles_by_locale")
     @classmethod
@@ -790,6 +836,10 @@ class RenderResultMetadata(ContractDTO):
 __all__ = [
     "ArtRole",
     "ArtworkLocator",
+    "BadgeFactField",
+    "BadgeFacts",
+    "BadgeFactsEnvelope",
+    "BadgeLogoEntry",
     "CONTRACT_SCHEMA",
     "CONTRACT_VERSION",
     "MAX_JSON_BODY_BYTES",
