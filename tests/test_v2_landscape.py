@@ -56,11 +56,13 @@ APPROVED_FINGERPRINT = "a7ed1df863f30aab040b1ab6d005cf5918268fea5de6cf7ccb7b0652
 PORTRAIT_RENDERER_REVISION = "260504a9d0d0daa577848316c51518c5de78c4110642bac621cc92d3538f2b29"
 APPROVED_POLICY_REVISION = "e0857c57098953ff71207c7173957d03769fba4067cda156dcc08238e35fc5be"
 APPROVED_SOURCE_RECIPE_REVISION = "91cac721c050ee45072277ad4afe3e3880243c478fa73638acf18bfe92ef82ca"
-# Library-independent portrait code identity (code roots + assets + config),
-# also captured at base.  ``ast.dump`` differs per Python minor, hence the map.
+# Library-independent portrait code identity (code roots + assets + config) of
+# R2, the upstream sync of 2026-11 with the graphic-badge and Blockbuster
+# projection and logo cache fixes (R1 at base was 3.11 6def692e…, 3.12 980745e7…; the sync alone
+# 3.12 748de619…).  ``ast.dump`` differs per Python minor, hence the map; the
+# R2 image runs 3.14, pinned once it is built.
 PORTRAIT_CODE_IDENTITY = {
-    (3, 11): "6def692e5c3b7b88d5f61b5bb32fcd789d0ffbe537b7b30863d93a4bde6a3878",
-    (3, 12): "980745e7b8a1367910f4d959d879a27bc6c4874300145df9534bb2ebeb49e0d8",
+    (3, 12): "46add3a5731a3f88c37f937c887a42806eb8cf1ab0239a7efc3aee4059152fad",
 }
 IN_APPROVED_RUNTIME = render.RENDERER_BUILD_FINGERPRINT == APPROVED_FINGERPRINT
 
@@ -87,6 +89,7 @@ def test_portrait_renderer_revision_is_byte_identical(monkeypatch):
     if expected is None:
         pytest.skip("no pinned portrait code identity for this Python version")
     monkeypatch.setattr(render, "_image_library_versions", lambda: {"pinned": "environment-independent"})
+    monkeypatch.setattr(render, "_optional_render_backends", lambda: {"pinned": "environment-independent"})
     assert render._compute_renderer_build_fingerprint() == expected
 
 

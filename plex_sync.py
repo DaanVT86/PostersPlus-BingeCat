@@ -81,7 +81,8 @@ configurator's "Copy URL" button — e.g.
     POSTERSPLUS_URL="http://localhost:8000/poster?bar_style=frosted&sash_badge_inset=0.000&..."
 — in which case every one of those query parameters (gradients, bar/badge
 styles, weighting profiles, everything) is applied as a default to every
-synced poster. Only tmdb_id/imdb_id/type/quality/primary_client are always
+synced poster. Only tmdb_id/type/quality/primary_client (and imdb_id, when the
+item has one) are always
 computed per-item and override whatever the recipe URL says for those keys.
 """
 
@@ -483,14 +484,43 @@ def inspect_item(item) -> None:
 # PostersPlus fetch
 # ---------------------------------------------------------------------------
 
-def build_poster_request(*, imdb_id: str | None, tmdb_id: str | None, media_type: str, quality_tokens: list[str]) -> httpx.Request:
+# Keys travel as query params on PostersPlus and Jellyfin URLs; log lines
+# (and an httpx error's text, which quotes the full URL) must not carry them.
+_SECRET_PARAMS = ("access_key", "tmdb_key", "mdblist_key", "api_key", "apikey", "X-Emby-Token")
+
+
+def _redacted_url(url) -> str:
+    url = httpx.URL(str(url))
+    for name in _SECRET_PARAMS:
+        if name in url.params:
+            url = url.copy_set_param(name, "REDACTED")
+    return str(url)
+
+
+def _describe_http_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} from {_redacted_url(exc.request.url)}"
+    try:
+        where = f" ({_redacted_url(exc.request.url)})"
+    except (AttributeError, RuntimeError):   # no request attached
+        where = ""
+    return f"{type(exc).__name__}{where}"
+
+
+def build_poster_request(*, imdb_id: str | None, tmdb_id: str, media_type: str, quality_tokens: list[str]) -> httpx.Request:
     # Start from whatever recipe defaults came from POSTERSPLUS_URL (gradients,
     # bar/badge styles, weighting profiles, ...), then layer the per-item
     # dynamic values on top — those five always win, since a value baked into
     # a copy-pasted recipe URL (e.g. a literal tmdb_id, or a stale `quality`)
     # would be wrong for every title except the one the URL was copied from.
     params = dict(POSTERSPLUS_RECIPE_DEFAULTS)
+    # A recipe url copied from the configurator may itself contain an
+    # imdb_id. Drop it before layering ours on: for an item with no IMDb
+    # id of its own it would otherwise survive and stamp one title's IMDb
+    # id onto every TMDB-only item in the library.
+    params.pop("imdb_id", None)
     params.update({
+        "tmdb_id": tmdb_id,
         "type": media_type,
         # No-op today (only Stremio profiles exist server-side as of this
         # writing) but forward-looking: a "plex" entry has been added to
@@ -499,8 +529,9 @@ def build_poster_request(*, imdb_id: str | None, tmdb_id: str | None, media_type
         # primary_client a copy-pasted Stremio recipe URL might specify.
         "primary_client": "plex",
     })
-    if tmdb_id:
-        params["tmdb_id"] = tmdb_id
+    # Optional: Plex has no IMDb id for every item. tmdb_id identifies the
+    # title on its own; sending imdb_id when we do have it keys the rating
+    # cache by IMDb id, which shares the row with every other client.
     if imdb_id:
         params["imdb_id"] = imdb_id
     if quality_tokens:
@@ -549,62 +580,6 @@ def fetch_poster_bytes(request: httpx.Request, client: httpx.Client) -> bytes:
     return resp.content
 
 
-def fetch_poster_response(request: httpx.Request, client: httpx.Client) -> httpx.Response:
-    # Keep the response headers so sync state can remember the server's
-    # canonical identity when PostersPlus had to resolve missing IDs.
-    resp = client.send(request)
-    resp.raise_for_status()
-    return resp
-
-
-def build_sync_fingerprint(
-    *,
-    imdb_id: str | None,
-    tmdb_id: str | None,
-    media_type: str,
-    quality_tokens: list[str],
-) -> str:
-    return (
-        f"imdb={imdb_id or ''}:tmdb={tmdb_id or ''}:type={media_type}:"
-        f"quality={','.join(quality_tokens)}:{RECIPE_FINGERPRINT}"
-    )
-
-
-def canonical_fingerprint_from_headers(
-    headers: httpx.Headers,
-    *,
-    fallback_imdb_id: str | None,
-    fallback_tmdb_id: str | None,
-    fallback_media_type: str,
-    quality_tokens: list[str],
-) -> str | None:
-    imdb_id = headers.get("x-postersplus-imdb-id") or fallback_imdb_id
-    tmdb_id = headers.get("x-postersplus-tmdb-id") or fallback_tmdb_id
-    media_type = headers.get("x-postersplus-type") or fallback_media_type
-    if not (imdb_id or tmdb_id):
-        return None
-    return build_sync_fingerprint(
-        imdb_id=imdb_id,
-        tmdb_id=tmdb_id,
-        media_type=media_type,
-        quality_tokens=quality_tokens,
-    )
-
-
-def state_fingerprint_matches(stored: object, request_fingerprint: str) -> bool:
-    if stored == request_fingerprint:
-        return True
-    if isinstance(stored, dict):
-        return request_fingerprint == stored.get("request") or request_fingerprint == stored.get("canonical")
-    return False
-
-
-def state_fingerprint_value(request_fingerprint: str, canonical_fingerprint: str | None) -> object:
-    if canonical_fingerprint and canonical_fingerprint != request_fingerprint:
-        return {"request": request_fingerprint, "canonical": canonical_fingerprint}
-    return request_fingerprint
-
-
 # ---------------------------------------------------------------------------
 # Sync
 # ---------------------------------------------------------------------------
@@ -628,8 +603,11 @@ def iter_library_items(plex):
 def sync_item(item, *, client: httpx.Client, state: dict, dry_run: bool) -> str:
     """Sync one item; returns a short status string used for the run summary."""
     imdb_id, tmdb_id = extract_ids(item)
-    if not (imdb_id or tmdb_id):
-        logger.info(f"Skipping {item.title!r} — no imdb or tmdb id in Plex metadata")
+    # tmdb_id alone is enough: it identifies the title to PostersPlus. imdb_id is
+    # optional enrichment, and plenty of library items legitimately have no IMDb
+    # guid — skipping them left those posters unsynced for no reason.
+    if not tmdb_id:
+        logger.info(f"Skipping {item.title!r} — no tmdb id in Plex metadata")
         return "skipped (no ids)"
 
     media_type = "movie" if item.TYPE == "movie" else "tv"
@@ -659,28 +637,24 @@ def sync_item(item, *, client: httpx.Client, state: dict, dry_run: bool) -> str:
     # and triggers a re-render/re-upload on the next run — rather than the
     # old behaviour of skipping every item forever because only the ids and
     # quality tokens were tracked, not the rendering recipe itself.
-    fingerprint = build_sync_fingerprint(
-        imdb_id=imdb_id,
-        tmdb_id=tmdb_id,
-        media_type=media_type,
-        quality_tokens=quality_tokens,
-    )
+    # Same string as before for any item that has an IMDb id, so switching to
+    # the optional form does not invalidate a single cached fingerprint.
+    fingerprint = f"{imdb_id or f'tmdb:{tmdb_id}'}:{tmdb_id}:{','.join(quality_tokens)}:{RECIPE_FINGERPRINT}"
     state_key = str(item.ratingKey)
-    if state_fingerprint_matches(state.get(state_key), fingerprint):
+    if state.get(state_key) == fingerprint:
         return "unchanged"
 
     request = build_poster_request(
         imdb_id=imdb_id, tmdb_id=tmdb_id, media_type=media_type, quality_tokens=quality_tokens,
     )
     if dry_run:
-        logger.info(f"[dry-run] {item.title!r}: quality={quality_tokens or '(none)'} -> {request.url}")
+        logger.info(f"[dry-run] {item.title!r}: quality={quality_tokens or '(none)'} -> {_redacted_url(request.url)}")
         return "would sync"
 
     try:
-        poster_response = fetch_poster_response(request, client)
-        image_bytes = poster_response.content
+        image_bytes = fetch_poster_bytes(request, client)
     except httpx.HTTPError as exc:
-        logger.warning(f"Poster fetch failed for {item.title!r}: {exc}")
+        logger.warning(f"Poster fetch failed for {item.title!r}: {_describe_http_error(exc)}")
         return "error (fetch)"
 
     try:
@@ -689,16 +663,7 @@ def sync_item(item, *, client: httpx.Client, state: dict, dry_run: bool) -> str:
         logger.warning(f"Poster upload failed for {item.title!r}: {exc}")
         return "error (upload)"
 
-    state[state_key] = state_fingerprint_value(
-        fingerprint,
-        canonical_fingerprint_from_headers(
-            poster_response.headers,
-            fallback_imdb_id=imdb_id,
-            fallback_tmdb_id=tmdb_id,
-            fallback_media_type=media_type,
-            quality_tokens=quality_tokens,
-        ),
-    )
+    state[state_key] = fingerprint
     logger.info(f"Synced poster for {item.title!r} (quality={quality_tokens or 'none'})")
     return "synced"
 

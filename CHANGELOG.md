@@ -1,5 +1,2133 @@
 # Changelog
 
+## Unreleased
+
+### Graphic badges: hide instead of move
+
+- New **Overflow** setting under Graphic Badges (`badge_overflow=move|hide`,
+  short `bof`; landscape's own `landscape_badge_overflow` / `_bof`). Move
+  (default) is the old behaviour: a group whose line is taken by the sash,
+  logo, rating or another group slides on to the next line with room. Hide
+  keeps it on its own line and drops the badges that don't fit there, the
+  whole group when none do.
+
+### Separate MDBList key for the watchlist
+
+- New `MDBLIST_WATCHLIST_API_KEY` (dashboard: Watchlist group, shown when
+  the source is `mdblist`). With `WATCHLIST_SOURCE=mdblist` it reads that
+  key's account watchlist instead of `MDBLIST_API_KEY`'s, so a personal
+  account's watchlist can be used without that key also spending its quota on
+  ratings and cache warming. Blank keeps the old behaviour.
+
+### Python 3.14 and Pillow 13
+
+- The image runs Python 3.14 (was 3.11) and Pillow 13 (was 11.3), which fixes
+  Pillow's MIC frame-count loop and unbounded PDF recursion (CVE-2026-112390,
+  CVE-2026-112391). Text measures about a pixel narrower under Pillow 13, so
+  info strips and labels can sit a pixel off from posters rendered before.
+- Dependabot now also watches the Python packages in `requirements.txt`.
+
+### Landscape trending rows
+
+- The Trending Catalogs Addon can serve any of its catalogs in landscape.
+  In the trending **Configure** dialog, now wider, each list has portrait and
+  landscape icons at its right; the addon URL gains an `sh-` segment naming
+  the landscape catalogs (`sh-m:tmdb.imdb`). Instances that don't let
+  visitors pick lists show a **Landscape Rows** picker under the URL instead,
+  one per type. Those catalogs' items hand out 16:9 art as their poster, marked
+  `posterShape: "landscape"`, so a client installed straight from the URL
+  lays them out in landscape. With your poster settings in the URL the art
+  is your landscape poster; without them it is the title's backdrop (TMDB's,
+  or AniList's banner). A title with no backdrop keeps its portrait poster.
+  AIOMetadata sets its rows' shape itself and doesn't read this yet.
+
+### Other addons' ids carrying an IMDb id
+
+- A `stremio_id` that PostersPlus doesn't recognise but that holds exactly
+  one IMDb id as a whole segment now renders that title instead of a 400.
+  This covers Halloween After Dark's episode rows
+  (`had:episode:tt13491734:6:6`, previously blank tiles) and plain Stremio
+  episode ids (`tt0121955:1:2`). Only a `tt…` id is taken this way, since a
+  bare number could be any kind of id. An id with two different IMDb ids, or
+  in a namespace that has its own parser (`kitsu:`, `tmdb:`, `tvdb:`,
+  `anilist:`, `mal:`), is left as it was.
+
+### MDBList ratings in bulk
+
+- Ratings are fetched up to 200 titles to a request. The cache warmer
+  collects every stale title as it walks the candidate list and rates them
+  in a handful of bulk requests instead of one request each, so a cycle of
+  1,000 stale titles costs 5 requests instead of 1,000. Live renders that
+  miss the rating cache within 100 ms of each other (a catalog page asking
+  for its posters) share one request too. A client's own `mdblist_key` is
+  only ever batched with requests made on that same key. MDBList's bulk
+  endpoint is not documented: if it answers with an error or anything it
+  can't read, bulk is turned off for an hour and ratings go back to one
+  request per title. Rate limits are handled as before.
+  A bulk answer has no digital release date, so it never overwrites the one
+  an earlier single request remembered.
+- `CACHE_WARM_MDBLIST_BUDGET` counts requests, so a bulk request is one call
+  however many titles it rates; the default of 500 now only bites when bulk is
+  off. How many titles a cycle walks is set by `CACHE_WARM_TMDB_BUDGET` alone —
+  an MDBList budget above the TMDB one no longer lengthens the candidate list.
+- The bulk answer has no keywords, so the badges that came from them no
+  longer depend on them. Cult Classic, the festival top prizes (Cannes,
+  Venice, Berlin, Locarno, Sundance) and Oscar Winner / Nominee come from
+  lists derived from Wikipedia (CC BY-SA 4.0), matched by IMDb id and
+  bundled in `data/`. The cult list has about 2,600 films, where MDBList's
+  keyword missed many obvious ones. Rebuild the lists with
+  `tools/build_award_lists.py`. Based on a True Story comes from TMDB's
+  keywords, fetched in the details call already made and kept with the
+  title's TMDB metadata; metadata cached before this release is fetched again
+  once, the next time it is read, so the badge doesn't wait out the week. Metacritic Must-See
+  is read off the score: 81 or more from at least 15 critics. A listed
+  festival winner gets the top-prize label ("Palme d'Or") even when TMDB's
+  id isn't on the older id lists.
+- These flags are worked out when the poster is drawn rather than stored
+  with the rating, so a list update reaches every title at once, and only
+  posters whose list membership changed are re-rendered. The keyword flags
+  still count as a fallback for this release.
+
+### Reword sash labels from the dashboard
+
+- The admin dashboard has a **Sash labels** view: pick a poster language
+  and change what any sash says ("New Season", "#{rank} Today",
+  "Streams {month} {day}") without editing `languages/`. A blank box keeps
+  the bundled translation. Templates must keep their placeholders; the save
+  is refused otherwise. Saved to `SASH_LABELS_PATH`
+  (`/app/cache/sash_labels.json`) in the cache volume, picked up by every
+  worker within seconds, and posters re-render as they are next requested.
+
+### Up Next rows in Nuvio
+
+- AIOMetadata's Up Next, Resume and Unwatched rows (MDBList, Trakt, Simkl,
+  PublicMetaDB) now get posters in Nuvio. Their items carry ids such as
+  `mdblist_upnext_tmdb:2190_S1E1` or `upnext_tt0121955_trakt123`. From
+  those, Nuvio fills only `{id}`, so every request was refused for having
+  no title id and the tile stayed blank. `stremio_id` is now unwrapped to
+  the show's own id and renders as a plain row of that show would.
+- A `tmdb:<id>` `stremio_id` with no `tmdb_id` alongside now names the
+  TMDB entry, as a `tt…` one already named the IMDb id.
+
+### More landscape settings of its own
+
+- The graphic badges' looks (Quality, Certificate and Logo style, Cinema
+  style, Logo size), the rating badges' Show At Most, Badge Scores and
+  Badge Style, the label order and the sash priority list are now kept
+  per shape, like the vignette and Hide switches: set them in landscape
+  view and the portrait keeps its own. Until you change one in landscape
+  it follows the portrait, so existing URLs render as before. New URL
+  parameters `landscape_badge_quality_style` (`_bqs`),
+  `landscape_badge_cert_style` (`_bcts`), `landscape_badge_logo_style`
+  (`_blgs`), `landscape_badge_cinema_style` (`_bcs`),
+  `landscape_badge_logo_scale` (`_bls`), `landscape_rating_badge_max`
+  (`_rbm`), `landscape_rating_badge_scale` (`_rbs`),
+  `landscape_rating_badge_style` (`_rbst`), `landscape_meta_order` (`_mo`)
+  and `landscape_sash_priority` (`_sp`).
+- Fixed: the landscape trending ribbon took its text colour from the
+  portrait sash's Text Colour, which landscape view didn't show. The field
+  now shows in landscape view for a ribbon and sets the ribbon's colour
+  alone (`landscape_sash_text_color`, `_stc`).
+
+### Send to AIOMetadata
+
+- **Copy config → Send to AIOMetadata…** (right-click or long press) sets
+  your AIOMetadata poster pattern for you: paste your AIOMetadata install
+  URL and enter its password, and the configurator loads your AIOMetadata
+  config, swaps in the current poster URL and saves it back. No reinstall
+  is needed. One `{shape}` URL covers portrait and landscape, so a
+  landscape pattern that pointed at this server is cleared to follow it;
+  one pointing elsewhere is left alone. Your password and the config go
+  from your browser straight to AIOMetadata and never reach Posters+.
+  After a successful send your browser's password manager offers to save
+  the install URL and password, so next time it is fill and Send.
+  Instances with an addon password ask for it too. If the config was
+  saved somewhere else in the meantime, AIOMetadata refuses the change
+  instead of overwriting it. An AIOMetadata behind a login proxy
+  (Authelia, Pangolin…) needs `/api/config/load/`, `/api/config/update/`
+  and `/api/config/is-trusted/` let through; AIOMetadata still checks the
+  password on them.
+
+### Landscape rating badge sites of its own
+
+- **Rating Badges → Own Sites** (landscape view) gives the landscape its own
+  list of rating sites, Movie / TV / Anime choices included, instead of
+  sharing the portrait's. A `{shape}` URL can then show, say, three badges
+  on the poster and one on the wide art. Show At Most, Badge Scores and
+  Badge Style stay shared. Off by default; existing URLs render as before.
+  New URL parameter `landscape_rating_badge_list` (`_rbl`).
+
+### Shorter rating weights in poster URLs
+
+- The rating-weight lists name each source by a short code (`mw=lb:.8,rt:.2`
+  for `movie_weights=letterboxd:0.80,tomatoes:0.20`), and generated URLs keep
+  `:` and `,` unescaped. A heavily customised URL with all four weight lists
+  drops by about a quarter (one report went from ~2080 to ~1600 characters
+  with keys), back under Bingecat's limit. Old URLs still work and
+  render the same cached posters.
+
+### Portuguese (Portugal) and trending catalog limit
+
+- **Native Language** offers **Portuguese (Portugal)** (`pt-pt`). Plain
+  Portuguese takes the best-rated Portuguese art whatever its region, which
+  is usually Brazil's; `pt-pt` takes art tagged for Portugal only, so
+  original-art posters stop coming out Brazilian.
+- TVDB keeps Brazil's Portuguese art (`pt`) apart from Portugal's (`por`):
+  Portuguese (Brazil) now gets Brazil's TVDB art instead of Portugal's.
+- fanart.tv tags art by language only, so a regional language (`pt-pt`,
+  `fr-fr`, `es-mx`…) takes its base language's fanart.tv art instead of
+  dropping straight to English.
+- Operators: `TRENDING_MAX_PICKS` (dashboard → Trending, default 8, up to
+  30) sets how many catalogs a visitor may pick per list type.
+- Ticking a list in the trending **Configure** dialog counts anywhere inside
+  its box; a click on the box's padding used to do nothing.
+  A box that can't be ticked because its type is at the limit is greyed out.
+
+### Sash dates read word first
+
+- Every dated sash puts its word before the date, as "Streams Oct 23"
+  always did: `Cinema Oct 16`, `Physical Nov 3`, `Season 3 Mar 4`,
+  `Returns Jan 8` (issue 36). Polish and Swahili follow suit; the other
+  languages already did.
+- An unaired series reads `Premieres Dec 25`, and the **Premiere** sash
+  for a series that started in the last fortnight shows when:
+  `Premiered Oct 2` (with Show Date on).
+- **Premiere** moves below **Airing** in the default sash order, so a new
+  series on air shows its next episode (`Airing Oct 15`). Saved orders
+  keep the positions they were saved with.
+
+### Next episode date on Airing
+
+- The **Airing** sash shows when the next episode airs: `Airing Oct 15`.
+  On by default; **Release Status: Next Episode Date** turns it off
+  (`airing_dates=false`). TMDB sends the date with the series details, so it costs no
+  extra API calls. With a list of the shows you watch, the posters work as
+  a simple airing calendar.
+- A season that premiered shortly after a show's details were cached read
+  as an undated **Renewed** for up to a week, and on the premiere day
+  itself, instead of **Airing**. A series' cached details now refresh as
+  soon as its next episode airs, and a few hours later when TMDB was still
+  listing an aired episode as next.
+- A show whose season finale aired in the last fortnight no longer reads
+  **Airing**: a finale TMDB has marked ends the run there, and the show is
+  Renewed if its next season is listed (no status if not).
+
+### Landscape Rating Bar and Bar
+
+- Landscape has a **Display Mode** of its own in the Rating tab
+  (`landscape_rating_mode`). **Info Line** is the line as it was. **Rating
+  Bar** draws the score as a bar along the bottom edge, in the style of a
+  continue-watching progress bar, in the portrait Rating Bar's palette and
+  glow; the line still prints the score. **Bar** is the portrait's Bar mode
+  across the bottom, with its styles, Append choices and sliders, and the
+  logo stands on it. Each shape keeps its own palette, glow and Bar
+  settings.
+- The configurator hides options that do nothing in the current setup:
+  **Order** lists only the fields the mode prints (Clean has no year), and
+  one of each pair of orders that would draw the same; the Colour Palette
+  only where it colours something (Minimalist's Year layout); score out of
+  10 where a number is printed; Rating Separator choices that rating badges
+  replace; the Bar's Colour Saturation and Reference Colour on its black
+  styles; and empty graphic badge groups' placement and size.
+
+### Age rating by country
+
+- The graphic badges' **Certificate** can show any country's age rating
+  instead of the US one: pick **Age Rating Country** under Graphic Badges
+  (`badge_cert_country=GB`), and it shows as that country's board issues
+  it (UK 12A, Germany 16, Australia MA 15+). TMDB already sent every
+  country's rating with the call that fetched the US one, so this costs no
+  extra API calls. A title with no rating for that country shows MDBList's
+  age (`14+`) as before, or nothing.
+
+### Frosted age rating and logos
+
+- The graphic badges' **Certificate** and **Network / Studio** logos can be
+  frosted, like the quality badges: **Age Rating Style** and **Network /
+  Studio Logo Style** under Graphic Badges (`badge_cert_style=frosted`,
+  `badge_logo_style=frosted`) put each on a chip of the frosted notch's
+  glass, on both shapes. A logo is sized to sit inside its chip; a **Logo
+  Size** above 1.00 grows the chip with it.
+- **Network / Studio Logo Size** moved to **Layout**, beside the groups'
+  size and spacing sliders.
+
+### Fixes
+
+- Rating badges can be limited to **Anime Movie** and **Anime TV** separately:
+  the single **Anime** toggle is now two, so Letterboxd can show on anime
+  films and IMDb on anime series (`rating_badges=letterboxd:mf,imdb:ts`).
+  Before, both counted every anime title as "Anime", so the badge order
+  decided which one an anime series got. An existing `:a` still means both.
+- Landscape frosted graphic badges (quality chips, cinema disc) follow the
+  Badge Settings' glass **Opacity** and **Colour Saturation**. They were
+  reading the portrait notch's, which landscape doesn't show. The two
+  sliders now show whenever frosted chips or the disc are on, even with a
+  dark info badge, which hides them otherwise.
+
+### Bullet + Star rating separator
+
+- **Rating Separator** has a fourth choice, **Bullet + Star**, on portrait
+  (Minimalist) and landscape: a bullet divides the score off like the rest
+  of the line, and a star labels it (`Sci-Fi • 1999 • ★ 84`)
+  (`minimalist_rating_separator` / `landscape_rating_separator=bullet_star`).
+
+### Landscape Anime Provider Source and Backdrop Pick
+
+- Landscape gets its own **Anime Provider Source**: **Kitsu** uses an
+  anime's own wide Kitsu cover art as its backdrop (for an AniList id, the
+  matching Kitsu entry's) when it is big enough for 16:9 and has no
+  lettering, with your logo on top; otherwise the TMDB backdrop stays, as
+  with **As Requested**. TMDB, Fanart and TVDB were already the landscape
+  Anime Source.
+- **Backdrop Pick** (Top or Random top 5), where the operator allows random
+  posters, now works in landscape too, across TMDB, TVDB and Fanart
+  backdrops (`landscape_poster_pick=random`).
+
+### Shorter poster URLs
+
+- Copied poster URLs are about 60% shorter for the same settings: every
+  setting has a short name (`vpcb` for `vignette_poster_color_bottom`) and
+  on/off settings are `1`/`0`, so a heavily customised URL stays well
+  inside the ~2000 characters some metadata clients cut URLs at. The
+  server reads either spelling as the same poster and the same cache entry,
+  so every existing URL keeps working; the dashboard's Reports still show
+  settings by their full names. URL_REFERENCE.md lists the short names.
+- A copied poster URL carries only the trending list each type ranks on,
+  not every catalog ticked for the Trending addon (the posters only ever
+  read that one). Saved settings and Share links still keep the full pick.
+
+### Choose your trending lists
+
+- **Original Language** in the trending **Configure** dialog keeps only titles first made in the
+  languages ticked on the Movies and Series lists: English, Global
+  (non-English), Japanese, Korean, Spanish, French, German or Hindi
+  (`trending_list=l:ko.ja`). Ranks are numbered without gaps after the cut,
+  the catalog's name says which languages, and anime lists are unaffected.
+- **Streaming Top 10** in the trending **Configure** dialog: pick a country and a service and
+  add its daily Top 10 as a catalog, for 119 countries and 80+ services:
+  Hulu, Peacock, Tubi, Starz, AMC+ and more in the US, every country's
+  Netflix, Disney+, Prime Video, Apple TV+, HBO Max and Paramount+, a real
+  Shudder Top 10 in the US, UK and Canada, Crunchyroll's for the anime
+  lists, and worldwide charts. These are FlixPatrol's charts as the
+  fp-crawler project publishes them daily, the same ones AIOMetadata's Top
+  10 catalogs use (`TRENDING_TOP10_URL` points at a mirror if needed). A
+  service with only a mixed chart (Shudder, Crunchyroll) gives each list
+  its own kind of title from it. If the charts can't be read, each catalog
+  keeps its last list rather than going empty.
+- **Shudder** as a source for Movies and Series: **Shudder Popular** (what
+  streams on Shudder in the US, by TMDB popularity) and **New on Shudder**
+  (the same, released or airing in the last two years). No chart of
+  Shudder's viewing is public, so these are read from TMDB with the
+  server's key, and offered only when it has one.
+- Lists people have picked are now refreshed in the background while
+  they're in use (asked for in the last two days), so the first request
+  after a list expires no longer waits 1-2 seconds or more for it to be
+  rebuilt.
+
+- The Trending Catalogs Addon has a **Configure** button. Tick any number
+  of sources for Movies, Series, Anime and Anime Movies, and each becomes a
+  catalog of its own: **TMDB** Today and This Week, **IMDb** Most Popular,
+  **Trakt** Trending (and Trending Digital for movies), **SIMKL** Today and
+  This Week, **JustWatch** and **Rotten Tomatoes** Popular, **Television
+  Stats**, the US **Top 10s** of Netflix, Prime Video, Apple TV+, Disney+,
+  Paramount+ and HBO Max, and for anime AniList, SIMKL and Trakt. None of them
+  needs a key. The addon numbers each catalog's posters by that catalog's
+  own list, so every row it draws agrees. Posters drawn through your poster
+  URL instead (AIOMetadata's poster pattern, Nuvio's override) can show only
+  one rank, so with two or more lists ticked for a type, **Poster URL Ranks** at the
+  bottom picks which of the ticked lists that is.
+  Untick everything to drop a type's catalog. **Not out at home yet** leaves
+  unreleased titles off every list.
+- The pick rides in the poster URL (`trending_list=m:imdb.tmdb,h:1`, the
+  ranking list first) and in the addon URL as a `tl-<pick>` segment. Each
+  source's catalog has its own id (`pp.trending.movie.imdb`); the instance's
+  own list keeps the plain one, so an install that picks nothing is unchanged.
+- Only the menu can be picked from, so the lists an instance builds are
+  bounded by it, not by its visitors: everyone who picks alike shares one
+  list, built when first asked for and refreshed when it is due, and a pick
+  nobody has asked for in a week is dropped. Only the ranking lists key a
+  render, so extra catalogs don't split the poster cache.
+- IMDb and Trakt are read from the MDBList user snoak's daily mirrors of them
+  (as are JustWatch, Rotten Tomatoes, Television Stats and the Top 10s),
+  since IMDb blocks scripts and Trakt needs an API key; SIMKL from its own
+  hourly lists.
+- Operators: `TRENDING_LIST_CHOICE` (on by default) turns the picking off,
+  `TRENDING_LIST_SOURCES` chooses which public lists are offered, and
+  `TRENDING_SOURCE_CHOICES` adds lists of their own as `type|Name|URL`.
+
+### Trending rank on landscape
+
+- Landscape posters can show a trending rank as the portrait's **Number** or
+  **Ribbon** in place of the `#N Today` badge, which then shows the next
+  label (`landscape_trending_style=number|ribbon`). The Trending Rank group
+  now shows in the landscape view and keeps its own values per shape, so a
+  `{shape}` URL's landscape side is unchanged until it picks a mark.
+  **Sash / Notch with Rank** applies to the badge: Do Nothing moves it clear
+  of the mark, Hide drops it, Opposite Side moves a top-corner badge across.
+  Landscape offers the two corners only.
+
+### Landscape badge shape and case
+
+- The landscape info badge has a **Badge Shape**: the **Pill** it has been,
+  or the portrait's side **Chip**, a rounded rectangle
+  (`landscape_badge_shape=pill|chip`). **Label Case**
+  (`landscape_badge_case=auto|upper|mixed`) sets the label in capitals or in
+  mixed case (`Oscar Winner`); Auto keeps capitals on the pill and gives the
+  chip mixed case, as on a portrait. Existing posters are unchanged.
+- The landscape info line has its own **Separator** between the genre and
+  the year: Bullet, or the portrait's **Bar**
+  (`landscape_separator=bullet|pip`). Rating Separator still sets the one in
+  front of the score.
+
+### Landscape rating separator
+
+- The landscape info line's score can be set off by the portrait's **Bar**
+  as well as a bullet or a star: **Rating Separator**
+  (`landscape_rating_separator=bullet|pip|star`) replaces the Star beside
+  score switch, whose `landscape_score_star=true` still means Star. Posters
+  with a bullet or star keep their cached renders.
+- Landscape's Rating tab is one **Labels** group: Placement, Order, Rating
+  Separator, Info Size, then the switches.
+
+### Long translated labels fit
+
+- In Clean, Bar and the accent bar, a label line too wide for the poster
+  (a long translated genre such as "Документальный ★ 79", or the accent
+  bar's genre, year and sash together in any language) is drawn smaller to
+  fit instead of running off both edges. Lines that fit are unchanged; the
+  posters that could have overflowed re-render once.
+
+### Arabic, Persian and Urdu
+
+- Poster text can be in **Arabic**, **Persian** and **Urdu** (★ in the
+  language lists), drawn right to left with their letters joined. They are
+  drawn in **Almarai**, a new Font choice, whichever font is chosen (Rubik,
+  when chosen, keeps the Arabic and Persian it has); a text title standing
+  in for a missing logo switches the same way. Arabic and Persian posters
+  write the trending rank, release dates, season numbers and the year in
+  their own digits (`#٨ اليوم`, `٢٠٢٦`); scores and ratings keep 0-9.
+- **Title's Own Language** (`original_labels`, off by default): titles first
+  made in the listed languages get their labels in that language, and their
+  original title when the title is drawn as text, while every other poster
+  stays in the Native Language. `original_labels=ar` puts an Arabic film's
+  genre, sash and title in Arabic and leaves Hollywood films in English.
+  Any fully translated language can be listed.
+- Arabic-script badge and sash text sits in the middle of its line, as Latin
+  text does; it was a little low. Those posters re-render once.
+- Thanks to @aRamadi (issue 40), whose Arabic branch this takes its Arabic
+  wording, the Almarai choice, the native digits and Title's Own Language
+  from.
+- The image now installs `libfribidi0`, which turns on Pillow's raqm layout.
+  Only these three languages use it; every other poster is drawn exactly as
+  before. Their diagonal sash is drawn on the slower PIL path (about 17 ms
+  more), since Skia can't join the letters. Posters in these languages
+  cached before now re-render.
+
+### Anime Provider Source
+
+- New **Anime Provider Source** under Artwork (`anime_provider_art`), for
+  titles requested by an AniList, Kitsu or MAL id. **As Requested** (default)
+  keeps that provider's cover. **Kitsu** or **AniList** swaps in the other
+  provider's cover. **TMDB**, **Fanart** and **TVDB** draw the matching TMDB
+  title's art under the usual rules (textless pick, logo on top, operator
+  artwork overrides). The provider still supplies the title, genres, dates and
+  score. TMDB, Fanart and TVDB apply to films and a show's first season;
+  later seasons, parts and specials (Sword Art Online II, say) keep the
+  requested provider's cover, since TMDB lists them all under one show.
+  The title has to be in the anime id mapping database, or the request
+  has to carry a TMDB id; otherwise the requested provider's cover is used.
+  Portrait only, since landscape already uses TMDB backdrops.
+
+### Landscape: centred info line
+
+- New **Centre info line** switch in the landscape Info Line group
+  (`landscape_info_center=true`). It centres the whole `Genre • Year • Score`
+  line, rating badges included, on the poster, as Minimalist's Centre under
+  logo does on a portrait. A side logo in the bottom row that would meet it
+  stands above it instead; a narrower one keeps its place. Off by default.
+
+### Blockbuster sash
+
+- New `blockbuster` sash for a film among the ten highest-grossing films of
+  its release year (TMDB worldwide revenue) that grossed at least $100M in
+  today's money (adjusted for US inflation to its year, so about $17M for
+  1975). Ranking within the year keeps older hits like Jaws in, where a flat
+  figure would shut them out. It sits first in the static tier, just above Cult
+  Classic. The first film from each year costs one TMDB lookup of that year's
+  top grossers, cached and reused for every film from that year. Operators
+  can change the count and the floor with `BLOCKBUSTER_TOP_N` and
+  `BLOCKBUSTER_MIN_REVENUE`.
+- Saved URLs that list every sash explicitly keep their list, so the new sash
+  stays off for them until it's enabled in the configurator, as with any
+  newly added sash.
+
+### Landscape vignette levels, as on a poster
+
+- The landscape poster's Vignette settings are now the portrait's: Top and
+  Bottom levels (None, Low, Medium, High, Custom), Top and Bottom Colour
+  from Poster, and Vignette Only On Sash, kept per shape. The bottom band
+  can now be turned off or lightened, and either band can be plain black
+  rather than tinted. Defaults render as before: bottom High and tinted,
+  top off (tinted when turned on).
+- New `landscape_top_gradient`, `landscape_bottom_gradient` (and their
+  custom height and opacity), `landscape_vignette_poster_color_top` and
+  `landscape_top_vignette_sash_only`. A landscape render reads only these,
+  never the portrait's plain names, so existing landscape URLs are
+  unchanged. `landscape_vignette_top=true` still works as a tinted High top.
+
+### Landscape Badge Settings
+
+- The landscape badge gets the portrait notch's settings that fit a pill, in
+  a Badge Settings group with Badge Size: Width, Height, Font Size, Opacity
+  and Colour Saturation for the glass, Opacity for the dark styles, and
+  Horizontal / Vertical Position (`landscape_badge_width`, `_height`,
+  `_font`, `_glass_opacity`, `_saturation`, `_opacity`, `_x`, `_y`). The
+  defaults draw the badge as before.
+
+### Extras tab: Graphic Badges only, the old badges as a Legacy slot
+
+- The configurator's Quality tab is now Extras, and Graphic Badges are its
+  only mode, behind a Show Badges switch. The older modes (Quality Notch,
+  Bookmark, Badge Row, Combined Badge, Quality Age Rating, Age Rating Only)
+  are the styles of a new Legacy badge (`legacy` slot,
+  `badge_legacy_style`), placed by the four groups like any other badge.
+- The Legacy bookmark hangs from its group's corner, a bottom one included,
+  and the groups lay out around it.
+- Importing a URL with an old `badge_display_mode` converts it to its
+  Legacy style, alone in group 1 at the spot it was drawn. Old URLs still
+  render as before on the server.
+
+### Art source per media type, for posters and landscape, and Cinemeta
+
+- The art source is now three dropdowns, Movie, Series and Anime, in both
+  shapes: `poster_source_movie` / `_tv` / `_anime` for posters and
+  `landscape_art_source_movie` / `_tv` / `_anime` for landscape. Each picks
+  TMDB, Fanart, TVDB or Cinemeta, and a title the source has nothing for
+  keeps its TMDB art. Anime is Japanese animation, or a title requested by
+  an AniList, Kitsu or MAL id. The old `poster_source` and
+  `landscape_art_source` still work and set all three (`fanart_anime` sets
+  Fanart for anime only), so existing URLs render, and cache, as before.
+- Cinemeta is the Metahub art Stremio shows by default (#45, thanks
+  @alpinezx). Its posters all carry the title, in English, so for posters
+  it is offered with Original art only; its backgrounds never do, so for
+  landscape it is offered with Textless + Logo only. Needs no key; offered
+  while `CINEMETA_ENABLED` is on. An OA Poster override in Admin > Artwork
+  can be ticked for Cinemeta to replace a wrong Metahub poster.
+- Portrait's Original Art switch is now an Art dropdown (Textless + Logo or
+  Original), as landscape's is, and its Primary / Top-rated pick is labelled
+  TMDB Poster. The URL parameters are unchanged.
+- A Metahub image that 404s after its existence check now clears that check
+  for the title's IMDb id even when the request only carried a TMDB id, so
+  the next render re-checks instead of failing until the cache runs out.
+
+### TMDB Read Access Tokens work as a key
+
+- TMDB's settings page lists two credentials, and pasting the longer "API
+  Read Access Token" (`eyJ...`) as `tmdb_key` or `TMDB_API_KEY` used to half
+  work: TMDB rejects it as the `api_key` parameter, so titles already cached
+  rendered while others failed with a 502 or fell back to Cinemeta (#47).
+  It is now sent as a Bearer header, which TMDB accepts, everywhere a key is
+  used, the configurator included.
+- A `tmdb_key=` that TMDB rejects is answered with a 401 saying so, also when
+  it fails on the IMDb or TVDB id lookup. That used to fall back to Cinemeta
+  or TVDB without a word, so a bad key looked like poorer posters.
+
+### Later anime seasons get their own landscape art
+
+- In landscape, an anime's later seasons and cours no longer all share the
+  show's one TMDB backdrop. A season the id mapping places after the show's
+  start (or one found through its prequel) takes Kitsu's cover image of that
+  season, cut to 16:9, when it is big enough and carries no title, else
+  TMDB's still of the season's first episode, else the show's backdrop as
+  before. Requests by AniList id borrow the Kitsu cover through the mapping.
+  An operator's Artwork pick for the show still wins. `ANIME_SEASON_ART`
+  (Anime sources, on by default) turns it off.
+- Covers with lettering are left out by a recogniser check of their own
+  (the poster text rules pass a cover whose middle is a kanji logo). It
+  catches most, not all: a heavily stylised title can still get through.
+- The configurator's search finds anime seasons and titles TMDB doesn't
+  list. Kitsu is searched alongside TMDB (or Cinemeta): a show's later
+  seasons, cours and specials appear under it ("Jujutsu Kaisen" → Season 2,
+  The Culling Game), and a title TMDB lacks after TMDB's results (Detective
+  Conan: The Gold-Star Answer). The preview sends the Kitsu id as Nuvio
+  does, so it shows that season's own art. Season 1 of a show TMDB has isn't
+  repeated, and Kitsu being down only leaves these out. Needs the anime id
+  mapping.
+
+### New anime in landscape, shared artwork, and genres hidden from trending
+
+- Anime requested by an AniList or Kitsu id alone (as Nuvio's catalogs send
+  them) no longer falls to the genre canvas in landscape when the community
+  id mapping hasn't caught up with it yet. A later season takes its first
+  season's TMDB and IMDb ids through AniList's prequel links (TOUGEN ANKI:
+  Nikko Kegon Falls Arc, A Wild Last Boss Appeared! Season 2), and a new show
+  is found on TMDB by an exact name match among animated shows that started
+  within a year of it (Overgeared). That brings back the logo and ratings
+  too. A title TMDB doesn't have at all (Detective Conan: The Gold-Star
+  Answer) uses AniList's banner or Kitsu's cover image.
+- An anime-id request now agrees with the TMDB-id request for the same
+  show. It carries TMDB's IMDb id, so with no TMDB backdrop it takes
+  Metahub's background like a TMDB request (not the AniList banner). When
+  the id mapping names a TMDB entry TMDB has since deleted, the next request
+  resolves past it by IMDb id. A TMDB-id request for anime finds its anime
+  rank by the IMDb id TMDB gives too (I'm Dating a Dark Summoner showed
+  "Japanese" by TMDB id and "#3 Today" by AniList id).
+- AniList's rate limit no longer leaves new anime on the genre canvas for
+  ten minutes after a catalog burst (GROTESQQQUE). The resolver reads the
+  titles and prequel from the metadata the render already fetches instead
+  of asking AniList again, every AniList call waits out its Retry-After
+  instead of collecting more 429s, and a throttled lookup is retried after
+  two minutes.
+- `landscape_poster_crop=true` (Logo → Crop Poster When No Backdrop) cuts
+  the poster to 16:9, centred on faces or else on its upper part, with the
+  logo on top, for titles with no backdrop anywhere.
+- Fanart works for landscape: `landscape_art_source=fanart` takes
+  fanart.tv's most-liked background (textless) or a thumb in your language
+  (original), and `fanart_anime` does that for anime only.
+- Operators can share their Artwork view picks (`ART_OVERRIDES_SHARE`), and
+  another instance can follow them (`ART_OVERRIDES_REMOTE_URL`). Its own
+  picks win; shared images are copied once and checked against their hash.
+- `TRENDING_HIDE_GENRES` (dashboard → Trending) leaves genres off the
+  instance's trending lists before ranks are numbered, so catalog rows and
+  poster ranks still match. `TRENDING_HIDE_MIXED_GENRES` decides whether a
+  title only partly of a hidden genre goes too.
+- `trending_side=center` (Under Notch) hangs the trending numeral under the
+  notch wherever it is drawn: centred, a left or right chip, or where an
+  Auto notch moved it on that poster. The ribbon hangs from the top edge, so
+  it isn't offered Under Notch (a URL asking for it gets the left corner).
+  `trending_align=edge` (Number under Side Notch → Outer Edge) lines the
+  numeral up with a side chip's outer edge instead of centring it on the
+  chip; under a centred notch it stays centred.
+- Share settings leaves out what is at its default, like every other copied
+  URL. It spelled every parameter out, so even an untouched configuration
+  was about 2100 characters, too long for a Discord message; it is now
+  about 300. Imports fill the gaps from the code's defaults, which are the
+  same on every instance, so a share still imports exactly.
+- Auto, Beside Notch spreads a badge row that nearly fills the space beside
+  the chip out to the margin, its gaps growing up to 2.5 times the group's
+  spacing; a short row still sits against the chip.
+
+### More network and studio logos, drawn at one standard size
+
+- The studio badge knows about 37 more studios: MGM, Miramax, Lions Gate
+  Films (as well as Lionsgate), Summit, Orion, TriStar, Touchstone, Village
+  Roadshow, Working Title, Skydance and Skydance Animation, StudioCanal,
+  Film4, MUBI, Cartoon Saloon, Studio Ponoc, Toei Animation, Kyoto
+  Animation, ufotable and MAPPA; and 20th Century Fox and 20th Century
+  Studios, DreamWorks Animation and DreamWorks Pictures, Paramount, New Line,
+  Castle Rock, Carolco, Lightstorm, CJ Entertainment, Studio Ghibli, Bad
+  Robot, Syncopy, Toho, Silver Pictures and Big Talk. A film by several of
+  them shows the one earliest on the list, the bigger name, rather than the
+  first TMDB credits: Die Hard shows 20th Century Fox, not Silver Pictures.
+- More films get a network badge from the streamer that made them: Netflix
+  Animation Studios (Netflix), Apple (Apple TV), Amazon Studios (Prime
+  Video), and HBO and HBO Documentary Films (HBO).
+- Network and studio logos come out at about the same visual size. They
+  were sized by area but held to the row's height, so square emblems (HBO,
+  A24) and very long wordmarks came out at well under half the size of
+  mid-width ones, and a solid logo looked much heavier than a thin one in
+  the same box. Each logo is now weighed by its ink as well as its shape and
+  fits a box 3.8 rows wide by 1.15 high (was 3.5 by 1), which shrinks for a
+  heavy logo, so a solid disc (abc, TNT) no longer fills the same space as
+  an outline emblem (Universal, Warner Bros.). Tuned on a sheet of real
+  TMDB logos.
+- A solid logo's lettering is cut out by how much it stands out from the
+  logo's own colour, lighter or darker, instead of by a fixed brightness. An
+  orange block (Nickelodeon's splat) was drawn a third transparent, a yellow
+  one lost its white lettering, and dark lettering on a light disc was never
+  cut out. Only parts the block holds inside it are cut: one that reaches
+  the logo's edge (Fox Kids' yellow X, HBO Max's "max") stays. And only the
+  lettering's own colour, on one side of the block: SBT's colour wheel lost
+  its dark purples as black patches and kept half of its white "sbt". Each
+  separate shape is judged on its own, so an emblem over a wordmark (Toei's
+  cat over "TOEI ANIMATION") keeps its face instead of becoming a blob.
+- Fox Kids is drawn with FOX's logo, its own (red letters in a thick comic
+  outline) not surviving as a white mark, and HBO always with its black
+  logo: TMDB has given it two, and titles cached at different times showed
+  either.
+- New **Network / Studio Logo Size** (`badge_logo_scale=0.5–2.0`, default
+  `1.0`) multiplies that standard size, on both shapes. Posters with a
+  network or studio badge re-render once (render revision 29).
+- A logo that doesn't fit beside what shares its line (Minimalist's genre
+  and year) is drawn smaller, down to 60%, instead of the group jumping
+  above the text. A long wordmark such as TOKYO MX now stays down by the
+  genre and year.
+- `tools/logo_sheet.py` draws every downloaded network and studio logo on
+  one sheet at badge size, with the numbers the sizing works from, for
+  tuning and for checking new studios read.
+
+### Original art in the Logo Priority list
+
+- Logo Priority has a new **Original Art** entry (`art` in `logo_priority`,
+  e.g. `logo_priority=native,english,art,text`). When no source above it
+  has a logo, the textless art is swapped for the title's original art
+  (title baked in) instead of carrying on down the list, so drawing the
+  title as text no longer has to be the fallback. Portrait takes the
+  poster original-art mode would pick; landscape the text-bearing backdrop
+  `landscape_art=original` would pick. A title with no original art
+  carries on to the sources below it. Original-art mode stays the way to
+  use original art first; this entry is for when textless doesn't work out.
+
+### One Copy config URL for AIOMetadata, Nuvio, Bingecat and Xperience
+
+- All four now take Nuvio's URL, with `{shape}` and the optional `{name?}`
+  ids, so the **Copy config** menu is down to that URL (**Default**), **Discover+** and
+  **Share settings**. A left-click copies the shared URL straight away instead
+  of asking first, which stops a URL copied for one client ending up in
+  another. Picking Discover+ is still remembered for the next left-click.
+- AIOMetadata and Xperience URLs now carry `shape={shape}` (one URL for
+  portrait and landscape) and the TMDB / MDBList keys typed into the
+  configurator, as Nuvio's always did. Bingecat now gets the optional ids and
+  anime ids too.
+
+### Anime rating badges on landscape posters
+
+- Landscape posters with rating badges (`landscape_rating_badges`) now show
+  **AniList and Kitsu** scores on anime, as portrait does. Landscape decided
+  whether to fetch them by portrait's rating mode, which a landscape URL
+  never sends, so those badges only appeared on titles requested by that
+  site's own id. Affected landscape posters re-render once.
+
+### Films stop reading "Cinema" when TMDB never adds a digital date
+
+- A movie whose only past release is theatrical, with no digital date
+  published, now reads **Streaming after 60 days** (`CINEMA_ASSUMED_DIGITAL_DAYS`)
+  with a TMDB key too, not only on the keyless Cinemeta path. Before, stale
+  TMDB data could keep a film at "Cinema" for three years.
+- **Popular films get a longer run**: with at least `CINEMA_POPULAR_VOTES`
+  (1000) TMDB votes, a film stays "Cinema" for up to
+  `CINEMA_POPULAR_DIGITAL_DAYS` (180), enough for a ~120-day blockbuster run.
+- A published digital date, even a future one, still wins over either window,
+  and a film assumed to be streaming keeps having its TMDB dates re-checked
+  daily. `CINEMA_MAX_AGE_YEARS` (3) stays as the outer backstop.
+- `TRENDING_HIDE_UNRELEASED` judges films the same way, using the vote count
+  on TMDB's trending rows.
+
+### Anime trends on its own lists, and trending can skip what isn't out
+
+- With the trending catalogs addon on, **Japanese anime leaves Trending
+  Movies and Trending Series** and ranks only on the anime lists. Every anime
+  poster now shows its anime rank, whatever id it is requested by and whatever
+  catalog it is in: an AniList or Kitsu (or MyAnimeList) id as that entry, a
+  TMDB or IMDb id as the best rank of any of its seasons, else its TMDB rank.
+  Anything on the anime lists is off the movie and series lists, so no title
+  is in two rows; Chinese and Korean animation that isn't trending on AniList
+  stays on the series and movie lists, where it trends. The movie and series rows (and the ranks on their posters) are
+  renumbered once on update.
+- A new **Trending Anime Movies** catalog ranks AniList's trending anime
+  films. Re-import the addon's manifest to see it.
+- `TRENDING_SOURCE_ANIME` and `TRENDING_SOURCE_ANIME_MOVIE` replace AniList's
+  lists with an MDBList page or TMDB-shaped JSON, like the movie and TV
+  sources.
+- `TRENDING_HIDE_UNRELEASED` (off by default) leaves titles that aren't out at
+  home yet off the trending lists: films still in cinemas or unreleased,
+  series not yet aired, anime not yet airing, and anime films still only in
+  cinemas (by their TMDB dates, as their release badge reads them). The rest are ranked without
+  gaps, so the catalogs and poster ranks still agree.
+- The catalogs' poster URLs name the list they were cut from (`rv=`), so a
+  list rebuilt mid-day no longer leaves an app showing yesterday's ranks
+  until its cached images expire. The catalogs themselves may be cached for
+  10 minutes, rather than until the next refresh.
+- A quality badge under a trending number or ribbon sits the same distance
+  below it on every poster, instead of nearer or further depending on the art.
+- Frosted quality badges and the frosted cinema disc use the frosted notch's
+  opacity setting.
+- Anime films requested by Kitsu, AniList or MyAnimeList id alone now find
+  their TMDB entry (logo, backdrop, ratings). The id mapping lists a film's
+  TMDB id as a list, which was being dropped, so no anime film had one.
+
+### Updates keep the poster cache
+
+- Updating PostersPlus no longer re-renders every cached poster. The cache
+  key followed the language files' and genre backgrounds' timestamps, which
+  every image build resets; it now follows what they contain, so posters only
+  re-render when one of them actually changes. (This update itself re-renders
+  once.)
+
+### MyAnimeList ids
+
+- Anime requested by **MyAnimeList id** now renders: `mal_id=`, or a
+  `mal:1535` Stremio id in `stremio_id={id}`. MAL itself needs auth, so the
+  id is looked up in the same community mapping as Kitsu/AniList ids and
+  rendered as its Kitsu entry (AniList when there's no Kitsu id). A Kitsu or
+  AniList id sent alongside wins; a MAL id the mapping doesn't know renders
+  as before.
+
+### Landscape catches up, and frosted quality badges
+
+- **Frosted quality badges**: Quality Badge Style (Quality tab, Graphic
+  Badges) puts 4K, HD, HDR, Dolby and DTS:X each on a chip of the frosted
+  notch's glass, in portrait and landscape. `badge_quality_style=frosted`.
+- **Ignore Quality Before Digital Release** (Quality tab): a film still in
+  cinemas has no real digital copy, so its "4K" is a cam. Until TMDB's
+  digital or disc date passes, or r/movieleaks confirms it, its quality is
+  treated as not found. A series that hasn't premiered yet is treated the
+  same way. `quality_after_digital=true`.
+- Shows TMDB calls **Ended** but TVDB has carried on with (Cyberpunk:
+  Edgerunners, still a one-season miniseries on TMDB) read Renewed, dated
+  from TVDB ("Oct 20 Season 2"). Needs a TVDB key.
+- **TVDB backdrops for landscape**: Art Source under the landscape Art
+  choice, offered with the TVDB poster source. `landscape_art_source=tvdb`.
+- Portrait settings that work at 16:9, each a landscape setting of its own
+  and off until chosen: Greyscale Poster if Unavailable, the black, silver
+  and gold badge styles with a text colour, Winner Star, Logo Size, and
+  Rating Badges on the info line. Left on the portrait: the rating modes,
+  notch geometry, diagonal sash colours, trending rank marks and the older
+  quality badge modes, which are drawn for the 2:3 layout.
+
+### Horror for TV, and Rom-Com
+
+- TMDB has no Horror genre for TV, so American Horror Story printed Fantasy.
+  Shows now get Horror from MDBList's genres, which come with the ratings
+  call already made. Until MDBList has answered, and without an MDBList key,
+  a "horror" TMDB keyword decides, and a show with no keywords asks Cinemeta,
+  then TVDB (with a key). Cached TV metadata is fetched again once.
+- New **Rom-Com** genre for titles TMDB (or AniList/Kitsu) gives both
+  Comedy and Romance, ranked just above Comedy: The Love Hypothesis,
+  Notting Hill and Pretty Woman print Rom-Com, and Friends (Comedy only on
+  TMDB) stays Comedy. IMDb and TVDB genres don't count, since they tag
+  sitcoms Romance. Rank it below Comedy and Romance in the genre order to
+  turn it off. A genre order saved before Rom-Com existed gets it in front
+  of Comedy.
+
+### Logs in the dashboard
+
+- A **Logs** view in the admin dashboard: the server log with filters for
+  level, time, module, app or HTTP lines and text (exclusions, phrases,
+  regex), a *Problems only* switch, a live tail and a download.
+- Every line knows the request that logged it, so one matching line can
+  bring the rest of its request with it, or open that request on its own.
+- **Find a title** by name (or IMDb / TVDB id) to see its ids and only the
+  lines about it: no more looking ids up on TMDB or IMDb to grep for them.
+- `LOG_VIEWER_MAX_MB` (default 20) caps the disk it uses; 0 turns it off.
+
+### Hebrew, and a font choice
+
+- Poster text can be in **Hebrew** (thanks @haveAnIssue), drawn right to
+  left: each line is reordered with the Unicode bidi algorithm, so numbers,
+  the ★ and Latin names still read left to right inside it.
+- **Font** (Presentation) picks the font poster text is drawn in: Inter, as
+  before, or Rubik. A language the chosen font has no letters for is drawn
+  in one that has them, so Hebrew is always Rubik. A text title standing in
+  for a missing logo switches font the same way when its genre font can't
+  draw it.
+
+### Edge notch, label order, release-date badge
+
+- The notch can hang off the **Left Edge** or **Right Edge** of the poster,
+  its label running along the side, with an **Edge Position** slider to move
+  it up and down.
+- **Labels → Order** sets the order genre, year and rating print in, in
+  every rating mode (and landscape) that prints more than one of them.
+- The Cinema graphic badge is now a small disc with the day the film
+  reaches home, month over day. Without a date it shows a popcorn bucket
+  (in cinemas) or a clapperboard (in production). **Cinema Badge Style** is
+  Auto, light or dark to suit the art under it, or Frosted; it replaces the
+  popcorn's colours, which old URLs read as Auto.
+  Series that haven't aired yet get it too, with their premiere date.
+- A film that opens in cinemas and streams on the same day (a streamer's
+  film with a small cinema run) now has a dated sash reading as a streaming
+  release, not "Cinema". Films TMDB still lists as unreleased look up their
+  release dates once they have a future release date, instead of assuming
+  that date is a cinema opening.
+- The Text Colour control is hidden for the frosted notch, which picks its
+  own label colour and never used it.
+
+### Presets in three kinds
+
+- **Load preset** now has three tabs. **Core** holds the presets that ship
+  with Posters+. **Operator** holds the instance's own, added in the
+  dashboard's new **Presets** view from a pasted poster URL, with a picture
+  rendered or uploaded there. **Mine** holds each user's own: *Save current
+  settings* keeps the settings on screen, with the preview as its picture,
+  in that browser only.
+- The last URL a user imports (Import URL or a share link) is kept at the
+  top of **Mine** as *Last imported URL*, replaced by the next import. While
+  it matches the shape on screen, the right-click reset menu on a tab or
+  heading also offers *Reset … to imported URL*, which puts just that
+  section back to what the URL set.
+- A preset is only settings. Access keys, API keys and the title are taken
+  out of the URL before any preset is kept or loaded.
+
+### Users can report a poster
+
+- With **Poster reports** on (`REPORTS_ENABLED`, off by default), the
+  configurator's live preview has a Report button. Users pick what is wrong
+  (text on a textless poster, wrong art, wrong logo, wrong details, or
+  something else), confirm, and the report lands in the dashboard's new
+  **Reports** view, grouped by title with the poster as they saw it and a
+  link into the Artwork editor.
+- `REPORTS_PER_IP` limits reports per address per day (10). An address that
+  sends more than `REPORTS_PURGE_THRESHOLD` (50) in a week has its
+  unresolved reports deleted and is blocked, until unblocked in the
+  dashboard. Reports you resolve stop counting against either limit;
+  dismissed and deleted ones don't.
+  Addresses are stored only as a keyed hash.
+- The limits need each visitor's real address. Behind a reverse proxy
+  whose forwarded addresses aren't trusted (`FORWARDED_ALLOW_IPS` unset),
+  reports pause and the dashboard says what to set.
+
+### Black logos turn light on dark posters
+
+- A black or near-black logo over a dark bottom (the usual vignette) is now
+  lightened: its black ink turns white (dark greys light grey, navy pale
+  blue), while any coloured parts keep their colour. Logos where the black
+  is an outline, a card behind light letters or a shadow are left alone.
+  This replaces the old whitening, which skipped many plain black logos and
+  turned coloured accents white. Landscape logos get it too.
+
+### Side notch position
+
+- A notch set to Left, Right or Auto has a **Vertical Position** slider
+  (`sash_chip_y`) that moves the side chip down from the corner; top badge
+  groups beside it follow. A **Horizontal Position** slider (`sash_chip_x`)
+  moves it in from its corner towards the middle, or out to the edge;
+  badge groups beside it make room. On Auto both only apply when the chip
+  goes to the side.
+
+### Fixes
+
+- Some series (Game of Thrones, Fleabag) 404'd when a client sent only
+  their IMDb id: a duplicate movie entry on TMDB claiming the same IMDb id
+  won the lookup, and the answer was kept for 90 days. A series now
+  prefers TMDB's TV entry, and a TMDB id that TMDB has deleted is set
+  aside: the title is found again by its IMDb id (straight away when the
+  request sent one alongside, from the next request otherwise).
+- The same titles lost their ratings: MDBList, asked about them as movies,
+  had no record, and "no ratings" was kept for two weeks. An IMDb id MDBList
+  doesn't know under one type is now asked as the other, and on upgrade
+  the no-ratings rows this could have left behind are cleared once, with
+  their posters.
+- The configurator's Poster Resolution no longer resets to 500 when the
+  page is refreshed.
+- Import URL no longer replaces API keys you already have: a URL's
+  TMDB or MDBList key only fills an empty field, and you're told when
+  yours were kept.
+- Importing a URL for another title now moves the title card, the
+  IMDb/TMDB links and the Report button to it too, instead of leaving them
+  on the previous title. Malformed title ids in an imported URL are
+  ignored.
+
+### A fourth graphic badge group
+
+- Graphic badges can be split across four groups instead of three
+  (`badge_group4`, and `landscape_badge_group4` for landscape), each with
+  its own anchor, max, size and spacing.
+
+### Popcorn badge for films still in cinemas
+
+- Graphic badges have a new **In Cinemas (Popcorn)** badge (`cinema` in a
+  badge group). It shows on a film that is only in cinemas or not out yet,
+  so the poster can say so without the Cinema sash, or while the sash shows
+  something else.
+- **Popcorn Colour** (`badge_cinema_style`): By Streaming Date (default)
+  turns it green inside a week of the film's digital release, amber inside
+  two weeks, and red further off or when there is no date. Red, Black,
+  White and Frosted are fixed colours.
+
+### Edit the studio, director and cast lists in the dashboard
+
+- The admin dashboard has a **Sash lists** view for the notable studios,
+  directors and cast behind the Studio, Director and Cast sashes. It shows
+  each list with TMDB pictures, lets you remove entries, change the label a
+  sash shows, and search TMDB to add a studio or person, so names match
+  TMDB's credits exactly. Entries TMDB has no exact credit for are flagged,
+  since they can never match. Each list can go back to the built-in one.
+- Four built-in entries never matched because TMDB spells them differently:
+  BBC Film, LAIKA, Bong Joon Ho and Wong Kar-Wai. They now do, so films
+  such as Aftersun, Coraline and Parasite get their sash.
+- Changes apply without a restart. `discovery_overrides.json` is still where
+  the lists live and can still be written by hand; it is now re-read within
+  a few seconds of changing.
+
+### Choose a title's art for everyone; TVDB as a poster source
+
+- The admin dashboard has an **Artwork** tab. Search for a title and pick its
+  textless poster, its Original Art poster, its logo and its landscape art
+  from every TMDB, Fanart and TVDB image. The choice applies to everyone on the instance.
+  Posters and logos are chosen per language, following each user's language
+  order. A poster choice replaces the poster sources you tick (TMDB,
+  Fanart, TVDB), and users on other sources get their usual pick. Only the
+  images you choose are downloaded, once, however many users there are.
+- You can also paste a link to any image, such as a ThePosterDB download
+  link, or upload one. The server keeps its own copy.
+- For titles with no textless poster, a backdrop can be cropped by hand into
+  the textless poster: drag a poster-shaped frame over it and zoom as needed.
+- An optional configurator shortcut (off by default, switched on in the
+  editor) opens the previewed title's artwork in the dashboard.
+- TVDB can be offered as a poster source (`TVDB_POSTER_SOURCE`,
+  `poster_source=tvdb`). It uses TVDB's best no-language poster, which on
+  TVDB means textless, or under Original Art its best poster in the user's
+  language. Titles TVDB has nothing for keep their TMDB poster.
+- The TVDB poster fallback (`TVDB_USE_POSTERS`) now only uses a no-language
+  TVDB poster to replace a poster with text. It used to try one in the
+  user's language first, and nearly all of those carry the title, often in a
+  style the text scan misses.
+
+### Landscape logo position, top band and graphic badges; per-type rating badges
+
+- Landscape: the logo can sit left, centre or right, in the bottom row or at
+  the top (`landscape_logo_pos`). The genre, year and score line moves out of
+  its way, or can be placed on its own (`landscape_info_pos`), and the info
+  badge can take any corner (`badge_pos=bottom_left` / `bottom_right`). A
+  tinted top band in the bottom band's colour can be switched on
+  (`landscape_vignette_top`) to back a top logo.
+- Landscape can have Graphic Badges, with its own on switch and groups
+  (`landscape_badge_display_mode=7`, `landscape_badge_group1`-`3`), so a Nuvio
+  `{shape}` URL can set them for each layout. They stay off unless chosen. In
+  the landscape view the Quality tab offers just Hidden and Graphic Badges.
+- The black, silver and gold notches have an opacity slider
+  (`sash_badge_opacity`). At its default they draw as before.
+- Poster Source has a "TMDB, with fanart.tv for anime" choice
+  (`poster_source=fanart_anime`), for instances that offer fanart.tv.
+- Each rating badge can be shown on movies, TV or anime only, from chips on
+  its row in the list (`rating_badges=imdb:mt`), and the number drawn can be
+  capped (`rating_badge_max`), with sites further down the list filling in
+  for missing scores.
+- Logo tab: Bottom Anchor is at the top of the overlay controls, and the
+  logo sliders hide while Textless is on.
+- Right-click (or press and hold) a tab or a group heading to reset just that
+  part to its defaults. API keys and the selected title are kept, and in the
+  landscape view only landscape's own settings change.
+
+### Sci-Fi or Fantasy for TV, and a genre order you can drag
+
+- TMDB puts every TV show that is either sci-fi or fantasy in one merged
+  "Sci-Fi & Fantasy" genre, which printed as Sci-Fi, so Game of Thrones and
+  The Witcher were labelled Sci-Fi. The show's TMDB keywords now decide
+  between Sci-Fi and Fantasy, with IMDb's genres (via Cinemeta) as the
+  tie-break. Shows that neither decides print Sci-Fi as before. Cached TV
+  metadata with the merged genre is fetched again once; nothing else is.
+- The genre order (which of a title's genres is printed, and picks its
+  fallback background and font) can be changed in the admin dashboard under
+  Genres → Advanced, by dragging a list. There is one list for anime and one
+  for everything else. `GENRE_PRIORITY` / `ANIME_GENRE_PRIORITY` take the
+  same thing as comma-separated TMDB genre ids.
+- New default order, checked against TMDB's most-voted films and shows:
+  - Sci-Fi and Fantasy now rank above Mystery, which TMDB puts on much of
+    its TV, so Stranger Things and Dark stop printing Mystery.
+  - Fantasy sits beside Sci-Fi, so Buffy and Good Omens print Fantasy
+    rather than Comedy.
+  - War ranks above Action and History, so Dunkirk and Saving Private Ryan
+    print War.
+  - Animation is now near the bottom, because the poster already shows a
+    title is animated. Coco and The Lion King print Family.
+- A new order takes effect on posters that are already cached. The genre label
+  is now worked out from the title's genres on every render rather than read
+  back from the cached rating row, and a changed order re-renders cached
+  posters once.
+
+### Client insets, and sliders
+
+- The trending ribbon takes the Primary Client's top inset, like the notch:
+  on Stremio Desktop/Web it grows upwards by that much, so the client's crop
+  of the top edge no longer cuts into it.
+- The configurator's bar and notch inset sliders are gone; the Primary
+  Client sets both. `bar_bottom_inset` and `sash_badge_inset` still work in
+  a URL, and the configurator keeps them when it imports one.
+- Sliders have a thicker gold track and a larger handle, and the value no
+  longer runs into the edge of a narrow row.
+- Sliders sit on the same line as their label.
+- On a phone, the six tabs fit across the panel instead of cutting off
+  Weights at the edge; the small preview moves to the top reliably when it
+  would cover the end of a tab, including one too short to scroll; the
+  Trending Catalogs Addon link has a Copy button, and the full-screen
+  preview keeps its buttons directly under the poster whether or not the
+  browser's toolbar is showing.
+- Back (or the back gesture) closes an open Load preset, Import or What's
+  new dialog first, and only then the full-screen preview.
+- Tapping a button on a phone no longer sometimes opens its tooltip over what
+  the button just showed (e.g. the IMDb/TMDB menu).
+
+### Code review fixes (27 Sep 2026)
+
+- Badge logos: a re-uploaded file on Wikimedia Commons no longer loses its
+  mark. The pinned revision is found in the file's history and fetched from
+  its archive URL, which never changes. A mark that no revision matches is
+  left out and the poster is cached as usual; before, every poster showing
+  that badge was re-rendered on every view. Graphic badges now back off
+  after a failed download (10 min) instead of retrying on every render.
+- Provisional posters (quality still loading, a rating source down, a text
+  scan queued) are kept for `PROVISIONAL_CACHE_TTL` (default 300 s), with no
+  ETag and a max-age no longer than that. Before, they were never kept, so a
+  long upstream outage meant a full render on every view. `0` restores the
+  old behaviour.
+- Quality: a source that fails one title (a 4xx for an id it doesn't index,
+  or AIOStreams with no results because one of its scrapers errored) backs
+  off only that title, for an hour, instead of the whole source.
+- Deferred text scans on a busy worker run anyway after waiting 30 s, one
+  at a time, rather than waiting for the worker to go idle.
+- The trending refresh re-renders the titles whose rank changed. Before, it
+  re-rendered only the ones whose rank stayed put.
+- Cache warming reads and writes metadata and logos in
+  `DEFAULT_LOGO_LANGUAGE`, not always English. Series poster art is stored
+  under one key whether the client says `series` or `tv`.
+- The SIMKL "Get a link code" button and unlinking wake the watchlist loop
+  immediately, instead of at its next cycle.
+- A TMDB error while checking an IMDb id sent beside a TMDB id keeps the IMDb
+  id (the render is provisional) instead of dropping it and caching the
+  poster under another identity. The failed lookup isn't repeated for 60 s.
+- `WORKERS>1`: saving settings no longer reverts what another worker saved,
+  and the dashboard shows the file as it is now. Prune, cache warming, the
+  digital-release poll, the trending refresh and the watchlist (with its
+  SIMKL link flow) run in one worker; another takes over if it exits.
+- Performance: image decoding, resizing and encoding, logo rasterising, and
+  the remaining cache writes run off the event loop. `/stats` is computed
+  off the loop and reused for 30 s. The composite prune has an index and
+  runs in batches, and the database file shrinks after a big eviction.
+- Bounds: `logo_language` must be a language code, float parameters are
+  rounded to 3 places, and `COMPOSITE_MAX_ENTRIES` now defaults to 500000
+  (about 50 GB). Set it to `0` to keep the old unbounded behaviour.
+- Security and hygiene:
+  - `/debug/canvas` accepts only known genres (before, it could read any
+    `.png` on disk).
+  - `?debug=1` returns JSON even for cached posters.
+  - Non-ASCII digits in ids and numbers are rejected cleanly instead of
+    causing a 500.
+  - The trending addon's access key is redacted from logs, and so are the
+    keys in the Plex and Jellyfin sync logs.
+  - An `ACCESS_KEY` shorter than 12 characters logs a warning, and wrong
+    guesses against it lock the address out.
+  - A failed TVDB login backs off: 5 min, or until restart for a rejected
+    key.
+  - The PP-OCR download has a timeout and is retried hourly, and renders
+    wait at most 30 s for a text scan.
+  - `/search` and `/resolve-imdb` answer 502/504 when TMDB is unreachable
+    or times out.
+  - uvicorn runs with `--no-server-header`.
+  - Actions are pinned to commits and the base image to a digest, with
+    Dependabot keeping them current.
+
+### AniList and Kitsu scores for every anime title
+
+- AniList and Kitsu scores used to reach only titles requested by that
+  site's own id; MDBList carries only MyAnimeList. Any anime title is now
+  matched to both sites through the anime id list (a series uses its first
+  season), when a weight or a rating badge uses them. Fetched once and cached
+  with the anime metadata.
+- Fixed: a title's first fetch saved that request's own extras (its anime
+  site's score and age rating, the IMDb dataset value, TMDB's average) into
+  the rating record every request shares, so what a title showed depended on
+  which request reached it first.
+
+### Rating badges
+
+- New Rating Badges list at the bottom of the Rating tab (`rating_badges=imdb,tomatoes`):
+  each chosen site's own score behind its logo, in place of the ★ and the
+  weighted score. Clean puts them after the genre, Minimalist before each
+  score, and the Bar after its year and genre (with a label that shows the
+  rating). The rest of the label keeps its room and the badges fill what is
+  left. The Rating Bar has no printed score and doesn't draw them.
+- Posters+ (the weighted score under the service's own mark), IMDb, Rotten
+  Tomatoes (fresh or rotten), Popcornmeter (upright or spilled),
+  Metacritic, Metacritic User, Letterboxd, Trakt, TMDB, Roger Ebert,
+  MyAnimeList, AniList and Kitsu. Only as many as fit are drawn, in list order,
+  and titles missing all of them keep the weighted score.
+- Badge Style Mono (`rating_badge_style=mono`) draws every badge in the
+  text's colour, as a solid shape with the logo cut out, for tinted
+  vignettes a coloured logo would clash with.
+- Scores print on each site's own scale (7.8, 92%, 3.9) or, with Badge Scores
+  set to P+ scale (`rating_badge_scale=normalized`), on the weighted score's.
+- The badges are round (IMDb, TMDB, Letterboxd, Trakt, MyAnimeList, AniList,
+  Kitsu, Roger Ebert's gold thumbs-up) in each site's colours, so they read
+  as one row.
+- Logos are downloaded once per instance, pinned by SHA-1, and none ship in
+  the repo; a render missing one isn't cached. Existing URLs and cached
+  posters are unaffected.
+
+### Second textless poster before the backdrop
+
+- When a poster TMDB tags as textless turns out to have its title burned in
+  and the title has at least 6 textless posters, the runner-up is scanned once
+  and used if it's clean; otherwise the backdrop fallback runs as before. Only
+  one alternate is ever tried, since the scan runs on the first render. Part of
+  `TEXTLESS_BACKDROP_FALLBACK`. Titles pick up the alternate within a week,
+  as their cached TMDB metadata refreshes.
+- Burned-in text detection also catches stacks of credit or tagline lines it
+  can't read, such as Cyrillic or Greek copy, which it previously passed as
+  clean. Existing scan results are kept; only new scans use it.
+
+### Logo priority as a list
+
+- The Language Priority dropdown is now a Logo Priority list, reordered and
+  switched on or off like the sash priority: Native, Original, Custom,
+  English (TMDB, then Metahub), Neutral (logos TMDB tags with no language)
+  and Text. `logo_priority` takes the list (`logo_priority=native,english,text`)
+  as well as the old preset names, which keep meaning the same order and
+  keep their cached composites.
+- Orders the presets could not express, such as English before Original or
+  no Neutral logos at all. Leaving Text off draws no title when no logo is
+  found.
+- TVDB logos (when enabled) follow the same order, and are now also tried for
+  what used to be the Native → English → Neutral modes.
+
+### Larger posters
+
+- `resolution=780` renders portrait posters at 780×1170 from TMDB's `w780`
+  art, and `1000`, `1500` or `2000` from the original art (backdrop crops and
+  logos from the originals above 500), for clients that draw posters large.
+  Same layout at any size: pixel settings scale with the canvas. About 2×,
+  3×, 7× and 12× the render time and file size; URLs without it are
+  unchanged and keep their cached composites.
+
+### Notch on the side, and graphic quality badges
+
+- The frosted notch can sit to one side (`sash_badge_pos=left|right`, the
+  Position setting in the configurator), or choose per poster (`auto`): beside
+  the graphic badges when a title has some along the top, centred when not;
+  `auto_hug` keeps those badges against the chip, clear of the corner. It becomes a rounded chip floating
+  in from that top corner, sized to its label, which leaves the middle of the
+  top edge free. With it on the left, quality and age badges move to the top
+  right.
+- New quality mode, **Graphic Badges** (`badge_display_mode=7`): Dolby Vision,
+  Dolby Atmos, DTS:X, HDR, resolution and the US certificate in up to three
+  groups. Each group has its own size, spacing and anchor (beside the chip,
+  any corner, above or below the logo, or a custom position for dodging badges a client draws), a maximum
+  number of badges and its own list order; it uses whatever space the logo,
+  rating and sash leave, moving off a taken corner rather than overlapping
+  it. When Dolby Vision and Atmos share a group they share one combined mark.
+  Network and studio badges show a TV show's network, or the curated studio
+  that made a film, as white marks from TMDB's logos. A layout with only the
+  certificate, network and studio never touches the quality source.
+- A poster that shows no quality at all is no longer held out of the cache
+  while the quality source is backing off. The Dolby and DTS:X artwork is fetched once from Wikimedia Commons
+  (see README for credits); the certificate is one TMDB call per title per
+  month.
+
+### Backdrop crops find close-up faces
+
+- When no face is found in a backdrop, it is checked again at half size. The
+  face detector misses large close-ups at full size, so the portrait crop fell
+  back to a guess and could frame a wall, a background or the back of a hood
+  instead of the actor. Cached backdrop crops are redone.
+
+### Faster, more accurate burned-in-text scans
+
+- Textless posters are scanned for burned-in text in two passes: first at
+  0.65x size, then at full size only when the small pass comes back clear but
+  still found a title-sized block of text (about a quarter of scans). A scan
+  takes roughly a third less time: ~85 ms instead of ~130 ms for a typical
+  clean poster on a 4-core ARM host.
+- Fixes a mismatch between detected text boxes and their confidence scores.
+  RapidOCR sorted the boxes without their scores, so the size, position and
+  confidence rules were often judging one box by another's score. The detector
+  is now driven directly, which also drops some wasted preprocessing.
+- On ~2,900 cached posters, checking every changed verdict by eye: 4 wrong,
+  against 25 before. Stylised titles are caught more often, and signs,
+  shirts and chalkboards in the scene are less often mistaken for a title.
+- Cached scan results are redone under the new detector signature, so each
+  textless poster is scanned once more as it is next requested.
+
+### Landscape star beside the score
+
+- Landscape gains a **Star beside score** switch (`landscape_score_star=true`),
+  under Core → Landscape. The separator in front of the score becomes a star,
+  as Clean mode has it on a portrait: `Genre • Year ★ 87`. It hides with Hide
+  Rating, and works with the out-of-10 switch (`★ 8.7`).
+
+### Unrated posters in Clean and Minimalist
+
+- Clean mode shows just the genre when a title has no rating, instead of
+  "★ N/A".
+- Minimalist with append set to Year draws the rating separator light grey when
+  there is no rating, instead of leaving a gap between genre and year.
+- Cached composites now record the drawing revision that made them and a few
+  facts about what they show (for now, the score). A drawing change that only
+  affects some posters re-renders just those, rather than the whole cache.
+  Posters cached before this update have no facts, so unrated ones keep the
+  old look until they expire (`COMPOSITE_CACHE_TTL`).
+
+### Backdrop for fake textless posters
+
+- `TEXTLESS_BACKDROP_FALLBACK` (Text detection, on by default): when a
+  poster TMDB tags as textless turns out to have its title burned in, the
+  poster is swapped for a crop of the title's backdrop with a logo on it,
+  instead of being served as-is without one. It needs a logo to put on the
+  crop (or a `textless=true` request) and a crop that scans clean; otherwise
+  the poster is kept as before.
+- It costs about half a second on the first render of an affected title
+  (backdrop download, crop, one more text scan). Later renders reuse the
+  cached crop and scan. Titles above `TEXTLESS_DETECTION_MAX_VOTES` get the
+  swap once the background scans have finished.
+- Posters already cached with a fake textless poster keep it until they
+  expire (`COMPOSITE_CACHE_TTL`); turning the setting off re-renders them.
+
+### Hide Year, and an optional Admin link
+
+- **Rating → Labels → Hide Year** (`hide_year=true`) drops the release year
+  from the label in every rating mode and from the landscape info strip, and
+  can be set per shape (`landscape_hide_year`) like Hide Genre. Minimalist's
+  Year mode shows the score only as the colour of the separator before the
+  year, so with the year hidden it prints the score instead.
+- `SHOW_ADMIN_LINK` (Access & serving, off by default) adds an Admin link to
+  the configurator's header. It stays hidden while the dashboard is disabled,
+  so turning it on without an `ADMIN_KEY` shows nothing.
+
+### PublicMetaDB watchlist
+
+- `WATCHLIST_SOURCE=pmdb` reads the Watchlist sash from a
+  [PublicMetaDB](https://publicmetadb.com) account's watchlist, with a key
+  from Settings → API set as `PMDB_API_KEY`. `PMDB_LIST_ID` reads another
+  list instead, including someone else's public one.
+- PMDB lists carry only TMDB ids, so the sash appears wherever the title's
+  TMDB id is known — with a server or client TMDB key — and not on
+  Cinemeta-only renders.
+
+### Faster poster rendering
+
+- A poster takes about 25% less CPU to render the first time and about 45%
+  less when its art has been rendered before (a different client or setting,
+  a trending change, a cache refresh). On a 4-core server a cold catalog grid
+  now renders about twice as fast. Rendered posters are unchanged pixel for
+  pixel.
+- WebP posters are encoded with less compression effort: about half the time
+  for files about 1.5% larger.
+- The faces the tinted vignette avoids are detected once per image and
+  remembered, instead of on every render.
+- The vignette's blur, the text-title fitting and the notch sash reuse work
+  that doesn't change between renders.
+
+### Trending catalogs addon has a logo
+
+- The addon's manifest now points to a Posters+ Trending logo, so it no
+  longer shows up blank in Stremio's addon list. Its address comes from
+  `PUBLIC_URL` when set, otherwise from the request, like the poster links.
+
+### Reliability and hardening
+
+- Errors reported on `/server-caps` and `/stats` show less detail.
+- Debug pages encode the parameters they echo back.
+- A custom top or bottom gradient's height and opacity are range-checked like
+  every other setting, and number parameters no longer accept `nan`.
+- An access key with non-ASCII characters is refused with a 403 rather than a
+  500.
+- The admin dashboard refuses `nan` and `inf` in number settings. Before, they
+  were saved and broke whatever used them after a restart.
+- Stream scraper requests are logged by host only.
+- Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to the proxy's address so
+  the admin dashboard sees each visitor's own address (now documented). The
+  admin lockout table no longer grows without limit.
+- New optional `PUBLIC_URL` setting for the address used in the trending
+  addon's poster links. Without it they still come from the request's headers.
+- The image is about 80 MB smaller, keeps its code read-only to the app, and
+  startup no longer re-owns every file in the cache.
+- A poster request riding on another request's render could wait forever if
+  that render was cancelled or failed early. It now falls back to rendering
+  the poster itself.
+- Changing `ACCESS_KEY` no longer breaks the re-rendering of cached trending
+  and watchlist posters. The key is no longer stored with them.
+- `/debug/canvas` now caches what it renders and renders off the event loop.
+- Unknown parameters (`&x=…`) no longer create a separate cached poster, and
+  URLs that differ only in spelling (`0.3` / `0.30`, `1` / `true`) now share
+  one. Cached posters are re-rendered once after updating.
+- Cache reads and writes on the poster path no longer run on the event loop,
+  and a change in the trending list clears the old posters in one pass over
+  the cache instead of one pass per title.
+- Upstream JSON is now fetched compressed.
+
+### Configurator no longer adds a stale access key
+
+- The configurator remembered the access key in the browser and fell back to
+  it when the page's URL had none. After the server's `ACCESS_KEY` was removed,
+  that old key kept going into every copied URL. The key now comes only from
+  the page's own URL, and any copy saved by an earlier version is cleared.
+- A key left in a bookmarked configurator URL after the server stopped
+  requiring one is dropped as well, so it no longer ends up in copied URLs.
+
+### Weight sliders take typed values
+
+- Clicking a rating weight's percentage now opens it for typing, like every
+  other slider in the configurator. Typed weights update the total and the
+  URL straight away.
+
+### API keys no longer cost AIOMetadata its posters
+
+- A TMDB or MDBList key entered in the configurator put `{tmdb_key}` /
+  `{mdblist_key}` in the copied URL. AIOMetadata drops the whole URL when a
+  placeholder it can't fill is required, so anyone without that key in
+  AIOMetadata (or who removed it later) lost every poster. AIOMetadata and
+  Xperience URLs now use the optional `{tmdb_key?}` / `{mdblist_key?}`, and
+  a missing key falls back to the server's own. Bingecat and Discover+ keep
+  the plain form, since they reject `{name?}`.
+- A key parameter that arrives still holding its placeholder is read as no
+  key, not sent to TMDB or MDBList as one.
+- An MDBList key in the URL that has used up its daily quota now hands over
+  to the server's MDBList key, when one is set, until the quota resets.
+  Before, that user's ratings stopped until the next day.
+
+### Trending lists get a second attempt
+
+- A trending list that couldn't be read (TMDB, a custom source or AniList) is
+  now read once more after a short pause. If that fails too, it is left for
+  five minutes instead of being retried on every poster request.
+- Posters drawn while their list was unreadable are kept for those five
+  minutes instead of seven days, so a title's rank comes back as soon as the
+  list does. The scheduled refresh also retries within the hour when a list
+  has never been read.
+
+### Trending catalogs addon
+
+- A Trending row in your metadata addon is built from its own copy of the
+  list, so its order rarely matched the "#N Today" on its posters.
+  PostersPlus now serves the lists behind the Trending sashes as a Stremio
+  addon with Trending Movies, Series and Anime catalogs. It is on by default
+  (`TRENDING_CATALOGS_ENABLED=false` turns it off). Import it into AIOMetadata (cache time 0) and each row's order
+  matches its labels. The configurator shows the manifest URL.
+- Trending Anime is AniList's trending list. With the addon on, a poster
+  requested with an AniList id shows its rank on that list rather than its
+  TMDB TV rank.
+
+### Trending ranks change together
+
+- Two posters could both read "#10 Today". Each one was cached for a day from
+  when it was drawn, so posters drawn before the daily refresh stayed in
+  apps beside ones drawn after it. Every poster showing a rank now expires
+  exactly when the ranks refresh, and apps are told the same.
+- With TMDB as the source, the scheduled refresh (`TRENDING_FETCH_TIME`) never
+  actually fetched new ranks. It redrew the trending posters with the old
+  ones instead. It now refreshes the ranks and then redraws those posters.
+  Without a fetch time, the refresh happens 24 hours after the previous
+  one rather than on a clock that restarts with the container.
+- Cache warming no longer replaces ranks that are still current.
+- A title TMDB listed on two pages no longer leaves a rank number empty and
+  pushes the titles around it a place out.
+- Trending anime posters are now redrawn and cleared from memory like any
+  other title when their rank changes.
+
+### The configurator remembers your settings on reload
+
+- **Minimum Quality to Display** set to HD Web came back as the strictest
+  tier but one after a reload, so most titles lost their quality badge in
+  the preview and in copied URLs. A few other settings left at the server's
+  default reverted the same way. Settings are now saved in full. Anything
+  already lost needs setting once more.
+- **Badge Size** no longer resets to the mode's default on every reload or
+  when a landscape preset is loaded. Changing the display mode still picks
+  that mode's size.
+- With the portrait rating hidden, your rating weights were left out of the
+  saved settings and out of Nuvio's `{shape}` URL, so landscape posters were
+  scored with the server's weights. They're kept now.
+
+### Shows waiting to premiere stay unreleased
+
+- TMDB sometimes marks a show "Returning Series" before its first episode
+  airs. Those shows read "Season 1" as if renewed, and Hide Rating Until
+  Released showed their score. They now read like any show waiting to
+  premiere ("Sep 30 Premiere"), and the score stays hidden until an episode
+  has aired.
+
+### Monster resolves as one series
+
+- IMDb lists Monster (`tt13207736`) as one anthology with a season per story.
+  TMDB lists each story as its own show, so the IMDb id sometimes failed to
+  resolve and the metadata provider's plain poster showed instead. Monster
+  now renders as its newest story that has premiered: Ed Gein today, and
+  Lizzie Borden from the day it airs.
+- A TMDB id now decides the title. An IMDb id sent beside it is kept only
+  when TMDB links that TMDB id to it, so a Monster story asked for by its
+  TMDB id gets its own rating, sash and quality, not the whole anthology's.
+  An IMDb-only request for Monster renders exactly like its newest story's
+  TMDB id. Ordinary titles are unaffected.
+
+### Importing a URL keeps you on this instance
+
+- Importing a URL copied from another instance no longer carries that
+  instance's address or access key over. Copy config now always points at
+  the instance you're using, with its own key, so switching instances is
+  just a matter of importing your old URL.
+
+### Landscape score out of 10
+
+- Landscape gains the **Display score out of 10** switch portrait already had
+  (`landscape_score_out_of_10=true`), under Core → Landscape. The score on the
+  `Genre • Year • Score` line reads `8.7` rather than `87`, and a perfect
+  score reads `10`. It hides with Hide Rating, as the portrait switches do.
+
+### QualiCache trust defaults to medium
+
+- `QUALICACHE_MIN_TRUST` now defaults to `medium`, so releases from unknown
+  groups count as well as the known ranked ones. Set it to `high` to keep the
+  old behaviour.
+
+### Hide Rating Until Released
+
+- A new **Hide Rating Until Released** switch (`hide_unreleased_rating=true`)
+  hides the score only on titles nobody can have watched yet: a film not out
+  in cinemas or anywhere else, or a series that has not aired an episode.
+  Trakt and IMDb accept ratings for announced titles, so a show years from
+  air could print a score from a handful of votes. Everything else keeps its
+  score, and a hidden one comes back by itself once the title is out: the
+  poster is re-rendered on the release-status schedule.
+- It uses the same release status as the info sash, but doesn't need the
+  status sash turned on, and turning it on doesn't add a sash or greyscale
+  the art. Films need a TMDB key, or Cinemeta, for their release dates.
+  Without either, a film's score is always shown.
+- A series TMDB still lists as "In Production" keeps its score once an
+  episode has aired. Films that have only had a festival premiere still
+  count as unreleased.
+
+### One Nuvio URL for both shapes
+
+- Nuvio's custom poster pattern gained a `{shape}` placeholder, which its
+  resolver fills with the shape the catalogue asked for. **Copy config** now
+  emits `shape={shape}` for Nuvio, so a single URL covers the portrait slot,
+  the 16:9 slot and the Continue Watching backdrop — where every other client
+  still needs the landscape URL copied separately from the landscape view.
+  The placeholder's presence is the switch on Nuvio's side: without it, it
+  replaces only portrait posters and leaves the other shapes alone.
+- Because that URL is resolved for both layouts, it is not filtered to either:
+  the portrait-only settings ride along and the landscape choices are emitted
+  whichever way the preview is pointing — the URL is the same from either view.
+- The settings the configurator keeps per shape — the bottom vignette tint and
+  its sliders, Hide Genre, Hide Rating, Textless and the sash mode — now also
+  take a `landscape_`-prefixed parameter (`landscape_hide_rating`,
+  `landscape_vignette_poster_color_bottom`, …) that only a landscape render
+  reads. A dual URL carries both values, so each layout gets its own: with one
+  parameter between them, the portrait value would have reached the 16:9 slot
+  too, and a URL copied with the portrait defaults would have rendered
+  landscape without its tinted band. A landscape render reads the prefixed
+  parameter, then the plain one, then its own default, so `shape=landscape`
+  URLs written before the split render unchanged. The configurator writes the
+  prefixed form for landscape URLs, leaves out any value a render would pick
+  anyway, and imports a dual URL into both shapes' settings.
+- `shape` accepts `poster` as a synonym for `portrait` — Nuvio's word for the
+  2:3 slot. It already rendered correctly, because an unrecognised shape fell
+  through to the portrait default, but the spelling reached the composite
+  cache key: `poster`, `portrait`, an unsubstituted `{shape}` and no shape at
+  all were four cache entries for one render, and are now one.
+- `shape=square` answers `400` instead. Nuvio asks for it when an addon
+  declares `posterShape: "square"` on a catalogue item, and there is no square
+  renderer to answer with — a portrait poster squashed into a 1:1 tile is
+  worse than not answering, and the error hands the item back to Nuvio's
+  fallback, which restores the addon's own artwork.
+
+### Series release status and dates
+
+- A series' release status came from TMDB's status word alone, and TMDB's
+  "Returning Series" means "not declared finished", not "on air" — so The Last
+  of Us (last episode May 2025) and Severance (March 2025) both read **Airing**.
+  The status now comes from the episode data TMDB already sends with the
+  series, at no extra API call: **Airing** only while episodes are going out
+  (one in the last fortnight, or the next due within one); **Renewed** when
+  TMDB lists the next season; and no status at all for a show returning in
+  name only, so a lower sash gets the space instead of a claim.
+- With release dates on, a series is dated the way a movie is: `Dec 25
+  Premiere` for a show that hasn't aired, `Mar 4 Season 3` for a dated next
+  season, `Jan 8 Returns` after a mid-season break. The weekly next-episode
+  date is left off on purpose — it would change every week and crowd out
+  better sashes. Translated in every shipped language; where the window comes
+  before the day the season uses the short form (`T3 4 mar`), so the two
+  numbers don't run together.
+- New **Renewed** sash slot, last in the default order so saved sash orders
+  keep their positions. A saved list that names Airing gets Renewed right
+  behind it (add `-renewed` to leave it out), since those shows used to read
+  Airing.
+
+### A leak post no longer outranks an announced digital date
+
+- The Odyssey (2026) showed "Streaming" while still in cinemas. Its IMDb id
+  had been posted to r/movieleaks in August — a knock-off film posted under
+  Nolan's id — and the digital-release cache takes every IMDb id in every post
+  at face value, overriding TMDB's status. TMDB meanwhile listed the digital
+  release for November. The feed is there to catch releases that beat TMDB's
+  date, and real ones beat it by days, so a leak now counts unless TMDB
+  schedules the digital release more than 14 days out — for both the
+  release-status sash and the "New" sash. With no TMDB date to compare (no
+  key, or the lookup failed) it is trusted as before. Composites already
+  cached with the wrong status re-render when their row expires (at most 30
+  days, sooner if the title's next release date comes first).
+
+### Anime from clients that only send the anime id
+
+- Anime landscape posters requested through Nuvio's own `{shape}` URL came
+  back as the genre canvas, where the same titles through AIOMetadata (as the
+  Nuvio HTPC fork uses) rendered properly. The difference was the ids: Nuvio's
+  resolver turns a `kitsu:7442` catalogue item into a Kitsu id and nothing
+  else, while AIOMetadata sends `tmdb_id` and `imdb_id` alongside it. The anime
+  providers ship one cover image and no backdrop or logo, so without a TMDB id
+  the landscape render had nothing to draw on, and portrait anime went without
+  a logo too.
+- New `ANIME_ID_MAP_ENABLED` (on by default) fills in the TMDB and IMDb ids an
+  anime request didn't send, from Fribb's community Kitsu/AniList mapping — the
+  same data AIOMetadata resolves from — downloaded daily into a local table. A
+  Kitsu-only request now renders the same poster, byte for byte, as the
+  AIOMetadata request for the title. Ids the client did send are kept, the TMDB
+  id is only used when it is the kind being rendered (movie or series), and
+  the art and metadata still come from the anime provider. A sequel season
+  maps to its parent show, as it does in AIOMetadata, so its logo and backdrop
+  are the show's.
+
+### Hide Rating
+
+- **Rating → Labels → Hide Rating** (`hide_rating=true`) takes the score off
+  the poster in whichever display mode is drawing it, alongside the existing
+  Hide Genre. Every mode loses its own representation of it: the Rating Bar
+  mode's accent bar, Clean's `★ 87`, Minimalist's score segment, and Bar
+  mode's `★ 87` along with the fill in the two Rating Bar styles, which fall
+  back to plain Frosted and Pure Black rather than drawing an empty stripe.
+- A score shown as a colour is still a score, so those go too. Minimalist's
+  Year layout carries the rating in the separator between the genre and the
+  year; with the rating hidden that separator drops back to the text colour,
+  and — having nothing left to encode — it is drawn even for a title with no
+  score, where before the slot was left empty.
+- The controls that only style a score go with it: the Glow group, the Colour
+  Palette, the out-of-10 switches, Minimalist's Rating Separator and Bar
+  mode's Rating Bar Colour. The Bar mode Style you picked is kept while they
+  are hidden, so turning Hide Rating back off gives the Rating Bar back. Like
+  Hide Genre the switch is kept per shape, and in landscape
+  (`landscape_hide_rating`) it drops the score from the 16:9 info strip.
+
+### Landscape in the configurator
+
+- The preview header has a landscape button. It switches the live preview to
+  the 16:9 render, shows the landscape choices under Core → Landscape, and
+  makes Copy config copy the `shape=landscape` URL (the shape is saved with
+  the rest of the settings and round-trips through Import; presets leave it
+  alone).
+- In landscape view the Rating, Logo and Quality tabs are hidden, along with
+  every other control the landscape renderer does not read (vignette levels
+  and top-band toggles, fallback style, sash and notch styling), so nothing
+  on screen can be reported as not working there. Hide Genre, Hide Rating
+  and Textless, which it does read, move into the Landscape group meanwhile. The landscape
+  URL carries only the settings that apply; the saved configuration still
+  carries everything, so the portrait settings survive a reload.
+- Landscape has defaults of its own for the settings it shares with portrait:
+  a bare `shape=landscape` URL renders the tinted band (two-tone, saturation
+  2.0, lightness 1.3, blur 1.0, local blending off) with the badge matched to
+  it, the textless art with the logo, the badge top-left and the sash shown.
+  An explicit parameter still wins, and portrait defaults are unchanged. The
+  configurator keeps a separate set of those values per shape, so switching
+  the preview never disturbs the other shape's settings, and its Sash mode
+  reads Hidden | Shown in landscape — there is no diagonal sash or notch
+  there, only the badge.
+- Bottom Colour from Poster can actually be switched off in landscape. The
+  configurator only ever wrote the toggle's on state, so off was an absent
+  parameter — the server's default — and in landscape that default is on.
+  Both vignette colour toggles are now written in both states (and still
+  dropped from the URL when they match the shape's default).
+- Three landscape presets (tinted band, dark band, original art). The preset
+  gallery is grouped by shape with the shape being previewed first, a preset
+  switches the preview to its own shape, and it only touches the controls
+  that shape reads — a landscape preset leaves the portrait configuration
+  alone and vice versa. Import from a config URL follows `shape=landscape`.
+- Added `landscape_badge_scale` (Sash → Badge → Badge Size, 0.6–2.0):
+  scales the landscape info badge's type and padding together, for a shelf
+  watched from across a room.
+- Added `landscape_color_link` (Sash → Badge → Colour Link): the info
+  badge takes the tinted band's colour, or the band takes the whole-frame
+  colour the badge uses. Hue only — the band still darkens it and the badge
+  still lifts it.
+- Landscape renders of anime ids (AniList / Kitsu) drew on the genre canvas:
+  the providers ship one cover and no backdrop. They now use TMDB's backdrops,
+  already fetched for the logo list, when the request carries a `tmdb_id` and
+  a TMDB key is available; the cover remains the portrait art.
+- The landscape band no longer shows a line where it starts. Its alpha ramp
+  was the portrait curve, which begins at full slope; on a short canvas the
+  eye reads that kink as a rule across the art, and no height or strength
+  setting could hide it. The band is now a smoothstep — flat at its top edge
+  and at its peak — with a gamma that gathers the darkness under the text
+  row, so it can be tall enough to fade properly (0.45 h) without reaching
+  visibly into the picture.
+- The logo's height is no longer tied to the band: it used to be capped at
+  the band's top edge, so a shallower band shrank every stacked logo with
+  it. The logo keeps its own 0.30 h ceiling and stands on its drop shadow.
+- Cached landscape composites are re-rendered once (render cache version 7).
+- The landscape logo's drop shadow was blurred on a canvas exactly the logo's
+  size, so it clamped at the edges and came out as a straight-edged slab
+  around any logo whose ink reached its bounding box. It is now built on a
+  padded canvas and reads as a soft pool under the wordmark.
+- The landscape info pill is about 15% larger and casts a soft drop shadow,
+  so it stands off bright art in the top corners the way the logo does; the
+  genre / year / score strip casts a tighter one for the same reason, with
+  the letters punched out of it so the translucent type does not darken,
+  and its ink lifted a step.
+- Landscape prefers a wide logo: within the language bucket that wins, a
+  logo with an aspect ratio of 2.0 or more is ranked ahead of stacked or
+  square ones, which the wide, short logo box could only draw small. Votes
+  still decide among the wide ones, and portrait selection is unchanged.
+- The landscape band's poster-colour tint now honours Blend Into Nearby Art
+  the way the portrait bottom vignette does, and samples at the finer cell
+  counts the wider canvas was meant to use, so the low end of Blur follows
+  the art instead of going coarse.
+
+### Copy config picks your client
+
+- **Copy config** copies the URL in the shape your client can actually
+  resolve. The first press opens a short menu — AIOMetadata, Nuvio, Xperience,
+  Bingecat or Discover+ — and after that a left-click copies for that client
+  again while a right-click reopens the menu to pick another (press and hold on
+  touch, which has no right-click). The choice is remembered per browser,
+  marked with a tick in the menu, and named in the button's tooltip along with
+  where to paste the result.
+- AIOMetadata, Nuvio and Xperience get both core ids in the optional form —
+  `tmdb_id={tmdb_id?}&imdb_id={imdb_id?}`. A *required* placeholder the client
+  cannot fill makes the resolver drop the whole URL, and both ids hit that in
+  practice: TMDB has no IMDb link for some titles, and a client's catalogue
+  often has no TMDB id for one. Since either id renders on its own now, an
+  unresolved one is simply not sent instead of costing the poster. This also
+  brings the IMDb-keyed extras (Metahub logo fallback, digital-release
+  detection, automatic quality badges) straight from the template.
+- That is one URL for three of the five clients: Nuvio's resolver takes
+  AIOMetadata's placeholder set and Xperience builds Nuvio configurations, so
+  all three share it. Bingecat and Discover+ reject `{name?}` at config time
+  and keep `tmdb_id={tmdb_id}` in the required form — correct there, since it
+  is the only id they send and a title they cannot resolve one for has nothing
+  to render from anyway. As each gains the form it moves onto the optimal URL,
+  and once neither is left every client shares a single one.
+- The **Anime IDs** toggle is gone. Whether `stremio_id={id}` can be resolved
+  is a fact about the client rather than a preference, so it now rides on the
+  template: on for the clients that can substitute it, off for the ones that
+  cannot. Existing URLs are unaffected, and the client choice is not
+  part of the saved configuration, so a shared or imported config URL never
+  carries someone else's client with it.
+
+### Identity
+
+- `/poster` and `/logo` accept either id. An `imdb_id`-only request (or a
+  `tt…` `stremio_id`) is resolved to a TMDB id through TMDB's `/find` and
+  persisted, so it renders exactly as a request carrying both ids would and
+  shares its composite cache entry with one. TMDB's type wins when it
+  disagrees with the request. Missing both ids is a 400 that names both.
+
+### MDBList burst limit
+
+- MDBList throttles per IP as well as per key: a burst of calls within a few
+  seconds gets 503s, then `429` with `Retry-After: 10` for every key on the
+  address, with the daily quota untouched. That 429 was handled as a key
+  problem — the key was cooled down, a sibling key was tried (and refused
+  too), and one without `Retry-After` parked the key for an hour with
+  thousands of calls left. A burst 429 or 503 now pauses all MDBList calls
+  from the process for `Retry-After` (10 s when absent) and touches no key;
+  a live render waits the pause out and retries once, so the poster is
+  complete and cacheable rather than provisional. Quota 429s keep the
+  sleep-until-reset-and-rotate behaviour.
+- Added `MDBLIST_MIN_INTERVAL` (default `0.2` s): a minimum spacing between
+  MDBList request starts shared by live renders and the cache warmer. With
+  `MDBLIST_CONCURRENCY=3` an unpaced cold catalog warm reached ~10 calls/s,
+  which is where the limit was hit. `/stats` and the admin overview show the
+  pacing rate and any burst pause in progress.
+
+### Cinemeta fallback
+
+- Added Stremio's Cinemeta catalogue as a key-less, IMDb-keyed art and
+  metadata source (`CINEMETA_ENABLED`, on by default). An instance with no
+  TMDB key — on the server or the request — renders any title it has an IMDb
+  id for: the Metahub background cropped to portrait with the logo on top,
+  the one-sheet in original-art mode, the background as shot in landscape.
+  Title, year, genre, runtime, status, cast and director come from the same
+  document; MDBList ratings, awards and quality badges are unaffected.
+  Cinemeta's own TMDB id is what resolves an `imdb_id`-only request without
+  a key.
+- The same path carries a title TMDB has no record for when a key is
+  configured, and Metahub art is tried as a last tier before the genre
+  canvas when TMDB knows a title but has no artwork. Art availability is
+  probed on the CDN (Cinemeta names image urls for every title) and cached.
+- A `tmdb_id`-only request without a key is still refused — Cinemeta is
+  IMDb-keyed — with a 400 that says an `imdb_id` would render.
+- The configurator searches without a TMDB key: `/search` falls back to
+  Cinemeta's catalogue (IMDb-keyed rows in TMDB's shape), a new
+  `/resolve-tmdb` finds the TMDB id on selection (TMDB's `/find` with a key,
+  Cinemeta's `moviedb_id` without), and the preview renders from the IMDb id
+  alone when there is none. The Presets' ignored inset parameters are gone.
+- More sashes survive without a TMDB key. A Cinemeta-spined movie takes its
+  release status from Cinemeta's theatrical and disc dates plus MDBList's
+  `released_digital` (remembered whenever a rating is fetched), so a film
+  that has gone digital reads Streaming rather than Cinema; without MDBList
+  as well, `CINEMA_ASSUMED_DIGITAL_DAYS` (default 60) treats a theatrical
+  release older than that as Streaming, and the movieleaks cache still
+  supplies Streaming earlier,
+  a series gets its season and episode structure from Cinemeta's episode
+  list (Mini Series, Binge Ready, New Season, Returning, Season Finale), and
+  a Trending sash backed by a custom MDBList source no longer waits on a key
+  it never needed.
+- A verbatim `{tmdb_id}` or `{tmdb_id?}` on `/poster` and `/logo` is read as
+  "no TMDB id", as `{imdb_id}` already was, so a client that leaves the
+  placeholder in for a title it has no TMDB id for renders from the IMDb id
+  instead of getting a malformed-id 400.
+
+### Localization
+
+- Added Polish (`pl`) poster-output translations, contributed by @skoruppa.
+- Added poster-output translations for every configurator language the label
+  font can draw: German, Dutch, Swedish, Danish, Norwegian, Finnish, Greek,
+  Czech, Slovak, Hungarian, Romanian, Croatian, Russian, Ukrainian, Bulgarian,
+  Turkish, Vietnamese, Indonesian, Malay, Swahili and Afrikaans. These are
+  machine-assisted first drafts; corrections from native speakers are welcome.
+  Japanese, Korean, Chinese, Arabic, Persian, Urdu, Hebrew, Hindi, Bengali,
+  Tamil, Telugu and Malayalam stay untranslated: Inter has no glyphs for those
+  scripts, and the image has no complex-text shaping to lay them out.
+- French, Italian and Portuguese gained the 27–29 language-name sash labels
+  they were missing, which previously rendered in English.
+- The landscape badge uppercases its label the way the language does: Turkish
+  `i` becomes `İ` rather than `I`, and Greek drops the tonos in capitals.
+- The configurator marks every fully translated language with ★.
+
+## v1.2.0 - 2026-09-20
+
+This release is compared with `v1.1.0`.
+
+### Highlights
+
+- Added anime-native poster requests through AniList and Kitsu, with separate
+  anime rating weights for MyAnimeList, AniList and Kitsu scores.
+- Added a 16:9 landscape poster layout, poster-coloured vignettes, and frosted
+  elements that match the painted vignette colour.
+- Made IMDb ids optional: `tmdb_id` is the identity, so titles TMDB has no IMDb
+  link for now render with ratings and sashes instead of failing.
+- Added QualiCache as a quality source, so poster rendering answers from a
+  shared cache instead of waiting on a scrape.
+- Added MDBList-free rating inputs: TMDB's own vote average and IMDb's daily
+  dataset, each usable as the primary source or as a fallback when MDBList has
+  no value.
+- Added background cache warming for trending, popular, and custom-catalog
+  titles, with quota-aware MDBList spending, plus custom trending sources.
+- Fixed festival sashes naming a top prize the film did not win; top prizes are
+  now checked against Wikidata-built lists verified edition by edition.
+- Redesigned the configurator with new presets, row tooltips, a title-link
+  menu, and generated URLs about a third of their previous length.
+- Hardened the server for cold-catalog bursts: fresh renders queue behind an
+  admission cap, and the healthcheck no longer leaves zombie processes.
+- Added Brazilian Portuguese translations and translated the remaining sash
+  vocabulary in every shipped language.
+
+### Anime
+
+- Added anime-native poster requests through AniList and Kitsu. Clients that
+  supply `anilist_id`, `kitsu_id`, or an AIOMetadata-compatible `{id}` can use
+  the provider's cover art, title, genres, air dates, lifecycle status, and
+  community score without converting the title to a TMDB or IMDb id.
+- Added an off-by-default Anime IDs configurator option for AIOMetadata poster
+  URLs. Anime-native ids are also carried through to compatible quality sources,
+  so stream-quality badges continue to work when no IMDb id exists.
+- Anime requests now keep any accompanying TMDB and IMDb ids for logos, MDBList
+  ratings, awards, age ratings, release data, and other enrichment. AniList and
+  Kitsu scores participate in the normal weighted-rating pipeline and default
+  to zero weight.
+- Anime cover art can receive a TMDB logo by default. If an anime provider is
+  unavailable or misses a title, rendering temporarily falls back to TMDB art
+  instead of a genre canvas without caching the degraded result.
+- Improved anime provider caching, concurrency limits, genre selection, request
+  identity, and placeholder handling. Definitive misses are negative-cached,
+  while throttles and transient provider failures are not.
+
+### Poster Rendering
+
+- Added a dedicated 16:9 poster layout through `shape=landscape`, with backdrop
+  artwork, height-relative sizing, a unified bottom information band, and clear
+  top corners for client overlays. `landscape_art` selects textless or original
+  artwork and `badge_pos` controls the age-rating badge position.
+- Added poster-coloured top and bottom vignettes with saturation, blur,
+  lightness, two-colour ramp, and blend controls. Tint selection now samples the
+  artwork near the visible seam, rejects shadow-only and conflicting colours,
+  and limits excessive chroma for more consistent results across a shelf.
+- Frosted notches and bars can match the colour actually painted by a tinted
+  vignette. Matching preserves the vignette's lightness and falls back to the
+  normal frost colour when the band does not have a reliable tint.
+- Posters confirmed to contain a baked-in title use a plain black vignette
+  instead of blurring and tinting the title inside the artwork.
+- Expanded Minimalist mode with a Split layout, optional centring, and separate
+  field and rating separators. Pip, bullet, and rating-star treatments are
+  exposed only where they apply, including the score-coloured separator in Year
+  mode.
+- Added independent notch padding so the space above and below a label can be
+  tightened without shrinking the font, changing the badge width, or moving the
+  notch.
+- The release-status sash now shows the date an unreleased movie arrives, and
+  where, when TMDB has published one — `Oct 16 Cinema`, `Oct 23 Streaming`, or
+  `Dec 2027 Cinema` when it is a year or more away — instead of a bare
+  `Cinema` / `Production`. In cinemas the date is the next digital or disc
+  release; in production it is the first release anywhere. Translated in every
+  shipped language, and switchable off with the new Release Status: Show Date
+  toggle (`release_status_dates=false`).
+
+### Configurator
+
+- Redesigned the configurator with rounded panels, sentence-case group headings,
+  text tabs, consistent spacing and controls, a cleaner preview panel, and
+  refreshed preset and import dialogs across every settings tab.
+- Reworked inline help into row tooltips that also work on touch devices, and
+  improved control grouping, contrast, button styling, colour swatches, and the
+  sash-priority editor.
+- Moved Import from URL into the header and added a title-link menu with IMDb,
+  TMDB artwork, MDBList, and SIMKL shortcuts. Fixed menu links that could open
+  `#` before their targets were initialized.
+- Generated poster URLs and presets no longer carry an `imdb_id` placeholder,
+  which previously discarded the whole URL for any title without an IMDb link.
+  A title with no linked IMDb id is now reported as a normal state rather than an
+  error, previews load from the TMDB id alone, and the result is remembered for a
+  week so the resolver is not re-run on every load.
+- Plex and Jellyfin sync no longer skip library items that have a TMDB id but no
+  IMDb id. Quality badges from the local file continue to work for those items,
+  and an `imdb_id` baked into a copied recipe URL can no longer be applied to
+  items it does not belong to.
+- Wait for Quality is now sent for the Combined badge mode, which offered the
+  toggle but left it out of the generated URL.
+
+### Quality
+
+- Added QualiCache as a quality source: set `QUALITY_SOURCE=qualicache` and
+  `QUALICACHE_URL` (plus `QUALICACHE_API_KEY` if QualiCache sets an access key).
+  QualiCache crawls Stremio addons in the background and answers from its own
+  cache, so poster rendering no longer waits on a scrape and one instance can
+  serve PostersPlus and other clients at once.
+- Titles QualiCache hasn't collected yet report as pending rather than failed.
+  The poster is served without badges and the composite isn't cached, so a later
+  request picks the badges up — and a cold title no longer counts against the
+  quality source's failure budget the way a real outage does.
+- QualiCache `BLURAY` and `WEBRIP` answers now fold into the silver Web badge.
+  Older shows whose best trusted release is an encode rather than a remux or
+  WEB-DL (*Lost*, *Futurama*) previously showed no quality badge at all, since
+  the source token was dropped and a resolution alone is never drawn. Only a
+  true remux keeps gold. Tokens with no PostersPlus equivalent (`8K`, `1440P`,
+  `720P`, `SD`, `HDTV`) are still dropped rather than approximated.
+- Quality backend selection now runs through one dispatcher instead of being
+  repeated at each call site. `/status` reports the active backend as
+  `quality_source`.
+- The Quality Bookmark badge mode now seeds Badge Size at 30 rather than 16.
+  At 16 the corner mark was barely visible at the poster sizes most clients
+  render at, so the mode looked like it hadn't worked. The right value varies
+  by client, which the mode's tooltip now says.
+
+### Ratings
+
+- Added separate rating weights for anime. `anime_movie_weights` and
+  `anime_tv_weights` take the same `source:weight` list as `movie_weights` /
+  `tv_weights` and apply to any title carrying a MyAnimeList, AniList or Kitsu
+  rating — MDBList supplies the MyAnimeList score for anime it knows, so this
+  covers anime requested by ordinary TMDB/IMDb id as well as the anime-native
+  path. Both are opt-in: a URL naming neither scores its anime with the movie
+  and TV weights exactly as before, so nothing changes for existing URLs. The
+  source lists are what MDBList actually returns for anime: anime films carry
+  every movie source, while anime series never carry a Metacritic critic score
+  or a Roger Ebert review (dropped) but do often carry Letterboxd (added). The
+  Weights tab gains a **Separate Anime Weights** toggle that reveals the two
+  groups, and `debug=1` now reports `is_anime` and the `rating_weights` used.
+- Added an MDBList-free way to source two of the weighted rating inputs.
+  `tmdb_rating_source=direct` uses TMDB's own vote average — already fetched
+  alongside genre/year/credits, so it costs nothing extra and needs no MDBList
+  key. `imdb_rating_source=dataset` sources the IMDb weight from IMDb's own
+  free, no-key, daily-refreshed non-commercial dataset
+  (`title.ratings.tsv.gz`), downloaded and refreshed on a schedule
+  (`IMDB_DATASET_ENABLED`, `IMDB_DATASET_REFRESH_HOURS`,
+  `IMDB_DATASET_MIN_VOTES`, `IMDB_DATASET_PATH`) and looked up locally with no
+  per-title network call. Both default to the existing MDBList-sourced
+  behaviour and are exposed as dropdowns on the Weights tab, and either can be
+  used with zero MDBList key configured.
+- Both settings also take `fallback`, which keeps MDBList as the source of
+  truth and consults the local source only when MDBList has no value for that
+  title. That covers a hard gap — a rate-limited or exhausted key, a timeout,
+  every configured key cooling down — and a soft gap, where MDBList answered
+  but carried no score for the title (or one `RATING_MIN_VOTES` filtered out),
+  with the same rule. `tmdb_rating_source=fallback` needs no server-side setup
+  at all, which makes it the cheapest way to keep scores alive through an
+  MDBList outage. This is a different layer from `fallback_to_imdb`: that one
+  fires when the *weights* score nothing and reaches for whatever `imdb` value
+  is present, whereas these put a value there for it to find. They compose.
+- The configurator now disables the two dataset-backed IMDb source options
+  when `IMDB_DATASET_ENABLED` is off server-side, and coerces an imported URL
+  that names one back to `mdblist`. Selecting an option the server can't
+  honour produced a URL that looked configured and silently scored `N/A`.
+  `/server-caps` already reported the state; nothing was reading it.
+- Only one worker per interval downloads the IMDb dataset. With `WORKERS` > 1
+  every worker ran its own copy of the refresh loop against the same
+  database, so the losers of the table swap failed with `database is locked`
+  and — worse — kept a stale row count, which left them reporting an empty
+  dataset on `/server-caps` and splitting the composite cache signature.
+- Corrected `.env.example`'s `MDBLIST_API_KEY` documentation, which called it
+  `[Required]`; it has been optional in the request path for some time (see
+  the "IMDb ids are now optional" entry above) and is now spelled out exactly
+  which sashes and the score are unavailable without it.
+
+### Metadata And Caching
+
+- Poster responses now advertise the composite's own expiry, so a caching client
+  keeps a trending-sashed poster for a day and a settled title for the full
+  `COMPOSITE_CACHE_TTL`. A configured `CDN_CACHE_TTL` acts as a ceiling the
+  deadline can lower, `CDN_CACHE_TTL=auto` drops the ceiling, and `0` still
+  sends no `Cache-Control`. `304` responses carry the same freshness.
+
+- IMDb ids are now optional. `tmdb_id` is the required identity — it selects the
+  artwork and metadata — and `imdb_id` is optional enrichment. Titles TMDB has no
+  IMDb link for previously returned an error and, through AIOMetadata, lost their
+  poster entirely because a required placeholder with no value discards the whole
+  URL. Existing URLs that send both ids are unchanged.
+- Ratings, awards, keywords, and age ratings are now looked up through MDBList's
+  TMDB route when no IMDb id is available, so TMDB-only titles keep their score
+  and sashes. A title MDBList does not know still renders from TMDB metadata with
+  an `N/A` score.
+- Stream-quality lookups now resolve their id after metadata, so a title whose URL
+  omits `imdb_id` still gets quality badges via the IMDb id TMDB itself supplies.
+  Anime keeps its provider-native id for these lookups. Titles with no IMDb id
+  anywhere skip the lookup rather than issuing one nothing can answer; an explicit
+  `quality=` override is unaffected.
+- Rating cache, coalescing, and back-off state are now keyed on one immutable
+  per-request identity (`tmdb:<id>` when there is no IMDb id) rather than the raw
+  `imdb_id` parameter. Cache warming writes the same identity the request path
+  reads. Metahub logo fallback, digital-release detection, and IMDb links run only
+  when an IMDb id is actually available.
+- `/poster?debug=1` now reports the resolved identities — `canonical_id`,
+  `rating_provider`, `rating_media_id`, `quality_id`, and `effective_imdb_id`.
+- Added `TRENDING_SOURCE_MOVIE` and `TRENDING_SOURCE_TV` so operators can replace
+  TMDB's global trending list with an MDBList page or a TMDB-shaped endpoint.
+  The configured order drives both trending sashes and cache warming, enabling
+  regional or service-specific rankings.
+- Custom trending sources now isolate movie and TV entries, reject rows without
+  numeric TMDB ids, follow canonical MDBList URLs, refresh cleanly when the
+  configured source changes, and avoid exposing credentials or query strings in
+  cache signatures and logs.
+- Release-status caches now use status-aware lifetimes: active, in-production,
+  and cinema titles refresh quickly, while ended, cancelled, physical, and
+  established streaming releases remain cached longer. Known release dates set
+  the next refresh boundary directly.
+- Composite posters now expire no later than the release data rendered into
+  them. Disk and in-memory cache entries share the same deadline, and cache
+  warming reuses the trending snapshot it already fetched.
+- Rating-provider failure counters are now pruned together with their expired
+  backoff state.
+- Renamed the award sash labels so winners and nominees no longer share the
+  same text: "Best Picture" / "Golden Globe" became "Oscar Winner" / "Oscar
+  Nominee" and "Globe Winner" / "Globe Nominee", in every shipped language.
+  A new `sash_winner_star` toggle prefixes winners with a star, replacing the
+  old heuristic that guessed from the shared label.
+- Fixed movies wearing TV awards. TMDB movie and TV ids are separate
+  namespaces, but the Emmy and Golden Globe id lists were searched as one, so
+  *Back to the Future* (movie/105) inherited *Sex and the City*'s Emmy and
+  *Donnie Darko* (movie/141) inherited *Cheers*'s. Lookups now use the film or
+  TV lists by media type, and cached rating rows rebuild their Globe / Emmy
+  labels on read so existing rows correct themselves.
+- Fixed unreleased movies reading `Streaming`. TMDB flips a film to `Released`
+  ahead of its first date, and limited-theatrical and festival-premiere dates
+  were not being read at all, so a title like *You Can See Everything* (two
+  festival premieres, limited release in October) had no dates to contradict
+  the flag. Limited releases now count as theatrical, a future premiere counts
+  as proof the film is not out, and cached rows that recorded no dates are
+  re-fetched once.
+
+### Performance And Reliability
+
+- Reduced startup memory by loading genre fallback backgrounds on demand into a
+  bounded cache instead of decoding the whole gallery, and reduced per-thread
+  SQLite page-cache memory. Fallback fonts are now cached as well.
+- Made fallback-title rendering faster and more reliable by starting font
+  fitting from a monotonic width search, fitting long titles rather than cutting
+  them off, and ellipsizing every landscape fallback line that needs it.
+- Reduced score and quality-bar composition work by drawing only the affected
+  strips instead of repeatedly compositing full-canvas layers.
+- OCR thread sizing now respects the container's actual cgroup CPU quota rather
+  than the host CPU count. `TEXTLESS_DETECTION_CONCURRENCY` now defaults to `1`
+  to avoid slower scans and roughly 50 MB of unnecessary memory per idle
+  session; larger values remain available for cold-cache library sweeps.
+- Landscape requests no longer wait for quality data the layout does not render,
+  and transient custom-trending failures use a short retry cooldown rather than
+  refetching once per poster.
+- A burst of uncached poster requests — a cold catalog or tabbed grid asking
+  for 50+ posters in a second — no longer fails en masse with `PoolTimeout`.
+  Fresh renders now queue behind a per-worker admission cap
+  (`POSTER_RENDER_CONCURRENCY`, default `8`); cache hits and requests coalesced
+  onto an in-flight render are never held back. The upstream connection pool is
+  sized from that cap, and a request waits up to 10 seconds for a connection
+  rather than 5. `/stats` reports `renders_active`, `renders_queued` and
+  `render_slots`.
+- Cache warming no longer drains a free MDBList key's daily quota. MDBList's
+  limit is 1,000 requests per key per day (more on paid tiers), not a burst
+  limit, and the default `CACHE_WARM_MDBLIST_BUDGET` of 500 took half of it in
+  one cycle — leaving live poster requests to 429 for the rest of the day.
+  Every MDBList response reports the remaining quota, and the warmer now
+  reads it: it stops spending a key once its remaining requests fall to
+  `CACHE_WARM_MDBLIST_RESERVE` (default `300`), moving to `MDBLIST_API_KEY_2`
+  when that key still has room, and never drags live traffic off a key that
+  is merely at its reserve. A quota 429, which carries no `Retry-After`, now
+  parks the key until MDBList's own reset time instead of retrying hourly
+  against a key that is dead until midnight UTC. `/stats` reports each key's
+  `daily_limit`, `daily_remaining` and `quota_reset_at`.
+- The container no longer accumulates zombie `python3` processes under load.
+  The Docker healthcheck ran through a shell, so a probe that overran its 5s
+  timeout on a busy host left an orphaned `python3` that nothing reaped. The
+  probe now runs without a shell, imports less, and gets 10s; `tini` is PID 1
+  so any orphan is reaped regardless.
+
+### Configurator
+
+- Generated poster URLs are about a third of their previous length - roughly
+  1500 characters down to 450 on the shipped presets. Some metadata services
+  truncate or reject URLs past 2000 characters, and most of what was there
+  restated settings the server would have chosen anyway. Three changes get it
+  there: parameters already at their default are left out, `sash_priority` is
+  sent as a diff against the default order, and rating sources weighted at zero
+  are no longer named. The server parses the result identically and every URL
+  generated before this keeps working unchanged.
+- `sash_priority` now accepts a diff form: `default,-cult,festival@0` removes
+  the cult sash and promotes the festival one, instead of listing all thirty
+  slots. The full list is still accepted and still means what it always did.
+- The defaults the configurator omits are read from the server at load time
+  rather than restated in the page, so they cannot drift apart. If the server
+  cannot be reached the full-length URL is generated instead.
+- Replaced the ten shipped presets with a new set — tinted minimalist,
+  colour-matched bar/notch/sash, and rating-bar variants — with WebP
+  screenshots.
+- Fixed a rating or sash text colour that, once typed, came back after every
+  container rebuild even after being cleared. The reset-on-load skipped hex
+  text boxes and an imported URL that omitted the parameter left the old value
+  in place; both now clear to the server default.
+
+### Fixes And Documentation
+
+- Fixed festival sashes naming a top prize the film did not win. MDblist tags a
+  title `festival-cannes-winner` if it won *anything* at Cannes, and that was
+  read as "Palme d'Or" — so the whole 2023 slate, from the Grand Prix winner
+  down to the Un Certain Regard one, wore a Palme d'Or sash — nine films, of
+  which one had won it. Every festival in the list had the same fault.
+  The top prize is now looked up by TMDB id against a list built from Wikidata,
+  and the keyword only supports the weaker claim it can actually carry: a title
+  that won something at Cannes but not the Palme reads "Cannes Winner". A top
+  prize now also shows when MDblist is unreachable, since the list is local.
+  Cached titles convert on first startup without re-fetching anything.
+- Cross-checked every top-prize list against the festivals' own winners tables,
+  edition by edition. That restored 34 winners the first source had no record
+  of — Joker's 2019 Golden Lion, four recent Locarno Leopards, Cannes' 1946
+  eleven-way tie — each of which had been showing the weaker sash.
+- Removed 9 films that were wearing a top prize they did not win. Three were
+  Golden Bear winners for Best Short Film rather than the Golden Bear, two were
+  Berlinale and Locarno sidebar prizes, and one was a mismatched id: Precious
+  premiered at Sundance as "Push: Based on the Novel by Sapphire", and its Grand
+  Jury Prize had landed on the unrelated 2009 science-fiction film Push, which
+  wore the sash while Precious went without.
+- Removed the Toronto, Busan, Rotterdam, SXSW and Tribeca festival sashes. Their
+  labels — People's Choice, New Currents, Tiger Award, SXSW Jury, Tribeca AA —
+  named specific prizes no available source can confirm, and unlike the five
+  festivals that remain there is no list to check them against. Cannes, Venice,
+  Berlin, Locarno and Sundance are unaffected.
+- Fixed quality badges never appearing unless Wait for Quality was on. A poster
+  served before its quality arrived was correctly kept out of the composite
+  cache, but still carried an ETag identical to the finished render's, so
+  clients and CDNs revalidated their badge-less copy and were told it was still
+  current. Renders the server declines to keep now ship no validator and ask not
+  to be stored. Clients holding a badge-less poster from before this fix keep it
+  until the composite TTL lapses or the URL changes.
+- Fixed missing ratings leaving an empty score in the information strip, and
+  fixed fallback titles that could be clipped instead of resized to fit.
+- Fixed landscape fallbacks losing their title, TV shows retaining a stale
+  ended status after revival, and release sashes surviving past a newly reached
+  digital-release boundary.
+- Added the 78th Emmy (2026) winners and nominees to the award sash data.
+- Split the oversized `.env.example` into a concise starter configuration and a
+  new `ADVANCED.md` tuning reference. Added previously undocumented OCR and face
+  model path overrides and corrected OCR concurrency guidance and defaults.
+
+### Localization
+
+- Added Brazilian Portuguese (`pt-br`) poster-output translations, contributed
+  by @danilopagotto82.
+- Region-qualified translation files take precedence over the bare language, so
+  a `pt-br` request uses `languages/pt-br.json` rather than `languages/pt.json`.
+  Selecting `pt-br` also restricts logo artwork to Brazil-tagged entries,
+  falling back to English rather than to Portugal-tagged art.
+- Translated the remaining fixed sash vocabulary in every shipped language: the
+  release-status labels (`Physical`, `Streaming`, `Cinema`, `Production`,
+  `Airing`, `Ended`, `Cancelled`) and the ten festival winner labels, from
+  `Palme d'Or` through `Tribeca AA`. Previously these rendered in English on an
+  otherwise translated poster.
+
 ## v1.1.0 - 2026-06-09
 
 This release is compared with the original `v1.0.0` release. It also includes

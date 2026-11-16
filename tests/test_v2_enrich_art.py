@@ -36,7 +36,7 @@ from integration_contract import (
     SourceArtReference,
 )
 from preset_registry import get_preset
-from ratings import RatingDetail, RatingFetchDetails, fetch_rating, fetch_rating_details
+from ratings import RatingDetail, RatingFetchDetails, fetch_rating_details
 from render_spec import canonicalize_config
 from service_auth import MemoryNonceStore, build_auth_headers
 from source_art import (
@@ -356,7 +356,7 @@ def _render_enrichment_result(
     return payload
 
 
-def test_rating_details_preserve_scale_votes_and_legacy_projection(monkeypatch):
+def test_rating_details_preserve_scale_and_votes():
     class Response:
         status_code = 200
         headers = {}
@@ -396,55 +396,6 @@ def test_rating_details_preserve_scale_votes_and_legacy_projection(monkeypatch):
     assert details.ratings[1].scale == 10.0
     assert details.ratings[1].vote_count == 2_000_000
     assert len(details.ratings) == 2
-
-    sanitized_details = RatingFetchDetails(
-        details.ratings,
-        details.genre,
-        details.release_date,
-        details.keywords,
-        details.age_rating,
-    )
-    mocked = AsyncMock(return_value=sanitized_details)
-    monkeypatch.setattr("ratings.fetch_rating_details", mocked)
-    legacy = asyncio.run(fetch_rating(client, "tt0133093", "key", [28], "movie"))
-    assert legacy == (
-        {"letterboxd": 4.3, "imdb": 8.7},
-        details.genre,
-        "1999-03-30",
-        [{"name": "cult-classic"}],
-        16,
-    )
-    assert mocked.await_count == 1
-
-
-def test_legacy_rating_projection_keeps_raw_types_and_last_provider_wins():
-    class Response:
-        status_code = 200
-        headers = {}
-
-        def json(self):
-            return {
-                "released": "1999-03-30",
-                "age_rating": "99",
-                "keywords": [{"name": "one"}, {"name": "two"}],
-                "ratings": [
-                    {"source": "imdb", "value": "8.7", "votes": 1000},
-                    {"source": "imdb", "value": "9.1", "votes": 2000},
-                ],
-            }
-
-    class Client:
-        async def get(self, *_args, **_kwargs):
-            return Response()
-
-    legacy = asyncio.run(fetch_rating(Client(), "tt0133093", "key", [], "movie"))
-    assert legacy == (
-        {"imdb": "9.1"},
-        "Unknown",
-        "1999-03-30",
-        [{"name": "one"}, {"name": "two"}],
-        99,
-    )
 
 
 def test_resolver_trusts_both_authenticated_ids_without_lookup():

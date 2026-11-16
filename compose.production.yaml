@@ -23,6 +23,10 @@ services:
     environment:
       POSTERSPLUS_SOURCE_ACCOUNT_INCOMING: "true"
       POSTERSPLUS_SOURCE_INCOMING_DIR: /app/source_incoming
+      # Upstream features this private Core does not serve; both default on
+      # upstream (a public trending addon; a daily anime id-map download).
+      TRENDING_CATALOGS_ENABLED: "false"
+      ANIME_ID_MAP_ENABLED: "false"
       # Workers retain freed heap (glibc arenas, ~70 MB/day over 3 workers); recycle each
       # one every ~2 days (~6k requests/worker/day). The uvicorn supervisor respawns it.
       UVICORN_LIMIT_MAX_REQUESTS: "10000"

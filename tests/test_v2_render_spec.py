@@ -214,6 +214,16 @@ def test_textless_output_suppresses_logo_and_ocr_work_but_keeps_art_fallback():
     assert composited.ocr is True
 
 
-def test_custom_configs_reject_out_of_scope_quality_badges():
+@pytest.mark.parametrize("mode", [1, 5, 8, 99])
+def test_custom_configs_reject_out_of_scope_quality_badges(mode):
+    # Above the graphic mode is rejected too, not clamped onto 7.
     with pytest.raises(ValueError, match="badge_display_mode"):
-        canonicalize_config({"badge_display_mode": 5})
+        canonicalize_config({"badge_display_mode": mode})
+    assert canonicalize_config({"badge_display_mode": 7}).badge_display_mode == 7
+
+
+@pytest.mark.parametrize("resolution", [500, 780])
+def test_resolution_is_not_part_of_the_v2_contract(resolution):
+    # The v2 canvas is fixed at 500x750.
+    with pytest.raises(ValueError, match="resolution"):
+        canonicalize_config({"resolution": resolution})

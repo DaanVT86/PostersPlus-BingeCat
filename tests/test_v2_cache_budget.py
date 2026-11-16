@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import sqlite3
 import time
@@ -58,51 +57,6 @@ def test_file_leader_lock_is_single_process_wide(tmp_path: Path) -> None:
     first.release()
     assert second.acquire() is True
     second.release()
-
-
-def test_l1_enforces_real_byte_cap_ttl_and_digest() -> None:
-    now = time.time()
-    with (
-        patch.object(cache, "COMPOSITE_MEM_ENTRIES", 10),
-        patch.object(cache, "COMPOSITE_MEM_MAX_BYTES", 5),
-    ):
-        cache._composite_l1.clear()
-        first = b"1234"
-        cache._l1_put(
-            "first",
-            cache._CompositeL1Entry(
-                first,
-                "IMAGE/WEBP",
-                now + 60,
-                hashlib.sha256(first).hexdigest(),
-            ),
-        )
-        second = b"5678"
-        cache._l1_put(
-            "second",
-            cache._CompositeL1Entry(
-                second,
-                "image/webp",
-                now + 60,
-                hashlib.sha256(second).hexdigest(),
-            ),
-        )
-        assert list(cache._composite_l1) == ["second"]
-        assert cache._composite_l1["second"].content_type == "image/webp"
-        assert cache.composite_l1_stats() == {"entries": 1, "bytes": 4}
-
-        cache._composite_l1["expired"] = cache._CompositeL1Entry(
-            b"old", "image/webp", now - 1, hashlib.sha256(b"old").hexdigest()
-        )
-        cache._composite_l1["tampered"] = cache._CompositeL1Entry(
-            b"bad", "image/webp", now + 60, "0" * 64
-        )
-        with patch.object(cache, "get_db", side_effect=RuntimeError("no L2")):
-            assert cache.get_cached_final_poster("expired") is None
-            assert cache.get_cached_final_poster("tampered") is None
-        assert "expired" not in cache._composite_l1
-        assert "tampered" not in cache._composite_l1
-        cache._composite_l1.clear()
 
 
 def test_usage_has_exact_pools_and_never_double_counts_sqlite_blobs(tmp_path: Path) -> None:
@@ -491,17 +445,45 @@ def test_composite_insert_rejects_payload_that_cannot_fit_hard_limit(tmp_path: P
             if path.exists()
         )
         with (
-            patch.object(cache.runtime_config, "DB_PATH", str(db_path)),
-            patch.object(cache.runtime_config, "SOURCE_ART_LEDGER_PATH", str(tmp_path / "none.sqlite")),
-            patch.object(cache.runtime_config, "LEGACY_CACHE_MAX_BYTES", baseline + 64 * 1024),
+            patch.object(cache._cfg, "DB_PATH", str(db_path)),
+            patch.object(cache._cfg, "SOURCE_ART_LEDGER_PATH", str(tmp_path / "none.sqlite")),
+            patch.object(cache._cfg, "LEGACY_CACHE_MAX_BYTES", baseline + 64 * 1024),
         ):
-            accepted = cache.set_cached_final_poster("too-large", b"x" * (2 * 1024 * 1024))
-        assert accepted is False
+            cache.set_cached_final_poster("too-large", b"x" * (2 * 1024 * 1024))
         assert cache.get_db().execute(
             "SELECT 1 FROM final_poster_cache WHERE cache_key='too-large'"
         ).fetchone() is None
     finally:
         _close_cache_connection()
+
+
+def test_composite_whose_bytes_do_not_match_their_digest_is_a_miss(tmp_path: Path) -> None:
+    _init_cache(tmp_path)
+    try:
+        with patch.object(cache, "COMPOSITE_MEM_ENTRIES", 0):
+            cache.set_cached_final_poster("good", b"poster-bytes")
+            cache.set_cached_final_poster("bad", b"poster-bytes")
+            db = cache.get_db()
+            db.execute("UPDATE final_poster_cache SET jpeg_bytes=? WHERE cache_key='bad'", (b"tampered",))
+            db.commit()
+            assert cache.get_cached_final_poster("good") == b"poster-bytes"
+            assert cache.get_cached_final_poster("bad") is None
+        assert db.execute("SELECT 1 FROM final_poster_cache WHERE cache_key='bad'").fetchone() is None
+    finally:
+        _close_cache_connection()
+
+
+def test_l1_enforces_its_byte_cap() -> None:
+    cache._composite_l1.clear()
+    with (
+        patch.object(cache, "COMPOSITE_MEM_ENTRIES", 10),
+        patch.object(cache, "COMPOSITE_MEM_MAX_BYTES", 5),
+    ):
+        cache._l1_put("first", (time.time() + 60, b"1234", 0, None, False))
+        cache._l1_put("second", (time.time() + 60, b"5678", 0, None, False))
+        assert list(cache._composite_l1) == ["second"]
+        assert cache.composite_l1_stats() == {"entries": 1, "bytes": 4}
+    cache._composite_l1.clear()
 
 
 def test_source_install_is_atomic_at_hard_limit(tmp_path: Path) -> None:

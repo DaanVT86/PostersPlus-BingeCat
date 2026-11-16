@@ -69,7 +69,7 @@ def test_shared_snapshot_hash_vectors_pin_every_visual_selection_rule() -> None:
     }
     hashes = {}
     vector_ids = {vector["id"] for vector in fixture["vectors"]}
-    assert len(vector_ids) == len(fixture["vectors"]) == 33
+    assert len(vector_ids) == len(fixture["vectors"]) == 37
 
     for vector in fixture["vectors"]:
         vector_id = vector["id"]

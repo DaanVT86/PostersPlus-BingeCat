@@ -1,5 +1,6 @@
 {
   "_readme": [
+    "The admin dashboard's Sash lists view edits these lists for you; this file is for doing it by hand.",
     "Copy this file to your cache volume as discovery_overrides.json.",
     "Default path: ./postersplus-cache/discovery_overrides.json",
     "Custom path:  set DISCOVERY_OVERRIDES_PATH=/your/path in .env",

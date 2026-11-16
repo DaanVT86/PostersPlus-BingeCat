@@ -364,6 +364,17 @@ def _legacy_config_from_canonical_query(spec, *, locale: str):
     return main.build_request_config(params)
 
 
+def test_legacy_query_minimalist_append_3_stays_dual_rating():
+    import main
+
+    # This fork's URLs spelled Dual rating as 3 before the upstream sync; the
+    # engine numbers it 4 (its 3 is upstream's Split, 4 in the URL).
+    assert main.build_request_config({"minimalist_append_mode": "3"}).minimalist_append_mode == 4
+    assert main.build_request_config({"minimalist_append_mode": "4"}).minimalist_append_mode == 3
+    assert main.build_request_config({"minimalist_append_mode": "2"}).minimalist_append_mode == 2
+    assert main.build_request_config({}).minimalist_append_mode == 0
+
+
 def _signed_headers(method: str, path: str, body: bytes, *, request_id=None):
     return build_auth_headers(
         method=method,
@@ -438,7 +449,7 @@ def test_render_is_pure_and_deterministic_for_identical_tuple(tmp_path, monkeypa
             "minimalist@1",
             {
                 "rating_display_mode": 3,
-                "minimalist_append_mode": 3,
+                "minimalist_append_mode": 4,  # engine spelling of the contract's Dual (3)
                 "sash_mode": "sash",
                 "sash_length_ratio": 1.2,
             },
@@ -571,7 +582,12 @@ def test_fixed_preset_pixels_match_shared_legacy_compositor(
     if spec.sash_mode == "hidden":
         assert adapted_config.sash_priority == []
     else:
-        assert adapted_config.sash_priority == legacy_config.sash_priority
+        # The query parser adds upstream's "renewed" behind "airing"; v2 facts
+        # have no Renewed status, so the adapter's list without it draws the same.
+        assert adapted_config.sash_priority == [
+            slot for slot in legacy_config.sash_priority
+            if slot != "renewed" or "renewed" in adapted_config.sash_priority
+        ]
     assert adapted_config.movie_weights == legacy_config.movie_weights
     assert adapted_config.tv_weights == legacy_config.tv_weights
     assert adapted_config.rating_text_color == legacy_config.rating_text_color
@@ -1431,6 +1447,50 @@ def test_locale_title_fallback_and_badge_policy_are_deterministic(tmp_path):
     assert fallback_bytes == direct_bytes
 
 
+def test_render_endpoint_draws_graphic_badges_only_from_present_facts(tmp_path, monkeypatch):
+    import main
+
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    art = _install_art(store)
+    monkeypatch.setattr(main._cfg, "POSTERSPLUS_BINGECAT_REQUEST_SECRET", SECRET.decode())
+    monkeypatch.setattr(main, "_V2_NONCE_STORE", MemoryNonceStore())
+    monkeypatch.setattr(main, "_V2_SOURCE_STORE", store)
+    client = TestClient(main.app)
+
+    def post(config, facts):
+        body = _bundle(config, _snapshot(source_art=(art,), facts=facts)).model_dump_json(
+            by_alias=True).encode()
+        return client.post("/v2/render", content=body,
+                           headers=_signed_headers("POST", "/v2/render", body))
+
+    graphic = _canonical_config(
+        use_original_art=True, hide_genre=True, badge_display_mode=7,
+        badge_group2="tl:2:network,studio", badge_group3="br:1:cinema",
+    )
+    plain = _canonical_config(use_original_art=True, hide_genre=True)
+    bare = _facts({"genre": "Drama"})
+    response = post(graphic, bare)
+    assert response.status_code == 200, response.text
+    # No certificate, network, studio or cinema facts: no badge is drawn.
+    assert response.content == post(plain, bare).content
+    certified = post(graphic, _facts({"genre": "Drama", "age_rating": 16}))
+    assert certified.status_code == 200, certified.text
+    assert certified.content != response.content
+
+    # A certificate string reaches the chip as its label, never as int(age).
+    by_cert = {}
+    for cert in ("PG-13", "R", "16+", "16", "NR"):
+        rendered = post(graphic, _facts({"genre": "Drama", "certification": cert}))
+        assert rendered.status_code == 200, (cert, rendered.text)
+        by_cert[cert] = rendered.content
+    assert by_cert["PG-13"] not in (response.content, by_cert["R"], by_cert["16+"])
+    # A known "16+" is drawn as-is, which is what age 16 alone draws ("{age}+").
+    assert by_cert["16+"] == certified.content
+    assert by_cert["16"] not in (response.content, by_cert["16+"])
+    # A certificate no board issues has nothing to draw and no age to fall back on.
+    assert by_cert["NR"] == response.content
+
+
 def test_render_endpoint_auth_headers_replay_and_no_public_cache(tmp_path, monkeypatch):
     import main
 
@@ -1627,7 +1687,8 @@ def test_renderer_revision_is_semantic_pixel_identity_not_service_identity():
     assert any(path.startswith("fonts/") for path in manifest)
     assert any(path.startswith("static/genre_bg/") for path in manifest)
     assert any(path.startswith("static/logos/") for path in manifest)
-    assert not any(path.endswith(".svg") for path in manifest)
+    # SVGs are hashed only as the packaged rating-badge marks.
+    assert all(path.startswith("static/rating_badges/") for path in manifest if path.endswith(".svg"))
     assert not any(path.endswith(".gitkeep") for path in manifest)
     assert {
         "languages/en.json",
@@ -1685,7 +1746,7 @@ def test_renderer_compatibility_binding_is_exact_and_fails_closed(monkeypatch):
     base = Path(render_module.__file__).parent
     for path, old, new in (
         ("awards.py", "maxsize=32", "maxsize=33"),
-        ("awards.py", "radius=radius, fill=255", "radius=radius, fill=254"),
+        ("awards.py", "max_badge_w = px(width * 0.70)", "max_badge_w = px(width * 0.71)"),
         ("main.py", "maxsize=256", "maxsize=255"),
         ("main.py", 'sash_badge_font_ratio:   float = 0.43', 'sash_badge_font_ratio:   float = 0.44'),
     ):

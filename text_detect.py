@@ -9,8 +9,10 @@ import logging
 import os
 import platform
 import re
+import shutil
 import sys
 import threading
+import time
 import unicodedata
 import urllib.request
 from collections.abc import Mapping
@@ -21,9 +23,19 @@ from difflib import SequenceMatcher
 from queue import LifoQueue
 from typing import Any, Literal
 
+import cv2
 import numpy as np
+from PIL import Image
+
+from config import EFFECTIVE_CPUS, TEXTLESS_DETECTION_CONCURRENCY as _CONCURRENCY
+import config as _cfg
 
 logger = logging.getLogger(__name__)
+
+# Opt out of onnxruntime's Microsoft telemetry (device id, hardware, model
+# details) before RapidOCR imports it.  setdefault so an operator can still
+# set ORT_DISABLE_TELEMETRY=0 explicitly.
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
 try:
     from rapidocr import RapidOCR
@@ -34,17 +46,10 @@ except Exception as exc:
     _HAS_RAPIDOCR = False
     _RAPIDOCR_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
-_MODEL_URL = os.environ.get(
-    "PPOCR_MODEL_URL",
-    "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.8.0/"
-    "onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx",
-)
-_MODEL_SHA256 = os.environ.get(
-    "PPOCR_MODEL_SHA256",
-    "4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae",
-)
+_MODEL_URL = _cfg.PPOCR_MODEL_URL
+_MODEL_SHA256 = _cfg.PPOCR_MODEL_SHA256
 _BAKED_MODEL = "/app/models/ch_PP-OCRv5_det_mobile.onnx"
-_MODEL_PATH = os.environ.get("PPOCR_MODEL_PATH") or (
+_MODEL_PATH = _cfg.PPOCR_MODEL_PATH or (
     _BAKED_MODEL if os.path.exists(_BAKED_MODEL)
     else "/app/cache/ch_PP-OCRv5_det_mobile.onnx"
 )
@@ -78,83 +83,63 @@ def _find_bundled_model(models_path, keyword: str) -> str:
 _CLS_MODEL_PATH = _find_bundled_model(_RAPIDOCR_MODELS, "cls")
 _REC_MODEL_PATH = _find_bundled_model(_RAPIDOCR_MODELS, "rec")
 
-try:
-    _BOX_THRESHOLD = float(os.environ.get("PPOCR_BOX_THRESHOLD", "0.70"))
-except (TypeError, ValueError):
-    _BOX_THRESHOLD = 0.70
-_BOX_THRESHOLD = max(0.0, min(1.0, _BOX_THRESHOLD))
+# All declared in config.py (so the admin dashboard can set them); the only
+# rule kept here is that the wide-box fallback never outranks the box threshold.
+_BOX_THRESHOLD      = _cfg.PPOCR_BOX_THRESHOLD
+_WIDE_BOX_THRESHOLD = min(_BOX_THRESHOLD, _cfg.PPOCR_WIDE_BOX_THRESHOLD)
+_WIDE_MIN_ASPECT    = _cfg.PPOCR_WIDE_MIN_ASPECT
+_WIDE_MIN_AREA      = _cfg.PPOCR_WIDE_MIN_AREA
+_WIDE_MIN_Y         = _cfg.PPOCR_WIDE_MIN_Y
+_SCAN_TOP           = _cfg.TEXTLESS_SCAN_TOP
 
-try:
-    _WIDE_BOX_THRESHOLD = float(
-        os.environ.get("PPOCR_WIDE_BOX_THRESHOLD", "0.30")
-    )
-except (TypeError, ValueError):
-    _WIDE_BOX_THRESHOLD = 0.30
-_WIDE_BOX_THRESHOLD = max(0.0, min(_BOX_THRESHOLD, _WIDE_BOX_THRESHOLD))
+# Scans run as a cascade.  The detector's cost is dominated by its full-resolution
+# head, so every image is first scanned at _CASCADE_SCALE (~2x cheaper).  A text
+# verdict there stands; a clear one is re-checked at native size only when the
+# small pass still boxed something covering _CASCADE_RESCAN_AREA of the image —
+# thin or condensed titles that fade at 0.65x still leave a box that size.
+# About a quarter of scans take the second pass.  Measured on ~2,900 cached
+# posters, eye-checking every verdict that changed: 4 wrong against 25 for the
+# old single native-size pass, whose extra errors were missed stylised titles
+# and scene text (signs, shirts, chalkboards) that the small pass never boxes.
+_CASCADE_SCALE = 0.65
+_CASCADE_RESCAN_AREA = 0.005
 
-try:
-    _WIDE_MIN_ASPECT = float(os.environ.get("PPOCR_WIDE_MIN_ASPECT", "3.0"))
-except (TypeError, ValueError):
-    _WIDE_MIN_ASPECT = 3.0
-_WIDE_MIN_ASPECT = max(1.0, _WIDE_MIN_ASPECT)
+# A stack of confident, wide, centred lines is copy (credits, cast, taglines)
+# even when recognition returns nothing: the recogniser only reads Latin and
+# CJK, so Cyrillic and Greek copy comes back blank or as lookalike letters and
+# the character-count rules never fire.  Over ~9,400 cached posters this added
+# 5 flags, all genuine text, and no false positives.
+_STACK_MIN_SCORE = 0.60
+_STACK_MIN_ASPECT = 8.0
+_STACK_MIN_AREA = 0.015
+_STACK_MIN_LINES = 3
+_STACK_MAX_GAP = 2.5  # line pitch, in multiples of the taller line's height
 
-try:
-    _WIDE_MIN_AREA = float(os.environ.get("PPOCR_WIDE_MIN_AREA", "0.01"))
-except (TypeError, ValueError):
-    _WIDE_MIN_AREA = 0.01
-_WIDE_MIN_AREA = max(0.0, min(1.0, _WIDE_MIN_AREA))
+# Sizing is driven by the cores this process may actually use, not the host's
+# core count — see config.effective_cpus().  Sessions divide the thread budget
+# between them, and ONNX throughput degrades sharply once the total exceeds the
+# real budget, so the split has to come out of a correct figure.
+_MODEL_SESSIONS = max(1, min(EFFECTIVE_CPUS, _CONCURRENCY))
+# No arbitrary ceiling: scaling was still near-linear at 4 threads on 4 cores
+# (3.2x vs one thread) with no sign of saturation, so a 16-core host should get
+# 16.  The floor of 1 matters more than any cap — oversubscription is far more
+# expensive than undersubscription (on a 2-CPU budget: 135 ms at 2 threads,
+# 299 ms at 6, 409 ms at 8).
+_ORT_THREADS = max(1, EFFECTIVE_CPUS // _MODEL_SESSIONS)
+# A deployment with several worker processes can cap each process's ONNX
+# intra-op pool explicitly (TEXTLESS_DETECTION_THREADS); unset keeps the
+# effective-CPU split above.
+_ORT_THREADS_RAW = os.environ.get("TEXTLESS_DETECTION_THREADS", "").strip()
+if _ORT_THREADS_RAW.isdigit() and int(_ORT_THREADS_RAW) > 0:
+    _ORT_THREADS = min(int(_ORT_THREADS_RAW), max(1, EFFECTIVE_CPUS))
 
-try:
-    _WIDE_MIN_Y = float(os.environ.get("PPOCR_WIDE_MIN_Y", "0.55"))
-except (TypeError, ValueError):
-    _WIDE_MIN_Y = 0.55
-_WIDE_MIN_Y = max(0.0, min(1.0, _WIDE_MIN_Y))
-
-try:
-    _SCAN_TOP = float(os.environ.get("TEXTLESS_SCAN_TOP", "0.08"))
-except (TypeError, ValueError):
-    _SCAN_TOP = 0.08
-_SCAN_TOP = max(0.0, min(0.9, _SCAN_TOP))
-
-_LIMIT_SIDE_LEN = 512
-
-
-def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
-    """Read one bounded integer without making import-time config fatal."""
-
-    try:
-        value = int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        value = default
-    return max(minimum, min(maximum, value))
-
-
-_MODEL_SESSIONS = max(1, min(
-    4,
-    os.cpu_count() or 1,
-    _bounded_env_int(
-        "TEXTLESS_DETECTION_CONCURRENCY",
-        2,
-        minimum=1,
-        maximum=4,
-    ),
-))
-_AUTO_ORT_THREADS = max(1, min(4, (os.cpu_count() or 1) // _MODEL_SESSIONS))
-# The existing default remains CPU-count based.  A deployment with multiple
-# worker processes can explicitly cap each process's ONNX intra-op pool (for
-# example TEXTLESS_DETECTION_THREADS=2 on a four-core host) without changing
-# the detector's selection rules or renderer revision.
-_ORT_THREADS = _bounded_env_int(
-    "TEXTLESS_DETECTION_THREADS",
-    _AUTO_ORT_THREADS,
-    minimum=1,
-    maximum=4,
-)
 
 OCR_RULES_VERSION = "ppocr.textless.v1"
 OCR_VERIFICATION_RECIPE = "ppocr.textless.v1"
 DETECT_RES_SIG = (
-    f"ppocrv5m-r7-s{_LIMIT_SIDE_LEN}-c{int(round(_BOX_THRESHOLD * 100))}"
+    f"ppocrv5m-r8-cs{int(round(_CASCADE_SCALE * 100))}"
+    f"-ca{int(round(_CASCADE_RESCAN_AREA * 10000))}"
+    f"-c{int(round(_BOX_THRESHOLD * 100))}"
     f"-wc{int(round(_WIDE_BOX_THRESHOLD * 100))}"
     f"-wa{int(round(_WIDE_MIN_ASPECT * 10))}"
     f"-wr{int(round(_WIDE_MIN_AREA * 10000))}"
@@ -168,6 +153,12 @@ _ocr_sessions = []
 _model_lock = threading.Lock()
 _load_failed = False
 _load_error = None
+# A model that failed to download or load is tried again after this long (a
+# transient network failure shouldn't disable detection until a restart).
+# None when the failure is permanent (no RapidOCR runtime).
+_load_failed_at: float | None = None
+_LOAD_RETRY_SECS = 3600.0
+_DOWNLOAD_TIMEOUT = 60.0
 
 
 OCRDecision = Literal["textless", "text", "unknown"]
@@ -538,7 +529,7 @@ def text_detection_status() -> str:
 def _valid_model(path: str) -> bool:
     if not os.path.exists(path) or os.path.getsize(path) < 1_000_000:
         return False
-    if os.environ.get("PPOCR_SKIP_MODEL_HASH", "").lower() in ("1", "true", "yes"):
+    if _cfg.PPOCR_SKIP_MODEL_HASH:
         return True
     digest = hashlib.sha256()
     with open(path, "rb") as model_file:
@@ -553,8 +544,7 @@ def _new_ocr_session():
         "Global.use_rec": False,
         "Global.log_level": "error",
         "Det.model_path": _MODEL_PATH,
-        "Det.limit_side_len": _LIMIT_SIDE_LEN,
-        "Det.limit_type": "max",
+        # Read by the DB post-processor, which _run_detector borrows.
         "Det.box_thresh": 0.3,
         "EngineConfig.onnxruntime.intra_op_num_threads": _ORT_THREADS,
         "EngineConfig.onnxruntime.inter_op_num_threads": 1,
@@ -571,12 +561,35 @@ def _new_ocr_session():
         params["Cls.model_path"] = _CLS_MODEL_PATH
     if _REC_MODEL_PATH:
         params["Rec.model_path"] = _REC_MODEL_PATH
-    return RapidOCR(params=params)
+    ocr = RapidOCR(params=params)
+    # Load the detector now, while the pool is being built, so a session that
+    # can't detect fails here (and is retried) instead of on every scan.
+    _text_detector(ocr)
+    return ocr
+
+
+def _text_detector(ocr):
+    """The session's TextDetector, loading it if RapidOCR hasn't yet.
+
+    RapidOCR 3.10 builds each model lazily on its first ``ocr(...)`` call, so
+    ``text_det`` stays None until then — and we never make that call for
+    detection (see _run_detector).  Older releases built it up front."""
+    det = getattr(ocr, "text_det", None)
+    if det is None:
+        loader = getattr(ocr, "_load_det_model", None)
+        if loader is not None:
+            det = loader()
+    if det is None:
+        raise RuntimeError("RapidOCR session has no text detector")
+    return det
 
 
 def _ensure_model():
     """Download and load the bounded PP-OCR session pool once."""
-    global _ocr_pool, _ocr_sessions, _load_failed, _load_error
+    global _ocr_pool, _ocr_sessions, _load_failed, _load_error, _load_failed_at
+    if (_load_failed and _load_failed_at is not None
+            and time.monotonic() - _load_failed_at >= _LOAD_RETRY_SECS):
+        _load_failed = False   # try again
     if not _HAS_RAPIDOCR:
         if not _load_failed:
             _load_error = _RAPIDOCR_IMPORT_ERROR
@@ -596,7 +609,12 @@ def _ensure_model():
                 )
                 os.makedirs(os.path.dirname(_MODEL_PATH) or ".", exist_ok=True)
                 tmp = _MODEL_PATH + ".part"
-                urllib.request.urlretrieve(_MODEL_URL, tmp)
+                # With a timeout: this runs holding _model_lock, and a stalled
+                # download would hold every scan (and the renders awaiting
+                # them) behind it.
+                with urllib.request.urlopen(_MODEL_URL, timeout=_DOWNLOAD_TIMEOUT) as resp, \
+                        open(tmp, "wb") as out:
+                    shutil.copyfileobj(resp, out)
                 if not _valid_model(tmp):
                     raise ValueError("downloaded model failed SHA-256 validation")
                 os.replace(tmp, _MODEL_PATH)
@@ -620,10 +638,11 @@ def _ensure_model():
         except Exception as exc:
             _load_error = f"{type(exc).__name__}: {exc}"
             logger.exception(
-                "PP-OCR model unavailable; text detection disabled: "
-                f"{_load_error}"
+                "PP-OCR model unavailable; text detection off, retried in "
+                f"{_LOAD_RETRY_SECS / 60:.0f} min: {_load_error}"
             )
             _load_failed = True
+            _load_failed_at = time.monotonic()
     return _ocr_pool
 
 
@@ -645,22 +664,78 @@ def warm_model() -> bool:
     return _ensure_model() is not None
 
 
-def _detect(image):
+# RapidOCR's own limits: it shrinks anything over 2000 px before detecting, and
+# pads rather than scans images this thin, which no poster or backdrop is.
+_MAX_DETECT_SIDE = 2000
+_MIN_DETECT_SIDE = 31
+_MAX_DETECT_ASPECT = 8.0
+
+
+def _run_detector(ocr, rgb: np.ndarray):
+    """One PP-OCR detection pass over an RGB array, in that array's coordinates.
+
+    Drives RapidOCR's detector session and DB post-processor directly rather
+    than through ``ocr(...)``: that path normalises in float64, crops every box
+    for a recogniser we don't run, and sorts the boxes without their scores —
+    in most images each box came back paired with another box's score.
+    """
+    det = _text_detector(ocr)
+    height, width = rgb.shape[:2]
+    # RapidOCR's max-side rule (TextDetector.get_preprocess): a 500x750 poster
+    # runs at native size, rounded to the network's multiple of 32 (512x736).
+    longest = max(height, width)
+    limit = 960 if longest < 960 else 1500 if longest < 1500 else 2000
+    ratio = min(1.0, limit / longest)
+    net_h = max(32, int(round(int(height * ratio) / 32) * 32))
+    net_w = max(32, int(round(int(width * ratio) / 32) * 32))
+    net_in = cv2.resize(rgb, (net_w, net_h)).astype(np.float32)
+    # (v / 255 - 0.5) / 0.5, in the BGR, CHW layout the model was trained on.
+    net_in *= 2.0 / 255.0
+    net_in -= 1.0
+    net_in = np.ascontiguousarray(net_in[:, :, ::-1].transpose(2, 0, 1))[None]
+    boxes, scores = det.postprocess_op(det.session(net_in), (height, width))
+    if len(boxes) == 0:
+        return [], []
+    boxes = np.asarray(boxes, dtype=np.float32)
+    # Top-to-bottom, then left-to-right, keeping each score with its box.
+    order = np.lexsort((boxes[:, 0, 0], boxes[:, 0, 1]))
+    return [boxes[i] for i in order], [float(scores[i]) for i in order]
+
+
+def _detect(image, scale: float = 1.0):
+    """Detect text boxes on ``image`` shrunk by ``scale``.
+
+    Boxes come back in ``image``'s own coordinates whatever the scale, so the
+    rules downstream see the same geometry from either cascade pass.
+    """
     if _ensure_model() is None:
         return None, None, 0, 0
-    pil_image = image.convert("RGB")
-    width, height = pil_image.size
+    width, height = image.size
     if not height or not width:
-        pil_image.close()
         return None, None, width, height
+    scale = min(scale, _MAX_DETECT_SIDE / max(width, height))
+    pil_image = image.convert("RGB")
     try:
+        if scale < 1.0:
+            small = pil_image.resize(
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                Image.BILINEAR,
+            )
+            pil_image.close()
+            pil_image = small
+        rgb = np.asarray(pil_image)
+        det_h, det_w = rgb.shape[:2]
+        if (min(det_h, det_w) < _MIN_DETECT_SIDE
+                or det_w / det_h > _MAX_DETECT_ASPECT):
+            return [], [], width, height
         with _borrow_ocr() as ocr:
-            result = ocr(pil_image, use_det=True, use_cls=False, use_rec=False)
-        boxes  = [] if result.boxes is None else list(result.boxes)
-        scores = [] if result.scores is None else list(result.scores)
-        del result
+            boxes, scores = _run_detector(ocr, rgb)
+        del rgb
     finally:
         pil_image.close()
+    if (det_w, det_h) != (width, height):
+        to_source = np.array([width / det_w, height / det_h], dtype=np.float32)
+        boxes = [box * to_source for box in boxes]
     return boxes, scores, width, height
 
 
@@ -829,60 +904,25 @@ def poster_has_burned_in_text(
     try:
         if source not in ("poster", "backdrop"):
             raise ValueError(f"unknown text-detection source: {source}")
-        boxes, scores, width, height = _detect(image)
+        boxes, scores, width, height = _detect(image, _CASCADE_SCALE)
         if boxes is None:
             return None
-        hits = _qualifying_boxes(boxes, scores, width, height, conf, lower_region)
-        recognised = []
-        should_recognise = bool(title) and any(
-            float(score) >= _WIDE_BOX_THRESHOLD
-            for score in scores
+        scan = f"{_CASCADE_SCALE:g}x"
+        verdict = _verdict(
+            image, boxes, scores, width, height,
+            conf=conf, lower_region=lower_region, title=title, source=source,
         )
-        detected = False
-        centred_lines = 0
-        if should_recognise:
-            detected, recognised, centred_lines = _recognised_title_match(
-                image, title, boxes, scores
-            )
-        alpha_lengths = _recognised_alpha_lengths(recognised)
-        # Two centred lines are enough when OCR also sees substantial copy;
-        # short two-line logos remain below these character thresholds.
-        if (
-            not detected
-            and source == "poster"
-            and centred_lines >= 2
-            and sum(alpha_lengths) >= 30
-            and max(alpha_lengths, default=0) >= 16
-        ):
-            detected = True
-        # Recognition is primary because PP-OCR can confidently box broad scene
-        # textures. Preserve a narrow escape hatch for unreadable poster titles.
-        if not detected and source == "poster":
-            has_readable_text = max(alpha_lengths, default=0) >= 6
-            for box, score, _is_wide, aspect, area_ratio in hits:
-                box = np.asarray(box, dtype=np.float32)
-                left_margin = float(box[:, 0].min()) / max(1, width)
-                right_margin = 1.0 - float(box[:, 0].max()) / max(1, width)
-                centre_x = float(box[:, 0].mean()) / max(1, width)
-                full_width_title = (
-                    has_readable_text
-                    and aspect >= 3.0
-                    and area_ratio >= 0.10
-                    and 0.25 <= centre_x <= 0.75
+        if not verdict[0] and _worth_full_scan(boxes, width, height):
+            full = _detect(image)
+            if full[0] is not None:
+                boxes, scores, width, height = full
+                scan = "1x"
+                verdict = _verdict(
+                    image, boxes, scores, width, height,
+                    conf=conf, lower_region=lower_region, title=title,
+                    source=source,
                 )
-                if (
-                    score >= conf
-                    and area_ratio >= 0.03
-                    and (
-                        (
-                            left_margin >= 0.05
-                            and right_margin >= 0.05
-                        )
-                        or full_width_title
-                    )
-                ):
-                    detected = True
-                    break
+        detected, hits, recognised, centred_lines = verdict
         if debug:
             candidates = []
             image_area = max(1, width * height)
@@ -897,7 +937,7 @@ def poster_has_burned_in_text(
                 )
             best = max((score for _box, score, *_rest in hits), default=0.0)
             logger.info(
-                f"text_detect (PP-OCRv5 Mobile): boxes={len(hits)}, "
+                f"text_detect (PP-OCRv5 Mobile, {scan}): boxes={len(hits)}, "
                 f"best={best:.3f}, threshold={conf:.3f}, "
                 f"source={source}, centred_lines={centred_lines}, "
                 f"candidates=[{', '.join(candidates[:20])}], "
@@ -906,6 +946,178 @@ def poster_has_burned_in_text(
         return detected
     except Exception as exc:
         logger.warning(f"text_detect error; scan unavailable: {exc}")
+        return None
+
+
+def _stacked_lines(boxes, scores, width: int, height: int, scan_top: float) -> int:
+    """Longest run of wide, centred, confident boxes stacked line over line."""
+    image_area = max(1, width * height)
+    lines = []
+    for box, score in zip(boxes, scores):
+        box = np.asarray(box, dtype=np.float32)
+        box_width = float(box[:, 0].max() - box[:, 0].min())
+        box_height = float(box[:, 1].max() - box[:, 1].min())
+        centre_x = float(box[:, 0].mean()) / max(1, width)
+        centre_y = float(box[:, 1].mean()) / max(1, height)
+        if (
+            float(score) >= _STACK_MIN_SCORE
+            and centre_y >= scan_top
+            and box_width / max(1.0, box_height) >= _STACK_MIN_ASPECT
+            and box_width * box_height / image_area >= _STACK_MIN_AREA
+            and 0.25 <= centre_x <= 0.75
+        ):
+            lines.append((centre_y, box_height / max(1, height)))
+    lines.sort()
+    best = run = min(1, len(lines))
+    for (y0, h0), (y1, h1) in zip(lines, lines[1:]):
+        run = run + 1 if y1 - y0 <= _STACK_MAX_GAP * max(h0, h1) else 1
+        best = max(best, run)
+    return best
+
+
+def _worth_full_scan(boxes, width: int, height: int) -> bool:
+    """True when a clear small-scale pass still boxed something title-sized."""
+    image_area = max(1, width * height)
+    for box in boxes:
+        box = np.asarray(box, dtype=np.float32)
+        box_width = float(box[:, 0].max() - box[:, 0].min())
+        box_height = float(box[:, 1].max() - box[:, 1].min())
+        if box_width * box_height / image_area >= _CASCADE_RESCAN_AREA:
+            return True
+    return False
+
+
+def _verdict(
+    image,
+    boxes,
+    scores,
+    width: int,
+    height: int,
+    *,
+    conf: float,
+    lower_region: float,
+    title: str | list[str] | tuple[str, ...] | None,
+    source: str,
+):
+    """Apply the text rules to one pass's boxes.
+
+    Returns (detected, qualifying boxes, recognised text, centred lines).
+    """
+    hits = _qualifying_boxes(boxes, scores, width, height, conf, lower_region)
+    recognised = []
+    should_recognise = bool(title) and any(
+        float(score) >= _WIDE_BOX_THRESHOLD
+        for score in scores
+    )
+    detected = False
+    centred_lines = 0
+    if should_recognise:
+        detected, recognised, centred_lines = _recognised_title_match(
+            image, title, boxes, scores
+        )
+    alpha_lengths = _recognised_alpha_lengths(recognised)
+    # Two centred lines are enough when OCR also sees substantial copy;
+    # short two-line logos remain below these character thresholds.
+    if (
+        not detected
+        and source == "poster"
+        and centred_lines >= 2
+        and sum(alpha_lengths) >= 30
+        and max(alpha_lengths, default=0) >= 16
+    ):
+        detected = True
+    if (
+        not detected
+        and source == "poster"
+        and _stacked_lines(boxes, scores, width, height, lower_region)
+        >= _STACK_MIN_LINES
+    ):
+        detected = True
+    # Recognition is primary because PP-OCR can confidently box broad scene
+    # textures. Preserve a narrow escape hatch for unreadable poster titles.
+    if not detected and source == "poster":
+        has_readable_text = max(alpha_lengths, default=0) >= 6
+        for box, score, _is_wide, aspect, area_ratio in hits:
+            box = np.asarray(box, dtype=np.float32)
+            left_margin = float(box[:, 0].min()) / max(1, width)
+            right_margin = 1.0 - float(box[:, 0].max()) / max(1, width)
+            centre_x = float(box[:, 0].mean()) / max(1, width)
+            full_width_title = (
+                has_readable_text
+                and aspect >= 3.0
+                and area_ratio >= 0.10
+                and 0.25 <= centre_x <= 0.75
+            )
+            if (
+                score >= conf
+                and area_ratio >= 0.03
+                and (
+                    (
+                        left_margin >= 0.05
+                        and right_margin >= 0.05
+                    )
+                    or full_width_title
+                )
+            ):
+                detected = True
+                break
+    return detected, hits, recognised, centred_lines
+
+
+# Season cover gate (cover_has_text): a box this sure and this big whose text
+# the recogniser reads as this many letters.  Measured on 29 Kitsu covers of
+# later seasons (2026-10-04): catches 5 of the 8 with text on them, and none
+# of the 21 clean ones; a clean cover's confident boxes are scene texture the
+# recogniser reads as one stray glyph, or nothing.
+_COVER_MIN_SCORE = 0.50
+_COVER_MIN_AREA = 0.006
+_COVER_MIN_READ = 0.60
+_COVER_MIN_LATIN = 4
+_COVER_MIN_CJK = 2
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def cover_has_text(image) -> bool | None:
+    """Whether a 16:9 cut of an anime season cover carries a title or other
+    lettering, or None when the scan is unavailable.
+
+    Not poster_has_burned_in_text's rules: those are tuned for posters and
+    pass a cover whose whole middle is a kanji logo.  Here the recogniser
+    decides, on every box worth reading, in any script."""
+    try:
+        boxes, scores, width, height = _detect(image)
+        if boxes is None:
+            return None
+        source = image.convert("RGB")
+        image_area = max(1, width * height)
+        try:
+            for box, score in zip(boxes, scores):
+                box = np.asarray(box, dtype=np.float32)
+                left, top = float(box[:, 0].min()), float(box[:, 1].min())
+                right, bottom = float(box[:, 0].max()), float(box[:, 1].max())
+                if (float(score) < _COVER_MIN_SCORE
+                        or (right - left) * (bottom - top) / image_area < _COVER_MIN_AREA):
+                    continue
+                pad = max(3, int((bottom - top) * 0.2))
+                crop = np.asarray(source.crop((
+                    max(0, int(left) - pad), max(0, int(top) - pad),
+                    min(width, int(right) + pad), min(height, int(bottom) + pad),
+                )))
+                with _borrow_ocr() as ocr:
+                    result = ocr(crop, use_det=False, use_cls=False, use_rec=True)
+                for text, read in zip(result.txts or (), result.scores or ()):
+                    if float(read) < _COVER_MIN_READ:
+                        continue
+                    if (len(re.sub(r"[^a-z]", "", str(text).lower())) >= _COVER_MIN_LATIN
+                            or len(_CJK_RE.findall(str(text))) >= _COVER_MIN_CJK):
+                        logger.info(f"text_detect: season cover carries text ({text!r}, "
+                                    f"box {float(score):.2f})")
+                        return True
+        finally:
+            source.close()
+        return False
+    except Exception as exc:
+        logger.warning(f"text_detect error; cover scan unavailable: {exc}")
         return None
 
 

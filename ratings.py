@@ -1,13 +1,19 @@
 #ratings.py
 import logging
 import math
+import time
 from dataclasses import dataclass
+from typing import Callable
 import httpx
 import numpy as np
 from integration_contract import DB_INTEGER_MAX
 
 logger = logging.getLogger(__name__)
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+
+import fonts
+from i18n import visual
+from pxscale import fixed, px, pxi, pxr
 
 try:
     import cairo as _cairo
@@ -16,10 +22,12 @@ except ImportError:
     _HAS_CAIRO = False
     logger.warning("pycairo not available — shape edges will use PIL (no antialiasing)")
 
-from awards import FETCH_FAILED, _FetchFailed, _RateLimited
+from awards import (FETCH_FAILED, _FetchFailed, _RateLimited, dominant_frost_rgb,
+                    _frost_ink, _frosted_tint)
 from config import (
-    GENRE_MAP,
+    ANIME_RATING_SOURCES,
     GENRE_PRIORITY,
+    genre_label,
     SCORE_NORMALISERS,
     SCORE_GLOW_THRESHOLD,
     SCORE_GLOW_BLUR,
@@ -30,6 +38,118 @@ from config import (
 
 _RATING_VOTE_KEYS = ("vote_count", "votes", "count", "rating_count", "ratings_count")
 _METACRITIC_ICON_MASK_CACHE: dict[int, Image.Image | None] = {}
+
+
+# ---------------------------------------------------------------------------
+# MDBList daily quota tracking
+# ---------------------------------------------------------------------------
+# MDBList's limit is a per-key *daily* request quota (1000/day on the free
+# tier, more on paid tiers), not a burst limit, and every response reports it:
+#
+#   x-ratelimit-limit: 1000
+#   x-ratelimit-remaining: 647
+#   x-ratelimit-reset: 1789948800     (epoch seconds, midnight UTC)
+#
+# Each fetch_rating call refreshes the snapshot for the key it used, so the
+# cache warmer can stop spending the key before live traffic runs dry, and a
+# quota 429 (which comes with no Retry-After) can cool the key down until the
+# real reset instead of guessing.
+
+class MDBListQuota:
+    __slots__ = ("limit", "remaining", "reset_at", "observed_at")
+
+    def __init__(self, limit: int | None, remaining: int | None, reset_at: float | None, observed_at: float):
+        self.limit       = limit
+        self.remaining   = remaining
+        self.reset_at    = reset_at
+        self.observed_at = observed_at
+
+    def is_current(self, now: float | None = None) -> bool:
+        """False once the quota window this snapshot describes has rolled over."""
+        if self.reset_at is None:
+            return True
+        if now is None:
+            now = time.time()
+        return now < self.reset_at
+
+    def __repr__(self):
+        return f"MDBListQuota(limit={self.limit}, remaining={self.remaining}, reset_at={self.reset_at})"
+
+
+# api key -> latest quota snapshot seen for it
+MDBLIST_QUOTA: dict[str, MDBListQuota] = {}
+
+
+def _header_int(headers, name: str) -> int | None:
+    raw = headers.get(name)
+    if raw is None:
+        return None
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_mdblist_quota(mdblist_key: str, headers) -> MDBListQuota | None:
+    """Refresh the per-key quota snapshot from a response's X-RateLimit-* headers."""
+    limit     = _header_int(headers, "x-ratelimit-limit")
+    remaining = _header_int(headers, "x-ratelimit-remaining")
+    reset_raw = _header_int(headers, "x-ratelimit-reset")
+    if limit is None and remaining is None and reset_raw is None:
+        return None
+    quota = MDBListQuota(limit, remaining, float(reset_raw) if reset_raw else None, time.time())
+    MDBLIST_QUOTA[mdblist_key] = quota
+    return quota
+
+
+async def refresh_mdblist_quota_from_account(client: httpx.AsyncClient, mdblist_key: str) -> MDBListQuota | None:
+    """Refresh *mdblist_key*'s snapshot from MDBList's /user endpoint.
+
+    The snapshots above only exist for keys this process has spent a rating
+    request on, so a freshly restarted server shows nothing, a standby key
+    that has never been rotated to stays blank, and with several workers each
+    one sees only its own calls. /user reports the account's daily limit and
+    the requests counted against it today without counting itself, so the
+    dashboard and the warmer can read the real figure for every key. Its body
+    carries rate_limit_reset; without it the window is taken as the UTC day
+    (x-ratelimit-reset is always a UTC midnight).
+    """
+    started = time.time()
+    try:
+        resp = await client.get(
+            "https://api.mdblist.com/user", params={"apikey": mdblist_key}, timeout=3.0,
+        )
+        if resp.status_code != 200:
+            return None
+        body = resp.json()
+        limit = int(body["api_requests"])
+        used = int(body["api_requests_count"])
+        body_reset = body.get("rate_limit_reset")
+    except Exception as exc:
+        logger.debug(f"MDBList account quota read failed: {type(exc).__name__}: {exc}")
+        return None
+    now = time.time()
+    current = MDBLIST_QUOTA.get(mdblist_key)
+    if current is not None and current.observed_at >= started:
+        # A rating response recorded while this read was in flight is newer.
+        return current
+    if isinstance(body_reset, (int, float)) and body_reset > now:
+        reset_at = float(body_reset)
+    elif current is not None and current.reset_at is not None and current.is_current(now):
+        reset_at = current.reset_at  # MDBList's own header beats the computed midnight
+    else:
+        reset_at = float((int(now) // 86400 + 1) * 86400)
+    quota = MDBListQuota(limit, max(0, limit - used), reset_at, now)
+    MDBLIST_QUOTA[mdblist_key] = quota
+    return quota
+
+
+def mdblist_quota_remaining(mdblist_key: str, now: float | None = None) -> int | None:
+    """Remaining daily requests for *mdblist_key*, or None when unknown / stale."""
+    quota = MDBLIST_QUOTA.get(mdblist_key)
+    if quota is None or quota.remaining is None or not quota.is_current(now):
+        return None
+    return quota.remaining
 
 
 def _rating_vote_count(raw: dict) -> int | None:
@@ -48,6 +168,202 @@ def _rating_vote_count(raw: dict) -> int | None:
 # Fetch
 # ---------------------------------------------------------------------------
 
+# MDBList's own release dates, kept beside the rating rather than in it.
+#
+# The record carries `released` (theatrical) and `released_digital`, and the
+# digital date is the one fact the release-status sash cannot get anywhere
+# else without a TMDB key: Cinemeta knows theatrical and disc dates only, so a
+# film weeks into streaming stayed "Cinema" on a key-less instance.  Written
+# on every MDBList answer into the generic JSON cache — the rating tuple and
+# the rating cache row are unpacked in enough places that threading a sixth
+# field through them was the wrong cost for two dates.  A record with no
+# digital date yet is kept only briefly, so the date is picked up once MDBList
+# learns it.
+_MDBLIST_DATES_TTL_KNOWN   = 90 * 86400
+_MDBLIST_DATES_TTL_PENDING = 3 * 86400
+
+
+def _mdblist_dates_key(media_id: str, media_type: str) -> str:
+    kind = "show" if media_type in ("tv", "series") else "movie"
+    return f"mdblist_dates:{kind}:{media_id}"
+
+
+def remember_mdblist_release_dates(media_id: str, media_type: str, data: dict) -> None:
+    from cache import set_cached_tvdb_json
+    if media_type in ("tv", "series"):
+        return
+    released = str(data.get("released") or "")[:10] or None
+    digital  = str(data.get("released_digital") or "")[:10] or None
+    if "released_digital" not in data:
+        # The bulk record has no digital date at all — unknown, not "none yet":
+        # keep the one an earlier single call remembered.
+        digital = (mdblist_release_dates(media_id, media_type) or {}).get("released_digital")
+    if not released and not digital:
+        return
+    try:
+        set_cached_tvdb_json(
+            _mdblist_dates_key(media_id, media_type),
+            {"released": released, "released_digital": digital},
+            _MDBLIST_DATES_TTL_KNOWN if digital else _MDBLIST_DATES_TTL_PENDING,
+        )
+    except Exception as exc:   # a cache hiccup must not cost the rating
+        logger.warning(f"Could not cache MDBList release dates for {media_id}: {exc}")
+
+
+def mdblist_release_dates(media_id: str | None, media_type: str) -> dict | None:
+    """``{"released", "released_digital"}`` remembered for a movie, or None."""
+    if not media_id or media_type in ("tv", "series"):
+        return None
+    from cache import get_cached_tvdb_json
+    try:
+        return get_cached_tvdb_json(_mdblist_dates_key(media_id, media_type))
+    except Exception:
+        return None
+
+
+# Whether MDBList lists Horror for a show, by TMDB id, from the same answer.
+# TMDB has no Horror genre for TV; MDBList carries IMDb's (American Horror
+# Story: Drama, Horror, Mystery, Sci-Fi), and agreed with the TVDB/Cinemeta
+# consensus on every one of the 169 most-voted shows it answered.  Kept in the
+# generic JSON cache for the same reason as the dates above; every MDBList
+# answer rewrites it, so the long TTL only covers rows not yet refreshed.
+_MDBLIST_GENRES_TTL = 90 * 86400
+
+
+def _mdblist_horror_key(tmdb_id) -> str:
+    return f"mdblist_tv_horror:{tmdb_id}"
+
+
+def remember_mdblist_tv_horror(data: dict) -> None:
+    from cache import set_cached_tvdb_json
+    if data.get("type") != "show":
+        return
+    tmdb_id = (data.get("ids") or {}).get("tmdb")
+    genres = data.get("genres")
+    if not tmdb_id or not isinstance(genres, list) or not genres:
+        return
+    horror = any(
+        str((g.get("title") if isinstance(g, dict) else g) or "").strip().lower() == "horror"
+        for g in genres
+    )
+    try:
+        set_cached_tvdb_json(_mdblist_horror_key(tmdb_id), {"horror": horror}, _MDBLIST_GENRES_TTL)
+    except Exception as exc:   # a cache hiccup must not cost the rating
+        logger.warning(f"Could not cache MDBList genres for tmdb {tmdb_id}: {exc}")
+
+
+def mdblist_tv_horror(tmdb_id) -> bool | None:
+    """MDBList's word on whether TMDB TV show *tmdb_id* is horror, or None
+    when no MDBList answer for it is cached."""
+    if not tmdb_id:
+        return None
+    from cache import get_cached_tvdb_json
+    try:
+        row = get_cached_tvdb_json(_mdblist_horror_key(tmdb_id))
+    except Exception:
+        return None
+    return bool(row["horror"]) if row and "horror" in row else None
+
+
+def _rate_limited(resp, quota, label: str) -> _RateLimited:
+    """A 429 / 503 answer as _RateLimited.
+
+    429 is either the daily quota or the per-IP burst limit; 503 is how the
+    burst limit first shows itself (a run of 503s, then 429 + Retry-After for
+    every key on the address). Both go back as _RateLimited so the caller
+    pauses instead of walking the network-failure ladder.
+    """
+    retry_after: float | None = None
+    raw = resp.headers.get("retry-after")
+    if raw:
+        try:
+            # Most APIs send Retry-After as an integer seconds value.
+            # HTTP-date format also exists but is uncommon for JSON APIs;
+            # we don't try to parse it — caller will fall back to default.
+            parsed = float(raw)
+            if parsed > 0:
+                retry_after = parsed
+        except ValueError:
+            pass
+    # Only treat the 429 as quota exhaustion when MDBList says the key is
+    # actually empty; a 429 with requests still remaining (or none of the
+    # quota headers at all) is the burst throttle, and parking the key
+    # until midnight for it would be wrong.
+    reset_at = None
+    if (
+        resp.status_code == 429
+        and quota and quota.reset_at
+        and (quota.remaining is None or quota.remaining <= 0)
+    ):
+        reset_at = quota.reset_at
+    logger.warning(
+        f"MDblist {'rate-limited' if resp.status_code == 429 else 'refused (503)'} "
+        f"for {label} (retry-after={retry_after}, quota={quota})"
+    )
+    return _RateLimited(retry_after, reset_at=reset_at)
+
+
+def _metacritic_must_see(data: dict) -> bool:
+    import award_lists
+    for r in data.get("ratings") or []:
+        if (r.get("source") or "").lower() == "metacritic":
+            return award_lists.metacritic_must_see(r.get("value"), _rating_vote_count(r))
+    return False
+
+
+def _parse_mdblist_title(data: dict, media_id: str, media_type: str, genre: str,
+                         bulk: bool = False):
+    """One MDBList title record as ``(ratings_dict, genre, release_date,
+    keywords, age_rating)``.  The single and the bulk call share it; the bulk
+    record (*bulk*) has no ``keywords`` and no ``released_digital``, and its
+    Letterboxd value is out of 10."""
+    release_date = data.get("released")
+    keywords: list[dict] = list(data.get("keywords") or [])
+    # Metacritic Must-See is read off the score rather than the keyword, which
+    # the bulk answer lacks; it rides in as the keyword the flag code reads.
+    if _metacritic_must_see(data) and not any(
+        (kw.get("name") or "").lower().strip() == "metacritic-must-see" for kw in keywords
+    ):
+        keywords.append({"name": "metacritic-must-see"})
+    remember_mdblist_release_dates(media_id, media_type, data)
+    remember_mdblist_tv_horror(data)
+
+    age_rating: int | None = data.get("age_rating") or None
+    if age_rating is not None:
+        try:
+            age_rating = int(age_rating)
+        except (ValueError, TypeError):
+            age_rating = None
+
+    ratings_dict: dict[str, float] = {}
+    for r in data.get("ratings") or []:
+        source = (r.get("source") or "").lower()
+        value  = r.get("value")
+        if source not in SCORE_NORMALISERS or value is None:
+            continue
+
+        vote_count = _rating_vote_count(r)
+        if source != "rogerebert" and vote_count is not None and vote_count < RATING_MIN_VOTES:
+            logger.info(
+                f"Skipping {source} rating for {media_id}: "
+                f"vote_count={vote_count} < {RATING_MIN_VOTES}"
+            )
+            continue
+
+        if source == "letterboxd":
+            # The bulk answer gives Letterboxd's average out of 10 (8.0 where
+            # the single call says 4.0); the score, out of 100, is the same in
+            # both, so the stored value is that score back out of 5, or the
+            # bulk value halved when it has none.
+            if isinstance(r.get("score"), (int, float)):
+                value = round(r["score"] / 20, 2)
+            elif bulk:
+                value = round(value / 2, 2)
+
+        ratings_dict[source] = value
+
+    return ratings_dict, genre, release_date, keywords, age_rating
+
 
 @dataclass(frozen=True)
 class RatingDetail:
@@ -65,9 +381,6 @@ class RatingFetchDetails:
     release_date: str | None
     keywords: tuple[dict, ...]
     age_rating: int | None
-    legacy_ratings: tuple[tuple[str, object], ...] = ()
-    legacy_keywords: tuple[object, ...] | None = None
-    legacy_age_rating: int | None = None
 
 
 _RATING_SCALES: dict[str, float] = {
@@ -97,15 +410,11 @@ async def fetch_rating_details(
     """
     Fetch one MDBList detail payload while retaining raw score scale and votes.
 
-    The legacy ``fetch_rating`` adapter below projects this richer result back
-    to its historical tuple/dictionary contract without another HTTP call.
+    v2 enrichment only: the legacy ``fetch_rating`` keeps its own tuple
+    contract and id routing.
     """
 
-    genre = "Unknown"
-    for gid in GENRE_PRIORITY:
-        if gid in genre_ids:
-            genre = GENRE_MAP[gid]
-            break
+    genre = genre_label(genre_ids, GENRE_PRIORITY)
 
     mdb_type = "show" if media_type in ("tv", "series") else "movie"
 
@@ -120,23 +429,9 @@ async def fetch_rating_details(
         logger.error(f"MDblist request error for {imdb_id}: {type(exc).__name__}: {exc}")
         return FETCH_FAILED
 
-    if resp.status_code == 429:
-        retry_after: float | None = None
-        raw = resp.headers.get("retry-after")
-        if raw:
-            try:
-                # Most APIs send Retry-After as an integer seconds value.
-                # HTTP-date format also exists but is uncommon for JSON APIs;
-                # we don't try to parse it — caller will fall back to default.
-                parsed = float(raw)
-                if parsed > 0:
-                    retry_after = parsed
-            except ValueError:
-                pass
-        logger.warning(
-            f"MDblist rate-limited for {imdb_id} (retry-after={retry_after})"
-        )
-        return _RateLimited(retry_after)
+    quota = _record_mdblist_quota(mdblist_key, resp.headers)
+    if resp.status_code in (429, 503):
+        return _rate_limited(resp, quota, imdb_id)
 
     if resp.status_code == 404:
         logger.info(f"MDblist 404 for {imdb_id} — title not found, returning empty result")
@@ -175,7 +470,6 @@ async def fetch_rating_details(
     )
 
     ratings: list[RatingDetail] = []
-    legacy_ratings: list[tuple[str, object]] = []
     seen_sources: set[str] = set()
     raw_ratings = data.get("ratings")
     if not isinstance(raw_ratings, list):
@@ -195,13 +489,8 @@ async def fetch_rating_details(
                 f"vote_count={vote_count} < {RATING_MIN_VOTES}"
             )
             continue
-        # Preserve the exact historical projection (including raw numeric type
-        # and last-provider-wins order) for legacy /poster callers.  The v2
-        # contract below receives a separate bounded/sanitized representation.
-        legacy_ratings.append((source, value))
         # The v2 boundary persists into BingeCat's signed 32-bit DB column.
-        # Reject oversized provider evidence before constructing the wire DTO;
-        # the legacy projection remains untouched above.
+        # Reject oversized provider evidence before constructing the wire DTO.
         if vote_count is not None and not 0 <= vote_count <= DB_INTEGER_MAX:
             continue
         if source in seen_sources:
@@ -212,7 +501,9 @@ async def fetch_rating_details(
             normalized = float(SCORE_NORMALISERS[source](numeric_value))
         except (TypeError, ValueError, OverflowError):
             continue
-        scale = _RATING_SCALES[source]
+        scale = _RATING_SCALES.get(source)
+        if scale is None:
+            continue
         if (
             not math.isfinite(numeric_value)
             or not math.isfinite(normalized)
@@ -236,52 +527,232 @@ async def fetch_rating_details(
         release_date=release_date,
         keywords=tuple(keywords),
         age_rating=age_rating,
-        legacy_ratings=tuple(legacy_ratings),
-        legacy_keywords=tuple(raw_keywords) if isinstance(raw_keywords, list) else (),
-        legacy_age_rating=parsed_age_rating,
     )
 
 
 async def fetch_rating(
     client: httpx.AsyncClient,
-    imdb_id: str,
     mdblist_key: str,
     genre_ids: list[int],
     media_type: str = "movie",
     *,
+    media_id: str,
+    provider: str = "imdb",
     movie_weights: dict | None = None,
     tv_weights: dict | None = None,
 ) -> "tuple[dict | str, str, str | None, list[dict], int | None] | _FetchFailed | _RateLimited":
-    """Legacy rating projection. Its public return shape is unchanged."""
+    """
+    Returns ``(ratings_dict, genre, release_date, keywords, age_rating)`` on
+    success, or ``FETCH_FAILED`` on a network / API error.
 
-    details = await fetch_rating_details(
-        client,
-        imdb_id,
-        mdblist_key,
-        genre_ids,
-        media_type,
-        movie_weights=movie_weights,
-        tv_weights=tv_weights,
-    )
-    if details is FETCH_FAILED or isinstance(details, _RateLimited):
-        return details
+    MDBList serves the same record under several id namespaces, so *provider*
+    selects the route ("imdb" or "tmdb") and *media_id* is the id in that
+    namespace. A title TMDB has no IMDb link for still has ratings, awards,
+    keywords and an age rating here — it just has to be asked for by TMDB id.
 
-    legacy_projection = (
-        dict(details.legacy_ratings)
-        if details.legacy_keywords is not None
-        else {rating.provider: rating.score for rating in details.ratings}
+    *media_id* and *provider* are keyword-only, and the old positional id
+    argument is gone: a call site that still passed an IMDb id positionally
+    would otherwise have silently become the API key.
+    """
+
+    genre = genre_label(genre_ids, GENRE_PRIORITY)
+
+    mdb_type = "show" if media_type in ("tv", "series") else "movie"
+    # MDBList files an IMDb id under its own type only, and 404s it under the
+    # other. An IMDb id names one title, so a miss is asked again as the
+    # other type: a request whose type was wrong (a series once resolved to a
+    # duplicate TMDB movie) would otherwise cache "no ratings" for the title,
+    # and the cache is keyed by IMDb id alone. A TMDB id is per type — no retry.
+    mdb_types = [mdb_type]
+    if provider == "imdb":
+        mdb_types.append("movie" if mdb_type == "show" else "show")
+
+    for attempt, mdb_type in enumerate(mdb_types):
+        try:
+            logger.info(
+                "External API Call: Requested ratings+keywords from MDBlist for "
+                f"{provider}/{mdb_type}/{media_id}"
+            )
+            resp = await client.get(
+                f"https://api.mdblist.com/{provider}/{mdb_type}/{media_id}",
+                params={"apikey": mdblist_key, "append_to_response": "keyword"},
+                timeout=10.0,
+            )
+        except Exception as exc:
+            logger.error(f"MDblist request error for {media_id}: {type(exc).__name__}: {exc}")
+            return FETCH_FAILED
+
+        quota = _record_mdblist_quota(mdblist_key, resp.headers)
+        if resp.status_code != 404 or attempt + 1 == len(mdb_types):
+            break
+    if resp.status_code == 200:
+        media_type = "tv" if mdb_type == "show" else "movie"
+
+    if resp.status_code in (429, 503):
+        return _rate_limited(resp, quota, media_id)
+
+    if resp.status_code == 404:
+        logger.info(f"MDblist 404 for {provider}/{media_id} — title not found, returning empty result")
+        return {}, genre, None, [], None
+
+    if resp.status_code != 200:
+        logger.warning(f"MDblist error {resp.status_code} for {provider}/{media_id}")
+        return FETCH_FAILED
+
+    return _parse_mdblist_title(resp.json(), media_id, media_type, genre)
+
+
+# ---------------------------------------------------------------------------
+# Bulk fetch
+# ---------------------------------------------------------------------------
+# MDBList also answers ``POST /{provider}/{type}`` with ``{"ids": [...]}``: up
+# to 200 titles for one request, about as fast as one title.  The answer is a
+# plain list of title records, in no particular order, with every id MDBList
+# doesn't file under that type left out.  Each record is the single call's
+# record minus ``keywords`` (even when asked for), ``released_digital`` and the
+# episode fields — which is why the cult, festival, Oscar and Metacritic flags
+# no longer depend on keywords (award_lists.py).
+#
+# The endpoint is not documented anywhere we've read, so it is treated as
+# unofficial: an answer it can't make sense of turns bulk off for an hour and
+# the caller falls back to single calls.
+
+MDBLIST_BULK_MAX_IDS = 200
+_BULK_DISABLE_SECS = 3600
+_bulk_disabled_until = 0.0
+
+
+def mdblist_bulk_available(now: float | None = None) -> bool:
+    return (time.time() if now is None else now) >= _bulk_disabled_until
+
+
+def _disable_bulk(reason: str) -> None:
+    global _bulk_disabled_until
+    _bulk_disabled_until = time.time() + _BULK_DISABLE_SECS
+    logger.warning(f"MDBList bulk ratings disabled for {_BULK_DISABLE_SECS // 60} min: {reason}")
+
+
+def _record_id(data: dict, provider: str) -> str | None:
+    value = (data.get("ids") or {}).get(provider)
+    return str(value) if value not in (None, "") else None
+
+
+async def _bulk_post(client, mdblist_key: str, provider: str, mdb_type: str, ids: list[str]):
+    """One bulk request: ``{id: record}``, _RateLimited, FETCH_FAILED on a
+    network error, or None on an answer that turns bulk off."""
+    logger.info(
+        f"External API Call: Requested bulk ratings from MDBlist for "
+        f"{len(ids)} {provider}/{mdb_type} ids"
     )
-    return (
-        legacy_projection,
-        details.genre,
-        details.release_date,
-        (
-            list(details.legacy_keywords)
-            if details.legacy_keywords is not None
-            else list(details.keywords)
-        ),
-        details.legacy_age_rating if details.legacy_keywords is not None else details.age_rating,
-    )
+    try:
+        resp = await client.post(
+            f"https://api.mdblist.com/{provider}/{mdb_type}",
+            params={"apikey": mdblist_key},
+            json={"ids": ids},
+            timeout=30.0,
+        )
+    except Exception as exc:
+        logger.error(f"MDblist bulk request error: {type(exc).__name__}: {exc}")
+        return FETCH_FAILED
+    quota = _record_mdblist_quota(mdblist_key, resp.headers)
+    if resp.status_code in (429, 503):
+        return _rate_limited(resp, quota, f"bulk {provider}/{mdb_type} ({len(ids)} ids)")
+    if resp.status_code != 200:
+        _disable_bulk(f"HTTP {resp.status_code} for {provider}/{mdb_type}")
+        return None
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, list):
+        _disable_bulk(f"unexpected answer shape ({type(body).__name__}) for {provider}/{mdb_type}")
+        return None
+    wanted = set(ids)
+    out: dict[str, dict] = {}
+    for record in body:
+        if not isinstance(record, dict):
+            continue
+        rid = _record_id(record, provider)
+        if rid in wanted:
+            out[rid] = record
+    return out
+
+
+async def fetch_ratings_bulk(
+    client: httpx.AsyncClient,
+    mdblist_key: str,
+    provider: str,
+    mdb_type: str,
+    ids: list[str],
+    *,
+    genre_ids: dict[str, list[int]] | None = None,
+    on_request: Callable[[], None] | None = None,
+) -> "dict[str, tuple | _FetchFailed | _RateLimited] | _FetchFailed | _RateLimited":
+    """Ratings for many titles of one type at once.
+
+    Returns ``{id: (ratings_dict, genre, release_date, keywords, age_rating)}``
+    — fetch_rating's answer, per title — for every id in *ids*.  An id MDBList
+    doesn't know comes back as fetch_rating's 404 answer; an IMDb id is first
+    asked again under the other type, as fetch_rating does.  *genre_ids* maps
+    an id to its TMDB genre ids, for the genre label.  *on_request* is called
+    once per POST sent, which can be more than one for a call.
+
+    A request refused with 429 / 503 gives _RateLimited, and a network error or
+    bulk turning itself off gives FETCH_FAILED (the caller then makes single
+    calls).  Requests after a failure aren't sent; the ids they or the failed
+    one would have answered map to that failure, and the rest keep the answers
+    already received.  When nothing was answered the failure is returned alone,
+    as it is when bulk is already off.
+    """
+    ids = [str(i) for i in dict.fromkeys(ids) if i]
+    if not ids:
+        return {}
+    if not mdblist_bulk_available():
+        return FETCH_FAILED
+    genre_ids = genre_ids or {}
+
+    records: dict[str, tuple[dict, str]] = {}   # id -> (record, media type it answered as)
+    unanswered: set[str] = set()                # ids a failed or unsent request held
+    failure = None
+
+    async def _ask(type_: str, wanted: list[str]) -> None:
+        nonlocal failure
+        answered_as = "tv" if type_ == "show" else "movie"
+        for i in range(0, len(wanted), MDBLIST_BULK_MAX_IDS):
+            chunk = wanted[i:i + MDBLIST_BULK_MAX_IDS]
+            if failure is not None:
+                unanswered.update(chunk)
+                continue
+            if on_request is not None:
+                on_request()
+            got = await _bulk_post(client, mdblist_key, provider, type_, chunk)
+            if got is None:
+                got = FETCH_FAILED
+            if isinstance(got, _RateLimited) or got is FETCH_FAILED:
+                failure = got
+                unanswered.update(chunk)
+                continue
+            records.update({k: (v, answered_as) for k, v in got.items()})
+
+    await _ask(mdb_type, ids)
+    missing = [i for i in ids if i not in records and i not in unanswered]
+    if missing and provider == "imdb":
+        await _ask("movie" if mdb_type == "show" else "show", missing)
+    if failure is not None and not records:
+        return failure
+
+    out: dict[str, tuple | _FetchFailed | _RateLimited] = {}
+    for media_id in ids:
+        genre = genre_label(genre_ids.get(media_id) or [], GENRE_PRIORITY)
+        if media_id in records:
+            record, answered_as = records[media_id]
+            out[media_id] = _parse_mdblist_title(record, media_id, answered_as, genre, bulk=True)
+        elif media_id in unanswered:
+            out[media_id] = failure
+        else:
+            logger.info(f"MDblist bulk: {provider}/{media_id} not found — returning empty result")
+            out[media_id] = ({}, genre, None, [], None)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +888,7 @@ def _cairo_pill_mask(w: int, h: int, radius: int) -> Image.Image:
         surface.flush()
         stride = surface.get_stride()
         arr = np.frombuffer(bytes(surface.get_data()), dtype=np.uint8).reshape((h, stride))[:, :w].copy()
-        return Image.fromarray(arr, "L")
+        return Image.fromarray(arr)
     else:
         mask = Image.new("L", (w, h), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
@@ -448,6 +919,7 @@ def draw_score_bar(
     glow_threshold: int = SCORE_GLOW_THRESHOLD,
     glow_blur: int = SCORE_GLOW_BLUR,
     glow_alpha: int = SCORE_GLOW_ALPHA,
+    glow_color: tuple[int, int, int] | str | None = None,
     color_mode: int = 0,
     custom_palette: CustomScorePalette | None = None,
 ) -> None:
@@ -460,12 +932,16 @@ def draw_score_bar(
             return
     score = max(0, min(int(score), 100))
     W, H = image.size
-    bar_h  = max(8, round(H * 0.012))
+    bar_h  = max(fixed(8), pxr(H * 0.012))
+    # side_margin and the radius cap are pixels on the 500-wide canvas.
+    side_margin = round(side_margin * W / 500)
     x0, x1 = side_margin, W - side_margin
     y1, y0  = H - bottom_margin, H - bottom_margin - bar_h
     bar_w   = x1 - x0
-    fill_w  = int(bar_w * (score / 100))
-    radius  = min(bar_h // 2, 8)
+    fill_w  = px(bar_w * (score / 100))
+    radius  = min(px(bar_h / 2), round(8 * W / 500))
+    # 500-wide units above (pxscale); whole pixels from here on.
+    bar_h, y0, y1, fill_w, radius = round(bar_h), round(y0), round(y1), round(fill_w), round(radius)
 
     # ── Track (background pill) ───────────────────────────────────────────
     # Drawn before the early-return so score=0 still shows an empty track
@@ -475,9 +951,11 @@ def draw_score_bar(
     track_mask = track_mask.point(lambda v: v * 45 // 255)   # scale to fill alpha
     track_strip = Image.new("RGBA", (bar_w, bar_h), (255, 255, 255, 0))
     track_strip.putalpha(track_mask)
-    track = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    track.paste(track_strip, (x0, y0))
-    image.alpha_composite(track)
+    # Composite the strip where it belongs rather than pasting it into a
+    # full-canvas transparent layer first: fully transparent pixels contribute
+    # nothing to an alpha composite, so the result is identical and the work is
+    # proportional to the bar (360x9) instead of the whole poster (500x750).
+    image.alpha_composite(track_strip, dest=(x0, y0))
 
     if fill_w <= 0:
         return
@@ -497,7 +975,7 @@ def draw_score_bar(
     # Stack into RGBA (fill_w, 4), then broadcast to (bar_h, fill_w, 4)
     row  = np.stack([r_ch, g_ch, b_ch, a_ch], axis=1)             # (fill_w, 4)
     grad_arr = np.broadcast_to(row, (bar_h, fill_w, 4)).copy()    # (bar_h, fill_w, 4)
-    grad = Image.fromarray(grad_arr, "RGBA")
+    grad = Image.fromarray(grad_arr)
 
     # Rounded left/right mask — cairo-antialiased pill, right end cropped flat
     # when score < 99 so the cut-off aligns cleanly with the track edge.
@@ -508,18 +986,19 @@ def draw_score_bar(
         full_msk = _cairo_pill_mask(mask_w, bar_h, radius)
         mask_img = full_msk.crop((0, 0, fill_w, bar_h))
 
-    fill_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    fill_layer.paste(grad, (x0, y0), mask_img)
-    image.alpha_composite(fill_layer)
+    fill_layer = Image.new("RGBA", (bar_w, bar_h), (0, 0, 0, 0))
+    fill_layer.paste(grad, (0, 0), mask_img)
+    image.alpha_composite(fill_layer, dest=(x0, y0))
 
     # ── Highlight sliver ─────────────────────────────────────────────────
-    hl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    # Drawn in bar-local coordinates; the strip is composited at (x0, y0).
+    hl = Image.new("RGBA", (bar_w, bar_h), (0, 0, 0, 0))
     ImageDraw.Draw(hl).line(
-        [(x0 + radius, y0 + 1), (x0 + fill_w - 1, y0 + 1)],
+        [(radius, 1), (fill_w - 1, 1)],
         fill=(255, 255, 255, 60),
         width=1,
     )
-    image.alpha_composite(hl)
+    image.alpha_composite(hl, dest=(x0, y0))
 
     # ── Glow ─────────────────────────────────────────────────────────────
     if score >= glow_threshold:
@@ -534,11 +1013,19 @@ def draw_score_bar(
         pad = glow_blur * 3 + 2
         cx0, cy0 = max(0, rx0 - pad), max(0, ry0 - pad)
         cx1, cy1 = min(W, rx1 + pad), min(H, ry1 + pad)
+        # Glow colour: "match" blends the bar's own gradient ends for a cohesive
+        # coloured halo; a tuple is a custom colour; anything else stays white.
+        if glow_color == "match":
+            gc = tuple((left_color[i] + right_color[i]) // 2 for i in range(3))
+        elif isinstance(glow_color, (tuple, list)) and len(glow_color) == 3:
+            gc = tuple(int(c) for c in glow_color)
+        else:
+            gc = (255, 255, 255)
         glow = Image.new("RGBA", (cx1 - cx0, cy1 - cy0), (0, 0, 0, 0))
         ImageDraw.Draw(glow).rounded_rectangle(
             [(rx0 - cx0, ry0 - cy0), (rx1 - cx0, ry1 - cy0)],
             radius=radius + expand,
-            fill=(255, 255, 255, glow_alpha),
+            fill=(*gc, glow_alpha),
         )
         glow = glow.filter(ImageFilter.GaussianBlur(glow_blur))
         image.alpha_composite(glow, dest=(cx0, cy0))
@@ -562,15 +1049,19 @@ def _draw_solid_pip(
     Shared primitive used by score-driven pips (where the caller computes
     the colour from the score palette).
     """
-    y0     = int(y_center - height / 2)
-    radius = max(1, width // 2)
+    # Sized in 500-wide units by the caller (pxscale); snapped to pixels here.
+    y0     = pxi(y_center - height / 2)
+    radius = round(max(fixed(1), px(width / 2)))
+    width, height = round(width), round(height)
 
     pip_mask  = _cairo_pill_mask(width, height, radius)
     pip_strip = Image.new("RGBA", (width, height), (*color, 0))
     pip_strip.putalpha(pip_mask)
-    pip_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    pip_layer.paste(pip_strip, (int(x), y0))
-    image.alpha_composite(pip_layer)
+    # Offset composite rather than a full-canvas transparent layer.  y0 can fall
+    # outside the canvas for a pip near the edge; alpha_composite clips exactly
+    # as paste did (verified pixel-identical across negative and overflowing
+    # offsets), so the edge cases behave the same.
+    image.alpha_composite(pip_strip, dest=(pxi(x), y0))
 
 
 def draw_score_bar_vertical(
@@ -601,26 +1092,38 @@ def draw_score_bar_vertical(
 # Frosted bar (rating_display_mode == 4)
 # ---------------------------------------------------------------------------
 
-def sample_frosted_bar_rgb(
-    image: Image.Image,
-    bar_height_ratio: float = 0.090,
-    bottom_inset: float = 0.0,
-) -> tuple[float, float, float]:
-    """Dominant RGB the frosted bar would sample from its bottom strip.
+_BAR_SILVER = (210, 210, 218)
+_BAR_GOLD   = (212, 175, 55)
 
-    Mirrors the crop/blur/thumbnail in draw_frosted_bar's _build_frosted_base
-    so the colour-matching logic upstream can compare it against the notch.
-    """
-    width, height = image.size
-    bar_h = max(24, int(height * bar_height_ratio))
-    bar_y = height - bar_h - int(height * bottom_inset)
-    cy = max(0, bar_y); ch = min(bar_h, height - cy)
-    reg = image.crop((0, cy, width, cy + ch))
-    blr = reg.filter(ImageFilter.GaussianBlur(radius=max(6, int(bar_h * 0.45))))
-    th  = blr.resize((8, 8), Image.Resampling.LANCZOS).convert("RGB")
-    ar  = np.array(th, dtype=np.float32)
-    return float(ar[:, :, 0].mean()), float(ar[:, :, 1].mean()), float(ar[:, :, 2].mean())
 
+def _frosted_bar_geometry(height: int, bar_height_ratio: float, bottom_inset: float) -> tuple[float, float]:
+    """(height, top) of the Bar on a canvas *height* tall, in 500-wide units."""
+    bar_h = max(fixed(24), px(height * bar_height_ratio))
+    return bar_h, height - bar_h - px(height * bottom_inset)
+
+
+def frosted_bar_box(size: tuple[int, int], bar_height_ratio: float,
+                    bottom_inset: float = 0.0) -> tuple[int, int, int, int]:
+    """The box draw_frosted_bar fills, for laying out around it."""
+    bar_h, bar_y = _frosted_bar_geometry(size[1], bar_height_ratio, bottom_inset)
+    bar_h, bar_y = round(bar_h), round(bar_y)
+    return 0, bar_y, size[0], bar_y + bar_h
+
+
+def bar_fill_color(style: str, accent: str, score: int | None,
+                   custom_palette: "CustomScorePalette | None" = None) -> tuple[int, int, int] | None:
+    """The fill_color draw_frosted_bar takes for Bar style *style* in Rating
+    Bar Colour *accent*: None for a style with no fill, and for "sample",
+    which draw_frosted_bar derives from the bar's own tint."""
+    if style not in ("rating_black", "rating_frosted") or accent == "sample":
+        return None
+    fixed_colour = {"silver": _BAR_SILVER, "gold": _BAR_GOLD}.get(accent)
+    if fixed_colour is not None:
+        return fixed_colour
+    if score is None:
+        return _BAR_SILVER
+    mode = 3 if accent == "palette_custom" else int(accent[-1])
+    return score_color_for_mode(score, mode, custom_palette)[0]
 
 def _load_metacritic_icon_mask(size: int) -> Image.Image | None:
     """Return a resized alpha mask for the inline Metacritic mark."""
@@ -655,13 +1158,16 @@ def draw_frosted_bar(
     bar_height_ratio: float = 0.090,
     font_size_ratio: float = 0.40,
     frost_opacity: float = 0.75,
+    frost_saturation: float = 1.2,
+    frost_reference: bool = False,
     bottom_inset: float = 0.0,
     style: str = "frosted",
     score: int | str | None = None,
     fill_color: tuple[int, int, int] | None = None,
     tint_rgb: tuple[float, float, float] | None = None,
-    center_segments: list[tuple[str, str]] | None = None,
     text_color: tuple[int, int, int] | None = None,
+    center_run=None,
+    center_segments: list[tuple[str, str]] | None = None,
 ) -> Image.Image:
     """Full-width frosted glass or dark-body strip near the bottom of the poster.
 
@@ -674,20 +1180,28 @@ def draw_frosted_bar(
     tint_rgb overrides the sampled dominant colour for frosted styles so the bar
     and the info-sash notch can share one tint (sampling the glass texture still
     comes from the actual poster region — only the colour cast is forced).
+    center_run, when given, is called as center_run(font_size, measure, budget)
+    for a list of rating_badges runs, spread evenly across the bar in place of
+    center_text (one run is centred).
+    center_segments, when given, is the dual-rating row (BingeCat's
+    bar_append="second_rating"): text, "sep", "star" and "mc" (the minimal
+    Metacritic mark) tokens, centred as one line.
     """
-    import os, colorsys as _cs
+    import colorsys as _cs
 
     width, height = image.size
-    bar_h = max(24, int(height * bar_height_ratio))
-    bar_y = height - bar_h - int(height * bottom_inset)
+    # Laid out in 500-wide units (pxscale) and snapped to this canvas's pixels
+    # once the sizes that derive from bar_h are known.  Plain ints at 500.
+    bar_h, bar_y = _frosted_bar_geometry(height, bar_height_ratio, bottom_inset)
 
     # ── Font ─────────────────────────────────────────────────────────────────
-    font_size = max(10, int(bar_h * font_size_ratio))
-    font_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "fonts", "Inter-Bold.ttf"
-    )
+    font_size = max(fixed(10), px(bar_h * font_size_ratio))
+    h_pad     = max(fixed(20), px(width * 0.055))
+    if center_text and center_run is None:
+        # A long translated genre shrinks to fit between the bar's padding.
+        font_size = fonts.fit_label_size(visual(center_text), font_size, width - 2 * h_pad)
     try:
-        font = ImageFont.truetype(font_path, font_size)
+        font = fonts.label_font(font_size)
     except IOError:
         font = ImageFont.load_default()
 
@@ -695,16 +1209,21 @@ def draw_frosted_bar(
     _ref_b = ImageDraw.Draw(Image.new("RGBA", (1, 1))).textbbox((0, 0), _REF, font=font)
     # Pure optical centering — no base nudge; the stripe branches add their own
     # downward compensation to account for the accent bar stealing top space.
-    text_y = (bar_h - (_ref_b[3] - _ref_b[1])) // 2 - _ref_b[1]
+    text_y = px((bar_h - (_ref_b[3] - _ref_b[1])) / 2) - _ref_b[1]
 
-    _SILVER = (210, 210, 218)
-    _GOLD   = (212, 175, 55)
+    _SILVER = _BAR_SILVER
+    _GOLD   = _BAR_GOLD
     # Solid accent styles use a thin stripe; rating bar modes use a larger one.
-    _accent_stripe = max(2, int(bar_h * 0.06))
-    _rating_stripe = max(3, int(bar_h * 0.10))
+    _accent_stripe = max(fixed(2), px(bar_h * 0.06))
+    _rating_stripe = max(fixed(3), px(bar_h * 0.10))
+    _lift          = max(fixed(1), px(bar_h * 0.025))   # small upward correction for non-plain styles
+    _stripe_nudge  = max(fixed(1), px(bar_h * 0.05)) + px(_rating_stripe / 2) - _lift
+    _plain_nudge   = max(fixed(1), px(bar_h * 0.03))
+    _accent_nudge  = max(fixed(1), px(bar_h * 0.05)) + px(_accent_stripe / 2) - _lift
+    _blur_r        = max(fixed(6), px(bar_h * 0.45))
+    bar_h, bar_y = round(bar_h), round(bar_y)
+    _accent_stripe, _rating_stripe = round(_accent_stripe), round(_rating_stripe)
     stripe = _accent_stripe  # overridden per branch below
-    _lift          = max(1, int(bar_h * 0.025))   # small upward correction for non-plain styles
-    _stripe_nudge  = max(1, int(bar_h * 0.05)) + _rating_stripe // 2 - _lift
 
     def _score_pct() -> int:
         try:    return max(0, min(int(score), 100))   # type: ignore[arg-type]
@@ -712,30 +1231,36 @@ def draw_frosted_bar(
 
     def _build_frosted_base() -> tuple[Image.Image, float, float, float]:
         """Returns (bar_img, raw_h, raw_s, raw_v) — HSV before lightening."""
-        blur_r = max(6, int(bar_h * 0.45))
+        blur_r = _blur_r
         cy = max(0, bar_y); ch = min(bar_h, height - cy)
         reg = image.crop((0, cy, width, cy + ch))
         blr = reg.filter(ImageFilter.GaussianBlur(radius=blur_r))
+        # Colour comes from tint_rgb (a whole-poster sample the caller takes from
+        # the un-graded art); the blurred texture still comes from the image.
         if tint_rgb is not None:
             dr, dg, db = tint_rgb
         else:
-            th  = blr.resize((8, 8), Image.Resampling.LANCZOS).convert("RGB")
-            ar  = np.array(th, dtype=np.float32)
-            dr, dg, db = ar[:,:,0].mean(), ar[:,:,1].mean(), ar[:,:,2].mean()
+            dr, dg, db = dominant_frost_rgb(image)
         _h2, _s2, _v2 = _cs.rgb_to_hsv(dr/255, dg/255, db/255)
-        tr, tg, tb = _cs.hsv_to_rgb(_h2, min(1.0, _s2*1.2), _v2*0.4+0.60)
-        r, g, b = int(tr*255*0.6+255*0.4), int(tg*255*0.6+255*0.4), int(tb*255*0.6+255*0.4)
+        r, g, b = _frosted_tint(dr, dg, db, frost_saturation, frost_reference)
         base  = blr.resize((width, bar_h), Image.Resampling.LANCZOS).convert("RGBA")
         frost = Image.new("RGBA", (width, bar_h), (r, g, b, int(frost_opacity*255)))
         return Image.alpha_composite(base, frost), _h2, _s2, _v2
+
+    def _frosted_ink() -> tuple[int, int, int]:
+        """Label colour for a frosted body — dark on a light bar, light on a dark
+        one.  The bar shares the notch's frosted colour, and one matched to a
+        tinted vignette can be genuinely dark where every other frost is light."""
+        dr, dg, db = tint_rgb if tint_rgb is not None else dominant_frost_rgb(image)
+        return _frost_ink(*_frosted_tint(dr, dg, db, frost_saturation, frost_reference))
 
     if style == "pure_black":
         ink = (*_SILVER, 248)
         arr = np.zeros((bar_h, width, 4), dtype=np.uint8)
         arr[:, :, :3] = 12;  arr[:, :, 3] = int(frost_opacity * 255)
-        bar_img = Image.fromarray(arr, "RGBA")
+        bar_img = Image.fromarray(arr)
         # No accent stripe, so no stripe compensation — centre like plain frosted.
-        text_y += max(1, int(bar_h * 0.03))
+        text_y += _plain_nudge
 
     elif style in ("silver", "gold"):
         stripe = _accent_stripe
@@ -745,8 +1270,8 @@ def draw_frosted_bar(
         arr[:, :, :3] = 12;  arr[:, :, 3] = int(frost_opacity * 255)
         arr[:stripe, :, 0] = accent[0]; arr[:stripe, :, 1] = accent[1]
         arr[:stripe, :, 2] = accent[2]; arr[:stripe, :, 3] = 240
-        bar_img = Image.fromarray(arr, "RGBA")
-        text_y += max(1, int(bar_h * 0.05)) + stripe // 2 - _lift
+        bar_img = Image.fromarray(arr)
+        text_y += _accent_nudge
 
     elif style == "rating_black":
         stripe = _rating_stripe
@@ -759,16 +1284,16 @@ def draw_frosted_bar(
         arr[:stripe, :, 0] = dim[0]; arr[:stripe, :, 1] = dim[1]
         arr[:stripe, :, 2] = dim[2]; arr[:stripe, :, 3] = 240
         # Filled
-        fw = int(width * _score_pct() / 100)
+        fw = pxi(width * _score_pct() / 100)
         if fw > 0:
             arr[:stripe, :fw, 0] = fc[0]; arr[:stripe, :fw, 1] = fc[1]
             arr[:stripe, :fw, 2] = fc[2]; arr[:stripe, :fw, 3] = 240
-        bar_img = Image.fromarray(arr, "RGBA")
+        bar_img = Image.fromarray(arr)
         text_y += _stripe_nudge
 
     elif style == "rating_frosted":
         stripe = _rating_stripe
-        ink = (15, 15, 15, 248)
+        ink = (*_frosted_ink(), 248)
         bar_img, _, _, _ = _build_frosted_base()
         if fill_color is not None:
             # Explicit colour chosen — use it directly.
@@ -788,27 +1313,26 @@ def draw_frosted_bar(
             fr2, fg2, fb2 = _cs.hsv_to_rgb(_h2, min(1.0, _s2 * 1.6), _fv)
             fill_col = (int(fr2 * 255), int(fg2 * 255), int(fb2 * 255))
             dim_col  = tuple(max(0, int(c * 0.12)) for c in fill_col)
-        fw = int(width * _score_pct() / 100)
+        fw = pxi(width * _score_pct() / 100)
         sa = np.zeros((stripe, width, 4), dtype=np.uint8)
         sa[:, :, 0] = dim_col[0]; sa[:, :, 1] = dim_col[1]
         sa[:, :, 2] = dim_col[2]; sa[:, :, 3] = 90
         if fw > 0:
             sa[:, :fw, 0] = fill_col[0]; sa[:, :fw, 1] = fill_col[1]
             sa[:, :fw, 2] = fill_col[2]; sa[:, :fw, 3] = 230
-        bar_img.alpha_composite(Image.fromarray(sa, "RGBA"), (0, 0))
+        bar_img.alpha_composite(Image.fromarray(sa), (0, 0))
         text_y += _stripe_nudge
 
     else:  # plain frosted — small nudge down, no stripe compensation needed
-        ink = (15, 15, 15, 248)
+        ink = (*_frosted_ink(), 248)
         bar_img, _, _, _ = _build_frosted_base()
-        text_y += max(1, int(bar_h * 0.03))
+        text_y += _plain_nudge
 
     if text_color is not None:
         ink = (*text_color, 248)
 
     txt_layer = Image.new("RGBA", (width, bar_h), (0, 0, 0, 0))
     td        = ImageDraw.Draw(txt_layer)
-    h_pad     = max(20, int(width * 0.055))
 
     if center_segments:
         token_gap = max(4, int(font_size * 0.24))
@@ -816,24 +1340,21 @@ def draw_frosted_bar(
         icon_old_size = max(8, int(font_size * 0.82))
         measured: list[tuple[str, str, float]] = []
         for kind, text in center_segments:
-            if kind == "image":
-                seg_w = text.width
-            elif kind == "mc":
+            if kind == "mc":
                 seg_w = icon_size
             elif kind == "sep":
                 seg_w = td.textlength("·", font=font)
             elif kind == "star":
                 seg_w = td.textlength("★", font=font)
             else:
+                text = visual(text)
                 seg_w = td.textlength(text, font=font)
             measured.append((kind, text, seg_w))
         total_w = sum(item[2] for item in measured) + token_gap * (len(measured) - 1)
         cursor = (width - total_w) / 2
         icon_cy = round(text_y + font_size * 0.60 + (icon_size - icon_old_size) / 2)
         for idx, (kind, text, seg_w) in enumerate(measured):
-            if kind == "image":
-                txt_layer.alpha_composite(text, (round(cursor), round((bar_h - text.height) / 2)))
-            elif kind == "mc":
+            if kind == "mc":
                 mask = _load_metacritic_icon_mask(icon_size)
                 if mask is not None:
                     swatch = Image.new("RGBA", mask.size, ink)
@@ -849,13 +1370,27 @@ def draw_frosted_bar(
             cursor += seg_w
             if idx < len(measured) - 1:
                 cursor += token_gap
+    elif center_run is not None:
+        import rating_badges
+
+        def _measure(text: str) -> float:
+            return td.textlength(text, font=font)
+        runs = center_run(font_size, _measure, width - 2 * h_pad)
+        widths = [rating_badges.run_width(r, _measure) for r in runs]
+        # Equal space before, between and after the entries.
+        gap = (width - sum(widths)) / (len(runs) + 1)
+        x = gap
+        for r, w in zip(runs, widths):
+            rating_badges.draw_run(txt_layer, td, r, px(x), text_y, font, ink, _measure)
+            x += w + gap
     elif center_text:
-        cw = int(td.textlength(center_text, font=font))
-        td.text(((width - cw) // 2, text_y), center_text, font=font, fill=ink)
+        center_text = visual(center_text)
+        cw = px(td.textlength(center_text, font=font))
+        td.text((px((width - cw) / 2), text_y), center_text, font=font, fill=ink)
     if left_text:
         td.text((h_pad, text_y), left_text, font=font, fill=ink)
     if right_text:
-        rw = int(td.textlength(right_text, font=font))
+        rw = px(td.textlength(right_text, font=font))
         td.text((width - h_pad - rw, text_y), right_text, font=font, fill=ink)
 
     bar_final = Image.alpha_composite(bar_img, txt_layer)
@@ -867,12 +1402,34 @@ def draw_frosted_bar(
 # Weighted score
 # ---------------------------------------------------------------------------
 
+def is_anime_rated(ratings: dict) -> bool:
+    """True when *ratings* carries a score from an anime source.
+
+    This is the whole test for whether a title scores with the anime weights:
+    a MyAnimeList, AniList or Kitsu rating is present, or it isn't. The
+    sources are only ever populated for anime, so no genre or keyword
+    guesswork is needed on top.
+    """
+    return any(source in ratings for source in ANIME_RATING_SOURCES)
+
+
 def calculate_weighted_score(
     ratings: dict,
     weights: dict,
     *,
     fallback_to_imdb: bool = False,
+    fallback_source: str | None = None,
 ) -> int | str:
+    """Blend the available ratings using *weights*, renormalised over the
+    sources actually present.
+
+    *fallback_source* names a source to fall back on when no weighted source is
+    present at all. Used by the anime path: the provider's score is the only
+    rating such a title has, and existing weights strings name none of the anime
+    sources, so without this the score would always be N/A on exactly the titles
+    that path exists for. Checked before *fallback_to_imdb* because an
+    anime-native request has no IMDb rating to fall back to.
+    """
 
     total_weight = 0.0
     weighted_sum = 0.0
@@ -895,6 +1452,11 @@ def calculate_weighted_score(
         total_weight += weight
 
     if total_weight == 0:
+        if fallback_source:
+            fallback_value = ratings.get(fallback_source)
+            fallback_normaliser = SCORE_NORMALISERS.get(fallback_source)
+            if fallback_value is not None and fallback_normaliser:
+                return round(fallback_normaliser(fallback_value))
         imdb_value = ratings.get("imdb")
         imdb_normaliser = SCORE_NORMALISERS.get("imdb")
         if fallback_to_imdb and imdb_value is not None and imdb_normaliser:

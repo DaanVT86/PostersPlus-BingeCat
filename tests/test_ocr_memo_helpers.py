@@ -15,7 +15,6 @@ from integration_contract import ArtworkLocator
 from source_art import SourceArtError, SourceArtStore
 from text_detect import (
     OCRMemoEntry,
-    _bounded_env_int,
     build_ocr_memo_key,
     ocr_memo_payload,
     ocr_runtime_signature,
@@ -293,11 +292,5 @@ def test_default_materializer_caches_text_and_unknown_without_rescanning(
     assert scans == 1
 
 
-def test_detection_threads_env_reader_is_bounded_without_import_failure(monkeypatch):
-    monkeypatch.setenv("TEXTLESS_DETECTION_THREADS", "99")
-    assert _bounded_env_int("TEXTLESS_DETECTION_THREADS", 2, minimum=1, maximum=4) == 4
-    monkeypatch.setenv("TEXTLESS_DETECTION_THREADS", "-9")
-    assert _bounded_env_int("TEXTLESS_DETECTION_THREADS", 2, minimum=1, maximum=4) == 1
-    monkeypatch.setenv("TEXTLESS_DETECTION_THREADS", "not-an-int")
-    assert _bounded_env_int("TEXTLESS_DETECTION_THREADS", 2, minimum=1, maximum=4) == 2
+def test_ocr_runtime_signature_is_bounded():
     assert len(ocr_runtime_signature()) <= 80

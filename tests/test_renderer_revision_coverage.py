@@ -1,0 +1,307 @@
+"""Every repo function a v2 render executes is inside its renderer revision.
+
+The revision hashes AST closures of named roots, and a closure only follows
+names within one module.  Cross-module calls (``fonts.label_font``,
+``graphic_badges.cinema_ink``, a function-local ``from main import ...``) need
+their own roots, or a change there would alter pixels under an unchanged
+revision.  This traces representative renders the v2 contract can ask for and
+fails on any executed top-level function outside the closure, or on any
+network access (renders are offline).
+"""
+from __future__ import annotations
+
+import ast
+import socket
+import sys
+from unittest.mock import patch
+from datetime import date
+from pathlib import Path
+
+from PIL import Image
+
+import v2_render as render
+from render_spec import canonicalize_config
+from preset_registry import get_preset, list_public_presets
+
+ROOT = Path(render.__file__).resolve().parent
+
+# Executed, but only to validate, select or hash inputs (their outputs are
+# carried by config/snapshot hashes) or to load assets the manifest hashes.
+NOT_PIXEL_CODE = {
+    ("v2_render.py", "_composition_engine"),
+}
+
+
+def _closure(code_roots) -> dict[str, set[str] | None]:
+    """{module: top-level names in the revision closure}; None = whole module."""
+    out: dict[str, set[str] | None] = {}
+    for relative_path, roots in code_roots:
+        if roots == ("*",):
+            out[relative_path] = None
+            continue
+        tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
+        definitions = {}
+        for node in tree.body:
+            for name in render._bound_names(node):
+                definitions[name] = node
+        seen: set[str] = set()
+        pending = list(roots)
+        while pending:
+            name = pending.pop()
+            if name in seen or name not in definitions:
+                continue
+            seen.add(name)
+            pending.extend(
+                child.id for child in ast.walk(definitions[name])
+                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+            )
+        names = out.get(relative_path, set())
+        if names is not None:
+            out[relative_path] = names | seen
+    return out
+
+
+def _trace(fn) -> set[tuple[str, str]]:
+    called: set[tuple[str, str]] = set()
+
+    def profile(frame, event, arg):
+        if event != "call":
+            return
+        code = frame.f_code
+        path = Path(code.co_filename)
+        if path.parent != ROOT:
+            return
+        top = code.co_qualname.split(".", 1)[0]
+        if top.startswith("<"):   # module body, lambda at module level, genexpr
+            return
+        called.add((path.name, top))
+
+    def offline(*_args, **_kwargs):
+        raise AssertionError("a v2 render opened a network connection")
+
+    import main
+
+    sys.setprofile(profile)
+    try:
+        # The face-box memo would skip the detector on a warm cache.
+        with patch.object(socket.socket, "connect", offline), \
+                patch.object(socket, "getaddrinfo", offline), \
+                patch.object(main, "get_cached_face_boxes", lambda _key: None), \
+                patch.object(main, "set_cached_face_boxes", lambda _key, _boxes: None):
+            fn()
+    finally:
+        sys.setprofile(None)
+    assert not [name for _, name in called if "fetch" in name or name == "ensure_assets"]
+    return called
+
+
+def _art(size, color):
+    return Image.new("RGBA", size, color)
+
+
+def _logo():
+    logo = Image.new("RGBA", (240, 80), (0, 0, 0, 0))
+    logo.paste((240, 240, 245, 255), (10, 10, 230, 70))
+    return logo
+
+
+def _meta(engine, **values):
+    base = dict(
+        award_wins=["Oscar Winner"], award_noms=["Oscar Nominee"],
+        festival_label="Cannes Winner", matched_studios=["A24"], trending_rank=3,
+        release_status="Cinema", is_cult=True, original_language="fr",
+        trending_fetch_count=render.V2_TRENDING_FETCH_COUNT,
+        trending_broad_fetch_count=render.V2_TRENDING_BROAD_FETCH_COUNT,
+    )
+    base.update(values)
+    return engine.DiscoveryMeta(**base)
+
+
+_RATINGS = {"imdb": 7.8, "tomatoes": 91.0, "popcorn": 45.0, "metacritic": 74.0,
+            "letterboxd": 3.9, "trakt": 81.0, "tmdb": 77.0, "metacriticuser": 7.1,
+            "rogerebert": 3.5}
+
+_CUSTOM = [
+    {"rating_display_mode": 1, "accent_bar_append_mode": 2, "sash_mode": "sash", "sash_side": "left"},
+    {"rating_display_mode": 2, "rating_badges": "imdb,tomatoes,popcorn", "sash_mode": "notch",
+     "sash_badge_pos": "left", "badge_display_mode": 3},
+    {"rating_display_mode": 2, "rating_badges": "letterboxd,rogerebert", "rating_badge_style": "mono",
+     "rating_badge_scale": "normalized"},
+    {"rating_display_mode": 3, "minimalist_append_mode": 0, "score_color_mode": 3,
+     "score_custom_palette": "0:#ff0000,70:#00ff00"},
+    {"rating_display_mode": 3, "minimalist_append_mode": 2, "minimalist_separator": "bullet",
+     "minimalist_rating_separator": "bullet_star", "meta_order": "rating,year,genre"},
+    {"rating_display_mode": 3, "minimalist_append_mode": 3},
+    {"rating_display_mode": 3, "minimalist_append_mode": 1, "rating_badges": "metacritic,trakt,tmdb"},
+    {"rating_display_mode": 4, "bar_append": "rating_year", "bar_style": "rating_frosted",
+     "rating_badges": "imdb,metacriticuser"},
+    {"rating_display_mode": 4, "bar_append": "second_rating", "bar_style": "gold", "sash_mode": "notch",
+     "sash_badge_style": "frosted", "bar_match_notch": True},
+    {"rating_display_mode": 4, "bar_append": "sash", "bar_style": "silver"},
+    {"rating_display_mode": 5, "sash_mode": "notch", "sash_badge_pos": "right", "sash_badge_style": "black",
+     "top_gradient": "custom", "top_gradient_opacity": 0.6, "top_gradient_height": 0.3},
+    {"rating_display_mode": 0, "sash_mode": "hidden", "muted": True, "fallback_bg_style": "photoreal"},
+    # R2 options.
+    {"rating_display_mode": 1, "score_glow_color": "match", "vignette_poster_color_top": True,
+     "vignette_poster_color_bottom": True, "vignette_color_style": "muted", "label_font": "rubik"},
+    {"rating_display_mode": 2, "badge_display_mode": 7, "sash_mode": "notch", "sash_badge_pos": "auto",
+     "badge_group2": "tl:2:network,studio", "badge_group3": "br:1:cinema", "badge_cert_style": "frosted",
+     "vignette_poster_color_bottom": True, "vignette_color_style": "reference"},
+    {"rating_display_mode": 3, "minimalist_append_mode": 2, "sash_mode": "notch",
+     "sash_badge_pos": "edge_right", "sash_edge_y": 0.3, "label_font": "oswald"},
+    {"rating_display_mode": 4, "sash_mode": "notch", "sash_badge_pos": "left", "sash_chip_x": 0.1,
+     "sash_chip_y": 0.05, "badge_display_mode": 7, "badge_overflow": "hide"},
+]
+
+
+def _portrait_specs():
+    specs = [get_preset(meta.ref).config for meta in list_public_presets()]
+    for raw in _CUSTOM:
+        specs.append(canonicalize_config({**raw, "sash_priority": "wins,festival,cult,trending,cinema"}))
+    return specs
+
+
+_PORTRAIT_SPECS = _portrait_specs()
+_LANDSCAPE_SPECS = [get_preset(meta.ref).config for meta in list_public_presets()]
+
+
+def _portrait_cases(engine):
+    for spec in _PORTRAIT_SPECS:
+        fog = render._request_config(engine, spec, "en")
+        # A cinema title is greyscaled, which turns the fog off, so fog configs
+        # also render a streaming title (the face-detector path).
+        statuses = ("Cinema", "Streaming") if (
+            fog.vignette_poster_color_top or fog.vignette_poster_color_bottom) else ("Cinema",)
+        for locale in ("en", "nl", "de"):
+            for logo, base in ((True, True), (False, True), (False, False)):
+                for status in statuses:
+                    yield spec, locale, logo, base, status
+
+
+def _portrait_renders():
+    engine = render._composition_engine()
+    for spec, locale, logo, base, status in _portrait_cases(engine):
+        cfg = render._request_config(engine, spec, locale)
+        image = (_art((500, 750), (31, 83, 147)) if base
+                 else render._fallback_canvas(engine, "Drama", spec.fallback_bg_style))
+        labels = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
+        try:
+            engine.build_poster(
+                image, 83, "Drama", cfg,
+                logo=_logo() if logo else None,
+                fallback_title=None if logo else "The Matrix Reloaded",
+                discovery_meta=_meta(engine, release_status=status),
+                quality_tokens=[], release_year="1999", age_rating=12,
+                no_poster=not base, metacritic_score=74, ratings=dict(_RATINGS),
+                sash_date_label=f"Cinema · {date(2026, 12, 18).isoformat()}",
+            )
+        finally:
+            engine.i18n.BUNDLED_LABELS_ONLY.reset(labels)
+
+
+def _landscape_renders():
+    engine = render._composition_engine()
+    for spec in _LANDSCAPE_SPECS:
+        for badge in ("top_left", "top_right", "logo"):
+            for logo, fog in ((True, False), (False, False), (True, True)):
+                cfg = render._request_config(engine, spec, "en")
+                cfg.landscape_badge_pos = badge
+                if fog:
+                    cfg.vignette_poster_color_top = cfg.vignette_poster_color_bottom = True
+                labels = engine.i18n.BUNDLED_LABELS_ONLY.set(True)
+                try:
+                    render.build_landscape(
+                        _art((1000, 563), (120, 60, 30)), 83, "Drama", cfg,
+                        logo=_logo() if logo else None,
+                        fallback_title=None if logo else "The Matrix",
+                        discovery_meta=_meta(engine, release_status="Streaming"),
+                        release_year="1999",
+                    )
+                finally:
+                    engine.i18n.BUNDLED_LABELS_ONLY.reset(labels)
+    render._landscape_fallback_canvas(engine, "Drama")
+
+
+def _uncovered(called, closure):
+    missing = set()
+    for module, name in called:
+        if (module, name) in NOT_PIXEL_CODE:
+            continue
+        if module not in closure:
+            missing.add((module, name))
+            continue
+        names = closure[module]
+        if names is not None and name not in names:
+            missing.add((module, name))
+    return sorted(missing)
+
+
+# Import the engine (and run its import-time code) outside the traces.
+render._composition_engine()
+
+
+def test_portrait_renders_execute_only_revision_covered_code():
+    called = _trace(_portrait_renders)
+    assert ("main.py", "_build_poster") in called
+    assert ("face_detect.py", "detect_face_boxes") in called   # the fog ran
+    missing = _uncovered(called, _closure(render.RENDERER_REVISION_CODE_ROOTS))
+    assert missing == [], "\n".join(f"{m}::{n}" for m, n in missing)
+
+
+def test_landscape_renders_execute_only_revision_covered_code():
+    called = _trace(_landscape_renders)
+    assert ("landscape.py", "_build_landscape") in called
+    assert ("face_detect.py", "detect_face_boxes") in called   # the fog ran
+    missing = _uncovered(called, _closure(render.LANDSCAPE_REVISION_CODE_ROOTS))
+    assert missing == [], "\n".join(f"{m}::{n}" for m, n in missing)
+
+
+def test_optional_backends_that_change_pixels_change_the_revision():
+    # skia on/off draws a different sash; no face detector means a different fog.
+    import awards
+    import face_detect
+
+    base = render._compute_renderer_revision()
+    landscape = render._compute_landscape_renderer_revision()
+    with patch.object(awards, "_HAS_SKIA", not awards._HAS_SKIA):
+        assert render._compute_renderer_revision() != base
+        assert render._compute_landscape_renderer_revision() != landscape
+    detector = face_detect.available()
+    with patch.object(face_detect, "available", lambda: not detector):
+        assert render._compute_renderer_revision() != base
+    assert "models/face_detection_yunet.onnx" in render.RENDERER_REVISION_ASSET_MANIFEST
+    assert set(render._renderer_environment()["backends"]) == {"skia", "cairosvg", "face_detector"}
+
+
+def test_every_svg_raster_package_and_native_cairo_change_the_revisions():
+    # cairosvg rasterises the SVG marks through cairocffi's own native cairo,
+    # parsing CSS with tinycss2/cssselect2: each version is pixel input.
+    import importlib.metadata
+
+    import cairocffi
+
+    def revisions():
+        return (render._compute_renderer_revision(),
+                render._compute_landscape_renderer_revision(),
+                render._compute_source_recipe_revision())
+
+    base = revisions()
+    assert base[2] == render.SOURCE_RECIPE_REVISION
+    backend = render._svg_raster_backend()
+    assert backend["available"] and backend["native_cairo"] == cairocffi.cairo_version_string()
+    assert set(backend["versions"]) >= {"CairoSVG", "cairocffi", "cssselect2", "tinycss2"}
+    real_version = importlib.metadata.version
+    for name in render._SVG_RASTER_DISTRIBUTIONS:
+        bumped = lambda dist, _name=name: "0.0-test" if dist == _name else real_version(dist)
+        with patch.object(importlib.metadata, "version", bumped):
+            changed = revisions()
+        assert all(new != old for new, old in zip(changed, base)), name
+    with patch.object(cairocffi, "cairo_version_string", lambda: "0.0-test"):
+        assert all(new != old for new, old in zip(revisions(), base))
+
+    def no_cairo():
+        raise OSError("no libcairo")
+
+    with patch.object(cairocffi, "cairo_version_string", no_cairo):
+        assert render._svg_raster_backend()["available"] is False
+        assert all(new != old for new, old in zip(revisions(), base))

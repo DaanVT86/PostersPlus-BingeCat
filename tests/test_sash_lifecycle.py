@@ -56,7 +56,10 @@ class SashLifecycleTests(unittest.TestCase):
             recent_digital_release_date=_iso(-1),
         )
 
-        self.assertEqual(pick_sash(premiere, ["premiere"]), ("Premiere", "alert"))
+        # Dated with the day it premiered ("Premiered <date>" in English).
+        label = pick_sash(premiere, ["premiere"])
+        self.assertEqual(label[1], "alert")
+        self.assertTrue(label[0].endswith(" Premiered"), label)
         self.assertIsNone(pick_sash(premiere, ["just_added"]))
         self.assertEqual(pick_sash(just_added, ["just_added"]), ("Just Added", "alert"))
 

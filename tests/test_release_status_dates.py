@@ -59,7 +59,7 @@ def test_legacy_release_info_splits_status_and_freshness_dates(monkeypatch) -> N
     monkeypatch.setattr(
         tmdb,
         "set_cached_movie_release_info",
-        lambda _key, value: captured.update(value),
+        lambda _key, value, *_: captured.update(value),
     )
 
     info = asyncio.run(

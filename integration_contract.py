@@ -94,6 +94,10 @@ FactField = Literal[
     "is_cult",
     "is_true_story",
     "is_metacritic_must_see",
+    "networks",
+    "companies",
+    "streamer_network",
+    "is_blockbuster",
 ]
 
 
@@ -267,6 +271,19 @@ class ProviderRating(StrictModel):
         return self
 
 
+TMDBLogoPath = Annotated[
+    str,
+    StringConstraints(max_length=128, pattern=r"^/[A-Za-z0-9_-]{1,100}\.(?:png|svg|jpg|jpeg)$"),
+]
+
+
+class BadgeLogoEntry(StrictModel):
+    """A TMDB network or production company, as upstream ``_logo_entries``."""
+
+    id: Annotated[int, Field(strict=True, ge=1, le=DB_INTEGER_MAX)]
+    logo_path: TMDBLogoPath | None = None
+
+
 class NormalizedFacts(StrictModel):
     """Render-ready provider facts; no unbounded raw provider payloads."""
 
@@ -313,6 +330,14 @@ class NormalizedFacts(StrictModel):
     is_cult: StrictBool | None = None
     is_true_story: StrictBool | None = None
     is_metacritic_must_see: StrictBool | None = None
+    # Graphic badges (mode 7 network/studio slots) and the Blockbuster sash.
+    # ``streamer_network`` is the network upstream ``pick_logos`` looks up by
+    # id (a film's streamer, a series' stand-in network), resolved at enrich so
+    # render stays offline.
+    networks: tuple[BadgeLogoEntry, ...] | None = Field(default=None, max_length=16)
+    companies: tuple[BadgeLogoEntry, ...] | None = Field(default=None, max_length=32)
+    streamer_network: BadgeLogoEntry | None = None
+    is_blockbuster: StrictBool | None = None
 
 
 class FactProvenance(StrictModel):
@@ -790,6 +815,7 @@ class RenderResultMetadata(ContractDTO):
 __all__ = [
     "ArtRole",
     "ArtworkLocator",
+    "BadgeLogoEntry",
     "CONTRACT_SCHEMA",
     "CONTRACT_VERSION",
     "MAX_JSON_BODY_BYTES",
