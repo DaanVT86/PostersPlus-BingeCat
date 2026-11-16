@@ -1,136 +1,239 @@
-"""Graphic-badge / Blockbuster facts reported by v2 enrich on the R1 renderer."""
+"""R2: graphic-badge and Blockbuster facts, from enrich requirements to pixels."""
 
 from __future__ import annotations
 
 import asyncio
-import sys
 from dataclasses import replace
+from datetime import timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
+import pytest
+from PIL import Image
 
 import box_office
+import graphic_badges
+import main
 import v2_render as render
-from test_v2_enrich_art import (
-    NOW,
-    _art_only_config,
-    _request,
-    _runtime,
-    _tmdb_metadata,
+from integration_contract import (
+    CONTRACT_SCHEMA,
+    CONTRACT_VERSION,
+    ImmutableRenderSnapshot,
+    MediaIdentity,
+    NormalizedFactsEnvelope,
+    RenderInputBundle,
 )
-from v2_enrich import ProviderHooks, enrich
+from render_spec import canonicalize_config
+from source_art import SourceArtStore
+from test_v2_enrich_art import NOW, _art_only_config, _request, _runtime, _tmdb_metadata
+from test_v2_render_endpoint import _canonical_config, _install_art
+from v2_enrich import ProviderHooks, _badge_facts, enrich
 
-# The same pins as tests/test_v2_landscape.py: these facts must not move R1.
-PORTRAIT_CODE_IDENTITY = {
-    (3, 11): "6def692e5c3b7b88d5f61b5bb32fcd789d0ffbe537b7b30863d93a4bde6a3878",
-    (3, 12): "980745e7b8a1367910f4d959d879a27bc6c4874300145df9534bb2ebeb49e0d8",
-}
-PORTRAIT_RENDERER_REVISION = "260504a9d0d0daa577848316c51518c5de78c4110642bac621cc92d3538f2b29"
+HBO = {"id": 49, "logo_path": "/tuomPhY2UtuPTqqFnKMVHvSb724.png"}
+MARVEL = {"id": 420, "logo_path": "/hUzeosd33nzE5MCNsZxCGEKTXaQ.png"}
+A24 = {"id": 41077, "logo_path": "/1ZXsGaFPgrgS6ZZGS37AqD5uU12.png"}
+NETFLIX_STUDIO = {"id": 178464, "logo_path": None}
+NETFLIX = {"id": 213, "logo_path": "/wwemzKWzjKYJFfCeiB57q3r4Bcm.png"}
+GROUPS = {"badge_display_mode": 7, "badge_group2": "tl:2:network,studio", "badge_group3": "br:1:cinema"}
+
+
+@pytest.fixture(autouse=True)
+def _logo_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(graphic_badges, "LOGO_DIR", str(tmp_path / "company_logos"))
+    graphic_badges._logo_mark.cache_clear()
+    yield
+    graphic_badges._logo_mark.cache_clear()
+
+
+def _write_logo(logo: graphic_badges.Logo) -> None:
+    path = Path(graphic_badges._logo_file(logo))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGBA", (240, 80), (0, 0, 0, 0))
+    image.paste((240, 240, 245, 255), (10, 10, 230, 70))
+    image.save(path, format="PNG")
+
+
+def _group(fields, source="tmdb", expires_at=None):
+    return {
+        "fields": sorted(fields),
+        "source": source,
+        "observed_at": NOW - timedelta(hours=2),
+        "checked_at": NOW - timedelta(hours=1),
+        "expires_at": expires_at or NOW + timedelta(days=7),
+    }
+
+
+def _envelope(*groups) -> NormalizedFactsEnvelope:
+    """``groups``: (values, source[, expires_at]) per provenance group."""
+    return NormalizedFactsEnvelope.model_validate({
+        "values": {name: value for values, *_ in groups for name, value in values.items()},
+        "provenance": [_group(values, *rest) for values, *rest in groups],
+    })
+
+
+# --- enrich ----------------------------------------------------------------------
 
 
 async def _forbidden(*_args, **_kwargs):
     raise AssertionError("unneeded provider")
 
 
-def _hooks(metadata, box_office_hook=None) -> ProviderHooks:
+def _hooks(metadata, calls, *, release=None, box_office_hit=None, network_path=None, write_logos=True):
     async def tmdb(*_args, **_kwargs):
+        calls.append("tmdb")
         return metadata
+
+    async def fetch_release(*_args, **_kwargs):
+        calls.append("release")
+        return release
+
+    async def top_grossing(_client, tmdb_id, release_date, _key):
+        calls.append(("box_office", tmdb_id, release_date))
+        return box_office_hit
+
+    async def network_logo(_client, network_id, _key):
+        calls.append(("network", network_id))
+        return network_path
+
+    async def ensure(_client, logo):
+        calls.append(("logo", logo))
+        if write_logos:
+            _write_logo(logo)
 
     return ProviderHooks(
         resolve_identity=_forbidden,
         fetch_ratings=_forbidden,
         fetch_tmdb=tmdb,
         fetch_trending=_forbidden,
-        fetch_release=_forbidden,
+        fetch_release=fetch_release if release else _forbidden,
         fetch_tvdb=_forbidden,
         materialize_art=_forbidden,
-        fetch_box_office=box_office_hook,
+        fetch_box_office=top_grossing if box_office_hit is not None else _forbidden,
+        fetch_network_logo=network_logo if network_path else _forbidden,
+        ensure_badge_logo=ensure,
     )
 
 
-def _year_config() -> dict:
-    # Needs release_year, so enrich fetches TMDB metadata (the badge carrier).
-    return {**_art_only_config(), "rating_display_mode": 1, "accent_bar_append_mode": 0}
+def _enrich(config, hooks, *, media_type="movie", known_facts=None):
+    request = _request(config, media_type=media_type, known_facts=known_facts)
+    return asyncio.run(enrich(request, NOW, runtime=_runtime(hooks)))
 
 
-def _enrich(metadata, *, media_type="movie", box_office_hook=None, known_facts=None):
-    return asyncio.run(
-        enrich(
-            _request(_year_config(), media_type=media_type, known_facts=known_facts),
-            NOW,
-            runtime=_runtime(_hooks(metadata, box_office_hook)),
-        )
+def _series_metadata():
+    return replace(
+        _tmdb_metadata(), media_type="series", tmdb_status="In Production",
+        networks=(HBO,), companies=(MARVEL, {"id": "bad", "logo_path": "/x.png"}),
     )
 
 
-def test_badge_facts_stay_outside_the_renderer_revision(monkeypatch):
-    manifest = "\n".join(render.RENDERER_REVISION_MANIFEST)
-    assert "box_office" not in manifest and "v2_enrich" not in manifest
-    assert render._RENDERER_COMPATIBILITY == {
-        "a7ed1df863f30aab040b1ab6d005cf5918268fea5de6cf7ccb7b0652d099a9e5": PORTRAIT_RENDERER_REVISION
-    }
-    expected = PORTRAIT_CODE_IDENTITY.get(sys.version_info[:2])
-    if expected is not None:
-        monkeypatch.setattr(render, "_image_library_versions", lambda: {"pinned": "environment-independent"})
-        assert render._compute_renderer_build_fingerprint() == expected
-
-
-def test_series_networks_and_companies_come_from_the_metadata_call():
-    metadata = replace(
-        _tmdb_metadata(),
+def test_badge_slots_require_tmdb_badge_facts_release_status_and_logos():
+    calls = []
+    result = _enrich(
+        {**_art_only_config(), **GROUPS},
+        _hooks(_series_metadata(), calls, release="Production"),
         media_type="series",
-        networks=({"id": 49, "logo_path": "/tuomPhY2UtuPTqqFnKMVHvSb724.png", "name": "HBO"},),
-        companies=(
-            {"id": 3268, "logo_path": "/../etc/passwd.png"},
-            {"id": "bad", "logo_path": "/x.png"},
-            {"id": 7429, "logo_path": None},
-        ),
     )
-    result = _enrich(metadata, media_type="series", box_office_hook=_forbidden)
-
-    badge = result.badge_facts
-    assert badge.values.model_dump(mode="json", exclude_none=True) == {
-        "networks": [{"id": 49, "logo_path": "/tuomPhY2UtuPTqqFnKMVHvSb724.png"}],
-        # A malformed path keeps the id; a non-integer id is dropped.
-        "companies": [{"id": 3268}, {"id": 7429}],
+    facts = result.facts
+    assert facts.values.model_dump(mode="json", include={"networks", "companies", "release_status"}) == {
+        "networks": [HBO], "companies": [MARVEL], "release_status": "production",
     }
-    assert [(group.fields, group.source) for group in badge.provenance] == [
-        (("companies", "networks"), "tmdb")
-    ]
-    # The R1 facts envelope, which the snapshot freezes, gains nothing.
-    assert not {"networks", "companies", "is_blockbuster"} & set(
-        result.facts.values.model_dump(exclude_none=True)
+    sources = {name: group.source for group in facts.provenance for name in group.fields}
+    assert sources["networks"] == sources["companies"] == "tmdb"
+    network, studio = graphic_badges.make_logo("network", 49, HBO["logo_path"]), \
+        graphic_badges.make_logo("company", 420, MARVEL["logo_path"])
+    assert calls == ["tmdb", "release", ("logo", network), ("logo", studio)]
+    assert not any("badge_logo" in status.missing_fields for status in result.provider_statuses)
+    assert "badge_facts" not in result.model_dump(mode="json")
+
+
+def test_a_logo_the_cache_cannot_get_is_reported_missing():
+    calls = []
+    result = _enrich(
+        {**_art_only_config(), **GROUPS},
+        _hooks(_series_metadata(), calls, release="Production", write_logos=False),
+        media_type="series",
     )
-    assert not result.partial
+    missing = [s for s in result.provider_statuses if "badge_logo" in s.missing_fields]
+    assert [(s.provider, s.status) for s in missing] == [("source_art", "missing")]
 
 
-def test_movie_blockbuster_answer_absence_and_failure():
+def test_an_expired_badge_group_triggers_the_tmdb_fetch_and_is_replaced_whole():
+    config = {**_art_only_config(), "badge_display_mode": 7, "badge_group2": "tl:2:network,studio"}
+    stale = _envelope(({"networks": [{"id": 1, "logo_path": "/old.png"}], "companies": [MARVEL]},
+                       "tmdb", NOW - timedelta(minutes=1))).model_dump(mode="json")
+    calls = []
+    result = _enrich(config, _hooks(_series_metadata(), calls), media_type="series", known_facts=stale)
+    assert calls[0] == "tmdb"
+    assert result.facts.values.model_dump(mode="json")["networks"] == [HBO]
+    assert all(group.expires_at > NOW for group in result.facts.provenance)
+
+    # Fresh known badge facts: no TMDB call; their logos are still ensured.
+    fresh = _envelope(({"networks": [HBO], "companies": [MARVEL]},)).model_dump(mode="json")
+    calls = []
+    result = _enrich(config, _hooks(None, calls), media_type="series", known_facts=fresh)
+    assert [call for call in calls if call == "tmdb"] == []
+    assert [call[0] for call in calls] == ["logo", "logo"]
+
+
+def test_film_streamer_network_and_blockbuster_are_enrich_facts():
+    metadata = replace(_tmdb_metadata(), companies=(NETFLIX_STUDIO, A24))
+    config = {**_art_only_config(), "badge_display_mode": 7, "badge_group2": "tl:2:network,studio",
+              "show_award_sash": True, "sash_mode": "sash", "sash_priority": ["blockbuster"]}
+    calls = []
+    result = _enrich(config, _hooks(metadata, calls, box_office_hit=True,
+                                    network_path=NETFLIX["logo_path"]))
+    values = result.facts.values
+    assert values.streamer_network.model_dump() == NETFLIX
+    assert values.is_blockbuster is True and values.networks is None
+    sources = {name: group.source for group in result.facts.provenance for name in group.fields}
+    assert {name: sources[name] for name in ("companies", "streamer_network", "is_blockbuster")} == {
+        "companies": "tmdb", "streamer_network": "tmdb", "is_blockbuster": "tmdb_box_office"}
+    assert ("network", 213) in calls and ("box_office", "11", "1999-03-30") in calls
+    assert ("logo", graphic_badges.make_logo("network", 213, NETFLIX["logo_path"])) in calls
+
+    # Known companies naming a streamer studio but no streamer network: refetch.
+    known = _envelope(({"companies": [NETFLIX_STUDIO], "is_blockbuster": False},)).model_dump(mode="json")
+    calls = []
+    result = _enrich(config, _hooks(metadata, calls, network_path=NETFLIX["logo_path"]),
+                     known_facts=known)
+    assert calls[0] == "tmdb" and ("network", 213) in calls
+    assert result.facts.values.streamer_network.id == 213
+    assert result.facts.values.is_blockbuster is False   # still fresh: kept, not re-asked
+
+
+def test_specs_without_badges_fetch_and_report_no_badge_facts():
+    metadata = replace(_tmdb_metadata(), companies=(NETFLIX_STUDIO, A24))
+    calls = []
+    config = {**_art_only_config(), "rating_display_mode": 1, "accent_bar_append_mode": 0}
+    result = _enrich(config, _hooks(metadata, calls))
+    assert calls == ["tmdb"]
+    assert not {"networks", "companies", "streamer_network", "is_blockbuster"} & set(
+        result.facts.values.model_dump(exclude_none=True))
+
+
+def test_offprod_producer_helper_returns_a_facts_envelope():
     seen = []
 
-    async def hit(client, tmdb_id, release_date, tmdb_key):
-        seen.append((tmdb_id, release_date, tmdb_key))
+    async def network_logo(_client, network_id, _key):
+        seen.append(network_id)
+        return NETFLIX["logo_path"]
+
+    async def hit(*_args):
         return True
 
-    async def unknown(*_args):
-        return None
-
-    async def broken(*_args):
-        raise RuntimeError("tmdb down")
-
-    result = _enrich(_tmdb_metadata(), box_office_hook=hit)
-    assert seen == [("11", "1999-03-30", "tmdb-key")]
-    assert result.badge_facts.values.is_blockbuster is True
-    assert result.badge_facts.values.networks is None
-    assert {group.source: group.fields for group in result.badge_facts.provenance} == {
-        "tmdb": ("companies",),
-        "tmdb_box_office": ("is_blockbuster",),
+    runtime = SimpleNamespace(client=None, tmdb_key="k",
+                              hooks=SimpleNamespace(fetch_box_office=hit, fetch_network_logo=network_logo))
+    metadata = replace(_tmdb_metadata(), companies=(NETFLIX_STUDIO, A24))
+    envelope = asyncio.run(_badge_facts(metadata, runtime, NOW))
+    assert seen == [213]
+    assert envelope.model_dump(mode="json", exclude_none=True)["values"] == {
+        # exclude_none drops a null logo_path inside an entry too.
+        "companies": [{"id": 178464}, A24], "streamer_network": NETFLIX, "is_blockbuster": True,
     }
-    statuses = result.provider_statuses
-    for hook in (unknown, broken):
-        missing = _enrich(_tmdb_metadata(), box_office_hook=hook)
-        # A list that can't be had is no answer: absent, not False, and silent.
-        assert missing.badge_facts.values.is_blockbuster is None
-        assert missing.provider_statuses == statuses
-        assert not missing.partial
+    assert [(group.fields, group.source) for group in envelope.provenance] == [
+        (("companies", "streamer_network"), "tmdb"), (("is_blockbuster",), "tmdb_box_office"),
+    ]
 
 
 def test_real_box_office_lookup_through_mock_transport(monkeypatch):
@@ -148,30 +251,141 @@ def test_real_box_office_lookup_through_mock_transport(monkeypatch):
         tmdb_id = int(request.url.path.rsplit("/", 1)[1])
         return httpx.Response(200, json={"revenue": 900_000_000 if tmdb_id == 11 else 0})
 
+    config = {**_art_only_config(), "show_award_sash": True, "sash_mode": "sash",
+              "sash_priority": ["blockbuster"]}
+    hooks = replace(_hooks(_tmdb_metadata(), []), fetch_box_office=box_office.is_blockbuster)
+
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            runtime = replace(_runtime(_hooks(_tmdb_metadata(), box_office.is_blockbuster)), client=client)
-            return await enrich(_request(_year_config()), NOW, runtime=runtime)
+            return await enrich(_request(config), NOW, runtime=replace(_runtime(hooks), client=client))
 
-    assert asyncio.run(run()).badge_facts.values.is_blockbuster is True
+    assert asyncio.run(run()).facts.values.is_blockbuster is True
     assert any(key.startswith("box_office_top:1999:") for key in state)
 
 
-def test_no_metadata_fetch_means_no_badge_facts_and_unchanged_response():
-    result = asyncio.run(
-        enrich(
-            _request(_year_config(), known_facts={"release_year": 1999, "genre": "Sci-Fi"}),
-            NOW,
-            runtime=_runtime(ProviderHooks.all(_forbidden)),
-        )
-    )
-    assert result.badge_facts is None
-    assert "badge_facts" not in result.model_dump(mode="json")
+# --- render ----------------------------------------------------------------------
 
 
-def test_artwork_only_lane_reports_no_badge_facts():
-    request = _request(_year_config()).model_copy(update={"artwork_only": True})
-    result = asyncio.run(
-        enrich(request, NOW, runtime=_runtime(_hooks(_tmdb_metadata(), _forbidden)))
+def _bundle(config: dict, facts: NormalizedFactsEnvelope, *, media_type="movie", source_art=()):
+    spec = canonicalize_config(config)
+    media = MediaIdentity(media_type=media_type, tmdb_id=603)
+    snapshot = ImmutableRenderSnapshot(
+        evaluated_at=NOW, titles_by_locale={"en": "The Matrix"}, facts=facts, source_art=source_art,
     )
-    assert result.badge_facts is None
+    return RenderInputBundle(
+        schema=CONTRACT_SCHEMA, version=CONTRACT_VERSION, media=media, locale="en",
+        canonical_config=config, config_sha256=spec.sha256(),
+        snapshot_sha256=render.canonical_snapshot_sha256(snapshot, media=media, spec=spec, locale="en"),
+        snapshot=snapshot,
+    )
+
+
+def _captured(monkeypatch, bundle) -> dict:
+    seen = {}
+
+    def build_poster(image, *_args, **kwargs):
+        seen.update(kwargs)
+        return image
+
+    monkeypatch.setattr(main, "build_poster", build_poster)
+    render.render(bundle)
+    return seen
+
+
+def _upcoming(window, days=10, source="media_data.next_air"):
+    return ({"upcoming_release_date": (NOW + timedelta(days=days)).date().isoformat(),
+             "upcoming_release_window": window}, source)
+
+
+def test_render_projects_series_badges_from_facts(monkeypatch):
+    config = _canonical_config(**GROUPS)
+    facts = _envelope(({"networks": [HBO], "companies": [MARVEL], "release_status": "production"},),
+                      _upcoming("airing"))
+    network = graphic_badges.make_logo("network", 49, HBO["logo_path"])
+    studio = graphic_badges.make_logo("company", 420, MARVEL["logo_path"])
+    for logo in (network, studio):
+        _write_logo(logo)
+    seen = _captured(monkeypatch, _bundle(config, facts, media_type="series"))
+    assert seen["badge_logos"] == (network, studio)
+    assert seen["cinema_run"] == graphic_badges.CinemaRun("Production", (NOW + timedelta(days=10)).date())
+    # The cinema badge's status and date reach neither the sash nor the greyscale.
+    assert seen["discovery_meta"].release_status is None and "sash_date_label" not in seen
+
+
+def test_render_projects_film_streamer_cinema_and_blockbuster(monkeypatch):
+    config = _canonical_config(**GROUPS, show_award_sash=True, sash_mode="sash",
+                               sash_priority=["blockbuster", "cult"])
+    values = {"companies": [NETFLIX_STUDIO, A24], "streamer_network": NETFLIX, "release_status": "cinema"}
+    facts = _envelope((values,), ({"is_blockbuster": True}, "tmdb_box_office"),
+                      _upcoming("streaming", days=-1, source="media_data.mdblist_digital"))
+    network = graphic_badges.make_logo("network", 213, NETFLIX["logo_path"])
+    studio = graphic_badges.make_logo("company", 41077, A24["logo_path"])
+    for logo in (network, studio):
+        _write_logo(logo)
+    seen = _captured(monkeypatch, _bundle(config, facts))
+    assert seen["badge_logos"] == (network, studio)
+    # Yesterday's home date is past: the disc shows the popcorn, no date.
+    assert seen["cinema_run"] == graphic_badges.CinemaRun("Cinema", None)
+    assert seen["discovery_meta"].is_blockbuster is True
+
+    # A streamer network for another company list is no answer: no network logo.
+    stale = _envelope(({**values, "streamer_network": {"id": 2552, "logo_path": "/x.png"}},))
+    seen = _captured(monkeypatch, _bundle(config, stale))
+    assert seen["badge_logos"] == (None, studio)
+
+
+def test_a_needed_logo_missing_from_the_cache_is_a_conflict():
+    config = _canonical_config(**GROUPS)
+    facts = _envelope(({"networks": [HBO], "companies": [MARVEL]},))
+    with pytest.raises(render.RenderConflict) as raised:
+        render.render(_bundle(config, facts, media_type="series"))
+    assert raised.value.code == "missing_badge_logo"
+
+
+def test_stale_badge_facts_fail_freshness():
+    config = _canonical_config(**GROUPS)
+    facts = _envelope(({"companies": [MARVEL]}, "tmdb", NOW - timedelta(seconds=1)))
+    with pytest.raises(render.RenderConflict) as raised:
+        render.render(_bundle(config, facts))
+    assert raised.value.code == "stale_fact_provenance"
+
+
+def test_badges_draw_pixels(tmp_path):
+    store = SourceArtStore(tmp_path / "source", tmp_path / "ledger.sqlite")
+    art = (_install_art(store),)
+    config = _canonical_config(use_original_art=True, hide_genre=True, **GROUPS,
+                               show_award_sash=True, sash_mode="sash", sash_priority=["blockbuster"])
+    for logo in (graphic_badges.make_logo("network", 213, NETFLIX["logo_path"]),
+                 graphic_badges.make_logo("company", 41077, A24["logo_path"])):
+        _write_logo(logo)
+
+    def pixels(*groups):
+        return render.render(_bundle(config, _envelope(*groups), source_art=art), source_store=store)[0]
+
+    bare = pixels(({"genre": "Drama"},))
+    logos = pixels(({"companies": [NETFLIX_STUDIO, A24], "streamer_network": NETFLIX},))
+    cinema = pixels(({"release_status": "cinema"},))
+    blockbuster = pixels(({"is_blockbuster": True}, "tmdb_box_office"))
+    assert len({bare, logos, cinema, blockbuster}) == 4
+    assert pixels(({"is_blockbuster": False}, "tmdb_box_office")) == bare
+
+
+def test_snapshot_hash_ignores_badge_facts_for_specs_that_do_not_draw_them():
+    media = MediaIdentity(media_type="movie", tmdb_id=603)
+    badge_values = {"companies": [NETFLIX_STUDIO, A24], "streamer_network": NETFLIX}
+    with_badges = _envelope(({"genre": "Drama", "release_status": "cinema"}, "bingecat"),
+                            (badge_values,), ({"is_blockbuster": True}, "tmdb_box_office"))
+    without = _envelope(({"genre": "Drama", "release_status": "cinema"}, "bingecat"))
+
+    def digest(config, facts):
+        snapshot = ImmutableRenderSnapshot(evaluated_at=NOW, titles_by_locale={"en": "The Matrix"},
+                                           facts=facts)
+        return render.canonical_snapshot_sha256(
+            snapshot, media=media, spec=canonicalize_config(config), locale="en")
+
+    plain = _canonical_config(show_award_sash=True, sash_mode="sash", sash_priority=["cinema", "cult"],
+                              badge_display_mode=3)
+    assert digest(plain, with_badges) == digest(plain, without)
+    for drawn in (_canonical_config(**GROUPS),
+                  _canonical_config(show_award_sash=True, sash_mode="sash", sash_priority=["blockbuster"])):
+        assert digest(drawn, with_badges) != digest(drawn, without)
