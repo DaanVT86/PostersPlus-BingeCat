@@ -1333,15 +1333,13 @@ def _badge_logos(
     spec: CanonicalRenderSpec,
 ) -> tuple[graphic_badges.Logo | None, graphic_badges.Logo | None]:
     """Render reads Core's local logo cache only (filled by enrich, keyed by
-    the immutable TMDB path).  A logo the facts call for but the cache lacks
-    is a conflict, so the caller re-enriches instead of losing the badge."""
+    the immutable TMDB path).  A logo the facts call for but the cache lacks,
+    or holds unreadable, is a conflict, so the caller re-enriches instead of
+    losing the badge."""
     logos = badge_logo_choice(
         bundle.snapshot.facts.values, bundle.media.media_type, graphic_badge_slots(spec),
     )
-    if any(
-        logo is not None and not os.path.isfile(graphic_badges._logo_file(logo))
-        for logo in logos
-    ):
+    if any(logo is not None and not graphic_badges.logo_file_ok(logo) for logo in logos):
         raise RenderConflict("missing_badge_logo")
     return logos
 
@@ -1585,38 +1583,9 @@ def _image_library_versions() -> dict[str, str]:
     return versions
 
 
-# Every distribution cairosvg's import and rasterisation load (CSS parsing and
-# matching, the XML parser, the cffi binding to native cairo).  Pillow is in
-# _image_library_versions.
-_SVG_RASTER_DISTRIBUTIONS = (
-    "CairoSVG", "cairocffi", "cffi", "pycparser",
-    "cssselect2", "tinycss2", "webencodings", "defusedxml",
-)
-
-
-def _svg_raster_backend() -> dict[str, Any]:
-    """cairosvg draws SVG badge marks and logos through cairocffi, which loads
-    native cairo itself, so pycairo's absence says nothing about it."""
-    from importlib.metadata import PackageNotFoundError, version
-
-    def _dist(name: str) -> str:
-        try:
-            return version(name)
-        except PackageNotFoundError:
-            return "unavailable"
-
-    try:
-        import cairocffi
-        import cairosvg  # noqa: F401
-
-        native_cairo = cairocffi.cairo_version_string()
-    except Exception:
-        native_cairo = "unavailable"
-    return {
-        "available": native_cairo != "unavailable",
-        "native_cairo": native_cairo,
-        "versions": {name: _dist(name) for name in _SVG_RASTER_DISTRIBUTIONS},
-    }
+# The SVG rasteriser's identity lives with the logo cache that keys on it.
+_SVG_RASTER_DISTRIBUTIONS = graphic_badges.SVG_RASTER_DISTRIBUTIONS
+_svg_raster_backend = graphic_badges.svg_raster_backend
 
 
 def _compute_semantic_revision(

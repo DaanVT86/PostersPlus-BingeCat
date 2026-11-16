@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
-import os
 import re
 from dataclasses import dataclass, fields, replace
 from datetime import date, datetime, timedelta, timezone
@@ -1710,7 +1709,7 @@ async def enrich(
                 await _maybe_await(hooks.ensure_badge_logo(runtime.client, logo))
             except Exception:
                 pass
-    if any(not os.path.isfile(graphic_badges._logo_file(logo)) for logo in badge_logos):
+    if not all(graphic_badges.logo_file_ok(logo) for logo in badge_logos):
         statuses.append(
             ProviderResultStatus(
                 provider="source_art", status="missing", observed_at=evaluated_at,
