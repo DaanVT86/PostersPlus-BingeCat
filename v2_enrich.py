@@ -887,6 +887,58 @@ def _missing_mdblist_fields(
     return tuple(missing)
 
 
+def _art_options(
+    candidates: list[V2ArtworkCandidate],
+    role: str,
+    locales: tuple[str, ...],
+) -> list[V2ArtworkCandidate]:
+    """The first three candidates for one art role, in upstream's semantics.
+
+    A textless poster is one TMDB/TVDB tag language-neutral (upstream
+    ``tmdb.py``: ``iso_639_1`` null): a language-tagged poster carries its
+    title, often in a style OCR misses, and a logo on top doubles it.  A
+    tagged backdrop stands in only when no neutral one exists, and then has
+    to clear OCR (``install_first``), as upstream's text-aware rescue does.
+    """
+    if role == "top_rated":
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                -candidate.vote_average,
+                -candidate.vote_count,
+                candidate.locator.url,
+            ),
+        )[:3]
+    neutral = [candidate for candidate in candidates if candidate.locale == "neutral"]
+    if role == "textless_poster":
+        candidates = neutral
+    elif role == "fallback_backdrop":
+        candidates = neutral or candidates
+    return sorted(
+        candidates,
+        key=lambda candidate: _candidate_order(candidate, locales),
+    )[:3]
+
+
+def _language_neutral_base_art(
+    items: tuple[SourceArtReference, ...],
+) -> tuple[SourceArtReference, ...]:
+    """Known art without a tagged textless poster or an unverified tagged backdrop.
+
+    Earlier enrichments accepted such art; dropping it here makes the next
+    enrichment select again under ``_art_options`` instead of reusing it.
+    """
+    return tuple(
+        art
+        for art in items
+        if (art.locale or "neutral") == "neutral"
+        or not (
+            art.role == "textless_poster"
+            or (art.role == "fallback_backdrop" and art.textless_verified is not True)
+        )
+    )
+
+
 def _candidate_order(candidate: V2ArtworkCandidate, locales: tuple[str, ...]) -> tuple:
     if candidate.kind == "logo":
         preferences = locales + ("neutral",) + (("en",) if "en" not in locales else ())
@@ -1099,7 +1151,7 @@ async def enrich(
     )
     source_art = await _ensure_known_source_art(
         _dedupe_known_source_art(
-            request.known_source_art,
+            _language_neutral_base_art(request.known_source_art),
             evaluated_at,
             preserve_expired=request.artwork_only,
         ),
@@ -1787,7 +1839,8 @@ async def enrich(
                             art_role=role,
                             art_policy_key=policy_key,
                             require_ocr=(role == "textless_poster" or (
-                                request.artwork_only and role == "fallback_backdrop"
+                                role == "fallback_backdrop"
+                                and (request.artwork_only or candidate.locale != "neutral")
                             )),
                         ),
                     )
@@ -1821,20 +1874,7 @@ async def enrich(
         if candidate.kind == "poster" and candidate.locator.provider == "tmdb"
     ]
     for role, policy_key in missing_poster_needs:
-        if role == "top_rated":
-            options = sorted(
-                tmdb_posters,
-                key=lambda candidate: (
-                    -candidate.vote_average,
-                    -candidate.vote_count,
-                    candidate.locator.url,
-                ),
-            )[:3]
-        else:
-            options = sorted(
-                tmdb_posters,
-                key=lambda candidate: _candidate_order(candidate, request.locales),
-            )[:3]
+        options = _art_options(tmdb_posters, role, request.locales)
         if (
             not await install_first(options, role=role, policy_key=policy_key)
             and not policy_references(role, policy_key)
@@ -1842,14 +1882,15 @@ async def enrich(
             unresolved_poster_needs.append((role, policy_key))
 
     if "backdrop" in missing_art_kinds:
-        options = sorted(
-            (
+        options = _art_options(
+            [
                 candidate
                 for candidate in candidates
                 if candidate.kind == "backdrop" and candidate.locator.provider == "tmdb"
-            ),
-            key=lambda candidate: _candidate_order(candidate, request.locales),
-        )[:3]
+            ],
+            "fallback_backdrop",
+            request.locales,
+        )
         if not await install_first(
             options,
             role="fallback_backdrop",
@@ -1975,20 +2016,7 @@ async def enrich(
     still_missing_posters: list[tuple[str, str]] = []
     tvdb_posters = [candidate for candidate in tvdb_candidates if candidate.kind == "poster"]
     for role, policy_key in unresolved_poster_needs:
-        if role == "top_rated":
-            options = sorted(
-                tvdb_posters,
-                key=lambda candidate: (
-                    -candidate.vote_average,
-                    -candidate.vote_count,
-                    candidate.locator.url,
-                ),
-            )[:3]
-        else:
-            options = sorted(
-                tvdb_posters,
-                key=lambda candidate: _candidate_order(candidate, request.locales),
-            )[:3]
+        options = _art_options(tvdb_posters, role, request.locales)
         if (
             not await install_first(options, role=role, policy_key=policy_key)
             and not policy_references(role, policy_key)
@@ -1997,10 +2025,11 @@ async def enrich(
     unresolved_poster_needs = still_missing_posters
 
     if unresolved_backdrop:
-        options = sorted(
-            (candidate for candidate in tvdb_candidates if candidate.kind == "backdrop"),
-            key=lambda candidate: _candidate_order(candidate, request.locales),
-        )[:3]
+        options = _art_options(
+            [candidate for candidate in tvdb_candidates if candidate.kind == "backdrop"],
+            "fallback_backdrop",
+            request.locales,
+        )
         if not await install_first(
             options,
             role="fallback_backdrop",

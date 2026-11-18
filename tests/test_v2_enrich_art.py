@@ -1168,6 +1168,105 @@ def test_fallback_enabled_config_materializes_poster_backdrop_and_logo():
     )
 
 
+def _art_case(candidates, known_source_art=(), *, ocr_text=frozenset()):
+    """Run one fallback-art enrichment; ``ocr_text`` names candidates OCR rejects."""
+    tried = []
+
+    async def tmdb(*_args, **_kwargs):
+        return _tmdb_metadata(*candidates)
+
+    async def materialize(candidate, evaluated_at, runtime):
+        name = candidate.locator.url.rsplit("/", 1)[-1]
+        tried.append((name, runtime.require_ocr))
+        if runtime.require_ocr and name in ocr_text:
+            raise SourceArtError("source poster contains text")
+        verified = runtime.require_ocr
+        digest = hashlib.sha256(name.encode()).hexdigest()
+        return SourceArtReference(
+            source_art_id=f"{name}-source", kind=candidate.kind, role=runtime.art_role,
+            policy_key=runtime.art_policy_key, sha256=digest, byte_size=100,
+            mime="image/png" if candidate.kind == "logo" else "image/jpeg",
+            recipe_version={"poster": 1, "backdrop": 5, "logo": 1}[candidate.kind],
+            locator=candidate.locator, locale=candidate.locale, reconstructable=True,
+            observed_at=evaluated_at, checked_at=evaluated_at,
+            expires_at=evaluated_at + timedelta(days=30),
+            textless_verified=True if verified else None,
+            verification_recipe="ppocr.textless.v1" if verified else None,
+            verified_at=evaluated_at if verified else None,
+            verification_source_digest=digest if verified else None,
+        )
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("unneeded provider")
+
+    hooks = ProviderHooks(
+        resolve_identity=forbidden, fetch_ratings=forbidden, fetch_tmdb=tmdb,
+        fetch_trending=forbidden, fetch_release=forbidden, fetch_tvdb=forbidden,
+        materialize_art=materialize,
+    )
+    config = {
+        "rating_display_mode": 0, "show_award_sash": False, "badge_display_mode": 0,
+        "use_original_art": False, "textless": False,
+    }
+    result = asyncio.run(enrich(
+        _request(config, known_source_art=list(known_source_art)), NOW, runtime=_runtime(hooks),
+    ))
+    return tried, {(item.role, item.locator.url.rsplit("/", 1)[-1]) for item in result.source_art}
+
+
+def _candidate(kind, name, locale, vote_average=5.0):
+    folder = {"poster": "w500", "backdrop": "w1280", "logo": "original"}[kind]
+    suffix = "png" if kind == "logo" else "jpg"
+    return V2ArtworkCandidate(
+        kind, _locator(url=f"https://image.tmdb.org/t/p/{folder}/{name}.{suffix}"), locale,
+        vote_average=vote_average,
+    )
+
+
+def test_textless_poster_is_language_neutral_and_tagged_backdrop_must_clear_ocr():
+    # Upstream semantics: a language-tagged poster carries its title, so it is
+    # never a textless candidate, however well OCR misses its lettering.
+    tried, art = _art_case((
+        _candidate("poster", "titled", "en", vote_average=9.0),
+        _candidate("backdrop", "titled-backdrop", "en", vote_average=9.0),
+        _candidate("backdrop", "clean-backdrop", "neutral"),
+        _candidate("logo", "logo", "en"),
+    ))
+    assert ("titled.jpg", True) not in tried
+    assert ("textless_poster", "titled.jpg") not in art
+    assert ("fallback_backdrop", "clean-backdrop.jpg") in art
+    assert ("fallback_backdrop", "titled-backdrop.jpg") not in art
+
+    # Without a neutral backdrop a tagged one stands in only after OCR clears it.
+    tried, art = _art_case(
+        (
+            _candidate("backdrop", "texted", "en", vote_average=9.0),
+            _candidate("backdrop", "clean-en", "en"),
+            _candidate("logo", "logo", "en"),
+        ),
+        ocr_text={"texted.jpg"},
+    )
+    assert ("texted.jpg", True) in tried and ("clean-en.jpg", True) in tried
+    assert ("fallback_backdrop", "clean-en.jpg") in art
+    assert ("fallback_backdrop", "texted.jpg") not in art
+
+
+def test_known_tagged_textless_poster_is_dropped_and_selection_runs_again():
+    tagged = _known_art(role="textless_poster", policy_key="fallback.textless").model_copy(
+        update={"locale": "en", "locator": _locator(url="https://image.tmdb.org/t/p/w500/titled.jpg")}
+    )
+    _tried, art = _art_case(
+        (
+            _candidate("poster", "titled", "en", vote_average=9.0),
+            _candidate("poster", "clean", "neutral"),
+            _candidate("logo", "logo", "en"),
+        ),
+        known_source_art=[tagged],
+    )
+    assert ("textless_poster", "clean.jpg") in art
+    assert ("textless_poster", "titled.jpg") not in art
+
+
 def test_logo_art_is_resolved_per_configured_language_not_only_by_kind():
     materialized = []
     candidates = tuple(
