@@ -495,7 +495,7 @@ def test_artwork_only_keeps_stale_but_intact_art_and_does_not_refresh_verificati
         mime=poster.mime,
         recipe_version=poster.recipe_version,
         locator=poster.locator,
-        locale="pt",
+        locale="neutral",
         reconstructable=False,
         observed_at=NOW - timedelta(days=9),
         checked_at=old_checked_at,
